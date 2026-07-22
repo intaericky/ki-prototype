@@ -20,8 +20,8 @@ const PROJECTS: Project[] = [
   {
     id: "enso", number: "01", ko: "해양의 진동", en: "ENSO", maker: "황인태", source: "/projects/enso/index.html?embed=1",
     description: "〈ENSO〉는 NOAA 해수면 온도 자료를 구형 디스플레이 위에 펼쳐, 적도 태평양의 온도 변화가 행성 규모의 진동으로 이어지는 과정을 보여준다. 1982년부터 2025년까지의 전체 타임라인에서 해수면 온도와 평년 편차를 오가며 엘니뇨와 라니냐의 움직임을 관찰한다.",
-    dataset: "NOAA NCEI OISST v2.1 · 1982–2025 · SST / anomaly · Niño 3.4",
-    interaction: "타임라인 이동 · 재생 · SST/평년 편차 · 높이와 색상 전환 · 구 드래그",
+    dataset: "NOAA NCEI OISST v2.1 · 1982–2025 전 월 528개 전 지구 프레임 · 2° SST / anomaly · Niño 3.4",
+    interaction: "타임라인 이동 · 재생 · SST/평년 편차 · 높이 조절 · 구 드래그",
     reference: { x: 640, y: 360, scale: .8 },
   },
   {
@@ -62,14 +62,17 @@ export default function ExhibitionShell() {
   const [ensoTime, setEnsoTime] = useState(1000);
   const [ensoVariable, setEnsoVariable] = useState("sst");
   const [ensoHeight, setEnsoHeight] = useState(.14);
-  const [ensoColor, setEnsoColor] = useState("data");
+  const [ensoPlaying, setEnsoPlaying] = useState(false);
   const [coralTouch, setCoralTouch] = useState(false);
   const [foodDate, setFoodDate] = useState(koreaDate);
   const [foodMeal, setFoodMeal] = useState("lunch");
   const [foodCafeteria, setFoodCafeteria] = useState("fclt");
   const active = PROJECTS[activeIndex];
 
-  const selectProject = useCallback((index: number) => setActiveIndex((index + PROJECTS.length) % PROJECTS.length), []);
+  const selectProject = useCallback((index: number) => {
+    setEnsoPlaying(false);
+    setActiveIndex((index + PROJECTS.length) % PROJECTS.length);
+  }, []);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -103,11 +106,21 @@ export default function ExhibitionShell() {
     return () => { video.removeEventListener("timeupdate", update); video.removeEventListener("play", play); video.removeEventListener("pause", pause); };
   }, [active.id]);
 
+  useEffect(() => {
+    if (!ensoPlaying || active.id !== "enso") return;
+    const timer = window.setInterval(() => {
+      const slider = frameRef.current?.contentDocument?.getElementById("timeSlider") as HTMLInputElement | null;
+      if (slider && Number(slider.max) > 0) setEnsoTime(Number(slider.value) / Number(slider.max) * 1000);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [ensoPlaying, active.id]);
+
   const frameControl = (id: string, value?: string, eventName = "input") => {
     const element = frameRef.current?.contentDocument?.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLButtonElement | null;
     if (!element) return;
-    if (value === undefined && element instanceof HTMLButtonElement) element.click();
-    else if ("value" in element && value !== undefined) {
+    if (value === undefined) {
+      element.click();
+    } else if ("value" in element) {
       element.value = value;
       element.dispatchEvent(new Event(eventName, { bubbles: true }));
     }
@@ -130,8 +143,7 @@ export default function ExhibitionShell() {
         <label><span>ENSO TIMELINE <output>{ensoTime === 1000 ? "LATEST" : `${Math.round(1982 + ensoTime / 1000 * 43)}`}</output></span><input type="range" min="0" max="1000" value={ensoTime} onChange={(event) => { const normalized = Number(event.target.value); setEnsoTime(normalized); const slider = frameRef.current?.contentDocument?.getElementById("timeSlider") as HTMLInputElement | null; if (slider) frameControl("timeSlider", String(Math.round(normalized / 1000 * Number(slider.max)))); }} /></label>
         <div className="panel-segments"><button className={ensoVariable === "sst" ? "active" : ""} onClick={() => { setEnsoVariable("sst"); frameControl("variableSelect", "sst", "change"); }}>SST</button><button className={ensoVariable === "anom" ? "active" : ""} onClick={() => { setEnsoVariable("anom"); frameControl("variableSelect", "anom", "change"); }}>ANOMALY</button></div>
         <label><span>RELIEF HEIGHT <output>{ensoHeight.toFixed(2)}</output></span><input type="range" min="0" max="0.28" step="0.01" value={ensoHeight} onChange={(event) => { setEnsoHeight(Number(event.target.value)); frameControl("heightScaleSlider", event.target.value); }} /></label>
-        <div className="panel-segments"><button className={ensoColor === "data" ? "active" : ""} onClick={() => { setEnsoColor("data"); frameControl("colorModeSelect", "data", "change"); }}>DATA COLOR</button><button className={ensoColor === "grey" ? "active" : ""} onClick={() => { setEnsoColor("grey"); frameControl("colorModeSelect", "grey", "change"); }}>GREY</button></div>
-        <button className="panel-primary" onClick={() => frameControl("playButton")}>PLAY / PAUSE</button>
+        <button className="panel-primary" onClick={() => { frameControl("playButton"); setEnsoPlaying((value) => !value); }}>{ensoPlaying ? "PAUSE" : "PLAY"}</button>
       </div>
     );
     if (active.id === "daisy") return (
@@ -160,17 +172,20 @@ export default function ExhibitionShell() {
     <main className="prototype-shell">
       <section ref={stageRef} className="original-stage" aria-label={`${active.en} original artwork`}>
         {active.id === "daisy" ? <video ref={videoRef} className="original-video" src={active.source} autoPlay muted loop playsInline /> : <iframe ref={frameRef} key={active.id} className="original-frame" style={frameStyle} src={active.source} title={`${active.en} original prototype`} onLoad={() => { if (active.id === "coral") postFrame({ type: "CORAL_EMBED" }); if (active.id === "food") postFrame({ type: "FOOD_CONTROL", date: foodDate, meal: foodMeal, cafeteria: foodCafeteria }); }} />}
-        <div className="artwork-caption"><span>ORIGINAL PROTOTYPE / {active.number}</span><strong>{active.en}</strong></div>
       </section>
 
-      <aside className="prototype-panel">
-        <div className="panel-camera" />
-        <header><span>SPHERE / STUDIES</span><b>WIP 2026</b></header>
-        <nav className="panel-tabs" aria-label="Projects">{PROJECTS.map((project, index) => <button key={project.id} className={index === activeIndex ? "active" : ""} onClick={() => selectProject(index)} aria-label={project.en}><span>{project.number}</span></button>)}</nav>
-        <section className="panel-title"><small>{active.number} / 04</small><h1>{active.ko}</h1><h2>{active.en}</h2><p>제작자 / {active.maker}</p></section>
-        {renderControls()}
-        <section className="panel-description"><p>{active.description}</p><dl><div><dt>DATA / SOURCE</dt><dd>{active.dataset}</dd></div><div><dt>INTERACTION</dt><dd>{active.interaction}</dd></div></dl></section>
-        <footer><span>← → / 1—4</span><button onClick={() => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()}>FULLSCREEN</button></footer>
+      <aside className="interface-column">
+        <section className="tablet-interface" aria-label="Landscape tablet controller">
+          <nav className="panel-tabs" aria-label="Projects">{PROJECTS.map((project, index) => <button key={project.id} className={index === activeIndex ? "active" : ""} onClick={() => selectProject(index)} aria-label={project.en}><span>{project.number}</span></button>)}</nav>
+          {renderControls()}
+        </section>
+
+        <section className="description-view">
+          <header className="research-heading"><span>KI PROTOTYPE</span><h2>행성지능 인터페이스를 위한<br />기후 빅데이터 구면 시각화 프로토타입 개발</h2></header>
+          <div className="work-heading"><h1>{active.ko}</h1><p>{active.en} · {active.maker}</p></div>
+          <p className="work-description">{active.description}</p>
+          <dl><div><dt>DATA</dt><dd>{active.dataset}</dd></div><div><dt>INTERACTION</dt><dd>{active.interaction}</dd></div></dl>
+        </section>
       </aside>
     </main>
   );

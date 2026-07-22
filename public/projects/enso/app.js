@@ -1,12 +1,12 @@
 const THREE_URL = "./three.module.js";
-const LOCAL_PREFIX = "oisst-avhrr";
 const NINO_FILE = "oisst-nino34-anom-1982-2025.csv";
+const HIRES_MANIFEST_FILE = "oisst-hires-manifest.json";
 const FRAME_DATES = makeFrameDates();
 if (new URLSearchParams(window.location.search).has("embed")) document.body.classList.add("embedded");
 
 const TEMP_SCALE = { min: -2, max: 32, ground: 15 };
 const ANOM_SCALE = { min: -4, max: 4, ground: 0 };
-const CELL_DEGREES = 4;
+const CELL_DEGREES = 2;
 const DEFAULT_EXTRUSION_RATIO = 0.14;
 const GEODESIC_DETAIL = 11;
 
@@ -46,6 +46,8 @@ let pointer;
 
 const state = {
   frames: new Map(),
+  frameBinaries: [],
+  frameManifest: null,
   nino: [],
   faceCells: [],
   cursor: 0,
@@ -145,44 +147,68 @@ function setupThree() {
 }
 
 async function loadData() {
-  ui.status.textContent = "Loading OISST + Three.js";
-  const [ninoCsv, frameEntries] = await Promise.all([
+  ui.status.textContent = "Loading high-resolution OISST + Three.js";
+  const manifest = await fetch(HIRES_MANIFEST_FILE).then((response) => {
+    if (!response.ok) throw new Error(`Missing ${HIRES_MANIFEST_FILE}`);
+    return response.json();
+  });
+  const [ninoCsv, frameBinaries] = await Promise.all([
     fetch(NINO_FILE).then((response) => {
       if (!response.ok) throw new Error(`Missing ${NINO_FILE}`);
       return response.text();
     }),
-    Promise.all(
-      FRAME_DATES.map(async (date) => {
-        const source = date.startsWith("2025-") ? `oisst-hires-${date}.csv` : `${LOCAL_PREFIX}-${date}.csv`;
-        const response = await fetch(source);
-        if (!response.ok) throw new Error(`Missing ${source}`);
-        return [date, parseFrame(await response.text())];
-      })
-    ),
+    Promise.all(manifest.chunks.map(({ file }) => fetch(file).then((response) => {
+      if (!response.ok) throw new Error(`Missing ${file}`);
+      return response.arrayBuffer();
+    }))),
   ]);
 
   state.nino = parseNino34(ninoCsv);
-  frameEntries.forEach(([date, cells]) => state.frames.set(date, cells));
-  ui.source.textContent = "Local NOAA OISST CSVs sampled onto one continuous geodesic relief mesh";
+  state.frameManifest = manifest;
+  state.frameBinaries = frameBinaries;
+  if (manifest.dates.length !== FRAME_DATES.length || manifest.dates.some((date, index) => date !== FRAME_DATES[index])) {
+    throw new Error("High-resolution frame manifest does not match the ENSO timeline");
+  }
+  ui.source.textContent = "NOAA OISST 2° high-resolution frames, 1982–2025, packed for exhibition playback";
 }
 
-function parseFrame(csv) {
-  return csv
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => {
-      const [time, depth, lat, lon, sst, anom] = line.split(",");
-      return {
-        time,
-        depth: Number(depth),
-        lat: Number(lat),
-        lon: normalizeLongitude(Number(lon)),
-        sst: Number(sst),
-        anom: Number(anom),
+function parsePackedFrame(date) {
+  if (state.frames.has(date)) return state.frames.get(date);
+  const manifest = state.frameManifest;
+  const frameIndex = manifest.dates.indexOf(date);
+  if (frameIndex < 0) return [];
+  const chunkIndex = manifest.chunks.findIndex(({ startFrame, frameCount }) => frameIndex >= startFrame && frameIndex < startFrame + frameCount);
+  if (chunkIndex < 0) return [];
+  const chunk = manifest.chunks[chunkIndex];
+  const view = new DataView(state.frameBinaries[chunkIndex]);
+  const cellCount = manifest.rows * manifest.cols;
+  const frameOffset = (frameIndex - chunk.startFrame) * cellCount * 4;
+  const cells = [];
+  const gridCells = new Array(cellCount).fill(null);
+  for (let row = 0; row < manifest.rows; row += 1) {
+    for (let col = 0; col < manifest.cols; col += 1) {
+      const cellIndex = row * manifest.cols + col;
+      const offset = frameOffset + cellIndex * 4;
+      const rawSst = view.getInt16(offset, true);
+      const rawAnom = view.getInt16(offset + 2, true);
+      if (rawSst === manifest.missing && rawAnom === manifest.missing) continue;
+      const cell = {
+        time: date,
+        depth: 0,
+        lat: manifest.latitudeStart + row * manifest.stepDegrees,
+        lon: manifest.longitudeStart + col * manifest.stepDegrees,
+        sst: rawSst === manifest.missing ? NaN : rawSst / 100,
+        anom: rawAnom === manifest.missing ? NaN : rawAnom / 100,
       };
-    })
-    .filter((cell) => Number.isFinite(cell.lat) && Number.isFinite(cell.lon))
-    .filter((cell) => Number.isFinite(cell.sst) || Number.isFinite(cell.anom));
+      cells.push(cell);
+      gridCells[cellIndex] = cell;
+    }
+  }
+  cells.gridCells = gridCells;
+  cells.gridSpec = manifest;
+  state.frames.set(date, cells);
+  while (state.frames.size > 8) state.frames.delete(state.frames.keys().next().value);
+  return cells;
 }
 
 function parseNino34(csv) {
@@ -211,10 +237,12 @@ function tick(now) {
   const dt = now - state.lastTick;
   state.lastTick = now;
   if (state.playing && state.nino.length) {
-    const next = state.cursor + dt / 85;
+    const previous = Math.round(state.cursor);
+    const next = state.cursor + dt / 250;
     state.cursor = next >= state.nino.length ? 0 : next;
     ui.time.value = String(Math.round(state.cursor));
-    updateAll();
+    if (Math.round(state.cursor) !== previous) updateAll();
+    else renderScene();
   } else {
     renderScene();
   }
@@ -442,6 +470,25 @@ function spherePoint(lon, lat, radius) {
 function nearestSourceCell(unit, cells) {
   let best = null;
   let bestScore = Infinity;
+  if (cells.gridCells && cells.gridSpec) {
+    const spec = cells.gridSpec;
+    const centerRow = Math.round((unit.lat - spec.latitudeStart) / spec.stepDegrees);
+    const centerCol = Math.round((unit.lon - spec.longitudeStart) / spec.stepDegrees);
+    for (let dr = -2; dr <= 2; dr += 1) {
+      const row = centerRow + dr;
+      if (row < 0 || row >= spec.rows) continue;
+      for (let dc = -2; dc <= 2; dc += 1) {
+        const col = (centerCol + dc + spec.cols) % spec.cols;
+        const cell = cells.gridCells[row * spec.cols + col];
+        if (!cell || !Number.isFinite(cell.sst)) continue;
+        const dLat = cell.lat - unit.lat;
+        const dLon = wrappedLonDifference(cell.lon, unit.lon) * Math.cos((unit.lat * Math.PI) / 180);
+        const score = dLat * dLat + dLon * dLon;
+        if (score < bestScore) { best = cell; bestScore = score; }
+      }
+    }
+    return bestScore <= 20 ? best : null;
+  }
   cells.forEach((cell) => {
     if (!Number.isFinite(cell.sst)) return;
     const dLat = cell.lat - unit.lat;
@@ -610,35 +657,15 @@ function currentFrameDate() {
 }
 
 function currentCells() {
-  return state.frames.get(currentFrameDate()) ?? [];
+  return parsePackedFrame(currentFrameDate());
 }
 
 function makeFrameDates() {
-  const dates = new Set([
-    "1982-12-01",
-    "1983-01-01",
-    "1988-12-01",
-    "1997-12-01",
-    "1998-01-01",
-    "2010-12-01",
-    "2015-12-01",
-    "2016-01-01",
-    "2022-12-01",
-    "2023-12-01",
-    "2024-02-01",
-    "2024-03-01",
-    "2024-05-01",
-    "2024-06-01",
-    "2024-08-01",
-    "2024-09-01",
-    "2024-11-01",
-    "2024-12-01",
-  ]);
-  for (let year = 1982; year <= 2024; year += 1) {
-    ["01", "04", "07", "10"].forEach((month) => dates.add(`${year}-${month}-01`));
+  const dates = [];
+  for (let year = 1982; year <= 2025; year += 1) {
+    for (let month = 1; month <= 12; month += 1) dates.push(`${year}-${String(month).padStart(2, "0")}-01`);
   }
-  for (let month = 1; month <= 12; month += 1) dates.add(`2025-${String(month).padStart(2, "0")}-01`);
-  return [...dates].sort();
+  return dates;
 }
 
 function xForIndex(index, plot) {
