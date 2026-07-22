@@ -1,7 +1,8 @@
 const THREE_URL = "./three.module.js";
 const LOCAL_PREFIX = "oisst-avhrr";
-const NINO_FILE = "oisst-nino34-anom-1982-2024.csv";
+const NINO_FILE = "oisst-nino34-anom-1982-2025.csv";
 const FRAME_DATES = makeFrameDates();
+if (new URLSearchParams(window.location.search).has("embed")) document.body.classList.add("embedded");
 
 const TEMP_SCALE = { min: -2, max: 32, ground: 15 };
 const ANOM_SCALE = { min: -4, max: 4, ground: 0 };
@@ -152,8 +153,9 @@ async function loadData() {
     }),
     Promise.all(
       FRAME_DATES.map(async (date) => {
-        const response = await fetch(`${LOCAL_PREFIX}-${date}.csv`);
-        if (!response.ok) throw new Error(`Missing ${LOCAL_PREFIX}-${date}.csv`);
+        const source = date.startsWith("2025-") ? `oisst-hires-${date}.csv` : `${LOCAL_PREFIX}-${date}.csv`;
+        const response = await fetch(source);
+        if (!response.ok) throw new Error(`Missing ${source}`);
         return [date, parseFrame(await response.text())];
       })
     ),
@@ -550,7 +552,7 @@ function drawNinoTimeline() {
   ninoCtx.moveTo(cursorX, plot.top);
   ninoCtx.lineTo(cursorX, plot.bottom);
   ninoCtx.stroke();
-  drawMiniLabels(ninoCtx, plot, "1982", "2024", "Niño 3.4 anomaly");
+  drawMiniLabels(ninoCtx, plot, "1982", "2025", "Niño 3.4 anomaly");
 }
 
 function drawDistribution() {
@@ -635,6 +637,7 @@ function makeFrameDates() {
   for (let year = 1982; year <= 2024; year += 1) {
     ["01", "04", "07", "10"].forEach((month) => dates.add(`${year}-${month}-01`));
   }
+  for (let month = 1; month <= 12; month += 1) dates.add(`2025-${String(month).padStart(2, "0")}-01`);
   return [...dates].sort();
 }
 

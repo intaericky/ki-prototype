@@ -683,6 +683,21 @@
     ui.uiToggle.setAttribute("aria-pressed", hidden ? "true" : "false");
   });
 
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin || !event.data) return;
+    if (event.data.type === "CORAL_EMBED") {
+      document.body.classList.add("ui-hidden");
+      ui.uiToggle.textContent = "Show UI";
+      ui.uiToggle.setAttribute("aria-pressed", "true");
+    }
+    if (event.data.type === "CORAL_TOUCH") {
+      const active = Boolean(event.data.active);
+      touchInfluence = active;
+      pointerInside = active;
+      if (active) applyContactPulse();
+    }
+  });
+
   function init() {
     canvas.style.cursor = "grab";
     orientationQuat = quatFromYawPitch(manualYaw, manualPitch);

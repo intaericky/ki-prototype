@@ -51,6 +51,7 @@ function splitOptions(lines: string[]): Option[] {
 }
 
 export default function MenuInstrument() {
+  const [embedded, setEmbedded] = useState(false);
   const [date, setDate] = useState(koreaDate);
   const [meal, setMeal] = useState<MealKey>("lunch");
   const [data, setData] = useState<MenuResponse | null>(null);
@@ -60,6 +61,8 @@ export default function MenuInstrument() {
   const [error, setError] = useState(false);
   const [resetKey, setResetKey] = useState(0);
   const requestRef = useRef(0);
+
+  useEffect(() => setEmbedded(new URLSearchParams(window.location.search).has("embed")), []);
 
   const load = useCallback(async () => {
     const requestId = ++requestRef.current;
@@ -89,6 +92,19 @@ export default function MenuInstrument() {
 
   useEffect(() => { setOptionIndex(0); }, [cafeteriaCode, meal, date]);
 
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.data?.type !== "FOOD_CONTROL") return;
+      const command = event.data as { date?: string; meal?: MealKey; cafeteria?: string; reset?: boolean };
+      if (command.date && /^\d{4}-\d{2}-\d{2}$/.test(command.date)) setDate(command.date);
+      if (command.meal && MEALS.some((item) => item.id === command.meal)) setMeal(command.meal);
+      if (command.cafeteria) setCafeteriaCode(command.cafeteria);
+      if (command.reset) setResetKey((value) => value + 1);
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
+
   const tokens = useMemo<GlobeToken[]>(() => {
     if (!estimate) return [];
     return estimate.dishes.flatMap((dish, dishIndex) => dish.hits.map((hit, hitIndex) => ({
@@ -114,7 +130,7 @@ export default function MenuInstrument() {
   const budgetUse = estimate ? estimate.kg / DAILY_BUDGET_KG * 100 : 0;
 
   return (
-    <main className="edo-three">
+    <main className={`edo-three${embedded ? " embedded" : ""}`}>
       <header className="three-header">
         <h1>EDO / KAIST</h1>
         <div className="control date-control">
