@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OISST ENSO Globe Explorer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">NOAA OISST v2.1</p>
+          <h1>ENSO on a Sea Surface Temperature Globe</h1>
+        </div>
+        <div class="controls" aria-label="Visualization controls">
+          <label>
+            ENSO timeline
+            <input id="timeSlider" type="range" min="0" max="1" value="0" />
+          </label>
+          <label>
+            Variable
+            <select id="variableSelect">
+              <option value="sst">SST, deg C</option>
+              <option value="anom">SST anomaly, deg C</option>
+            </select>
+          </label>
+          <label>
+            Height scale
+            <input id="heightScaleSlider" type="range" min="0" max="0.28" step="0.01" value="0.14" />
+          </label>
+          <label>
+            Color
+            <select id="colorModeSelect">
+              <option value="data">Data color</option>
+              <option value="grey">Uniform grey</option>
+            </select>
+          </label>
+          <button id="playButton" type="button">Play</button>
+        </div>
+      </header>
+
+      <section class="summary" aria-label="Dataset summary">
+        <div>
+          <span>Source</span>
+          <strong id="sourceReadout">Loading NOAA ERDDAP</strong>
+        </div>
+        <div>
+          <span>Cells</span>
+          <strong id="cellReadout">--</strong>
+        </div>
+        <div>
+          <span>Niño 3.4</span>
+          <strong id="meanReadout">--</strong>
+        </div>
+        <div>
+          <span>Globe frame</span>
+          <strong id="rangeReadout">--</strong>
+        </div>
+        <div>
+          <span>Hover</span>
+          <strong id="hoverReadout">Move over map</strong>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <article class="panel map-panel">
+          <div class="panel-head">
+            <div>
+              <h2 id="mapTitle">OISST field on a rotatable Earth</h2>
+              <p id="mapCaption">Drag freely to rotate. The sphere is assembled from mostly hexagonal radial units, each with its own OISST value.</p>
+            </div>
+            <p id="statusReadout">Loading</p>
+          </div>
+          <canvas id="mapCanvas" aria-label="OISST gridded spherical globe"></canvas>
+          <div class="height-key" aria-label="Color mapping legend">
+            <span id="heightLowLabel">Cold / cool anomaly</span>
+            <div class="height-track">
+              <i class="down"></i>
+              <b></b>
+              <i class="up"></i>
+            </div>
+            <span id="heightHighLabel">Hot / warm anomaly</span>
+          </div>
+        </article>
+
+        <aside class="side">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+              <h2>Historical Niño 3.4 Index</h2>
+              <p>OISST anomaly averaged over 5 S-5 N, 170 W-120 W. Move the cursor to witness ENSO oscillation.</p>
+              </div>
+            </div>
+            <canvas id="histCanvas" aria-label="Historical Nino 3.4 OISST anomaly timeline"></canvas>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>Selected Frame Distribution</h2>
+                <p>Histogram of SST values for the globe frame currently shown.</p>
+              </div>
+            </div>
+            <canvas id="profileCanvas" aria-label="Histogram of selected globe frame SST values"></canvas>
+          </article>
+
+          <article class="panel notes">
+            <h2>How to Read This</h2>
+            <p>
+              OISST is distributed as a regular latitude/longitude grid, then sampled here onto geodesic sphere units. The units
+              are mostly hexagons, with 12 pentagons required by spherical topology. Side faces connect neighboring units at
+              their actual radii; boundary sides around removed land units fold inward toward the sphere center.
+            </p>
+            <p>
+              Land and missing ocean units are removed. Cool anomalies become shorter inward units rather than negative bars.
+            </p>
+            <p>
+              The long timeline uses a regional Niño 3.4 OISST anomaly subset from 1982-2024. The globe displays the nearest
+              available global frame for major ENSO events and 2024 monthly context.
+            </p>
+          </article>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

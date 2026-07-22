@@ -1,0 +1,985 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Coral Bleaching Data Sphere</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07090b;
+      --ink: #f7f0e7;
+      --muted: #a8a097;
+      --line: #2a3135;
+      --panel: #101417;
+      --cyan: #5ad7ff;
+      --coral: #ff6d58;
+      --rose: #f6a0a7;
+      --gold: #ffd070;
+      --bleach: #ded9cf;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 48% 42%, rgb(84 205 230 / .14), transparent 31%),
+        radial-gradient(circle at 50% 66%, rgb(255 109 88 / .06), transparent 28%),
+        linear-gradient(180deg, #03131c, #082532 58%, #02070b);
+      font: 14px/1.42 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      display: block;
+      min-height: 100vh;
+    }
+
+    .stage {
+      position: relative;
+      min-width: 0;
+      height: 100vh;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100vh;
+      touch-action: none;
+      cursor: grab;
+    }
+
+    .control-dock {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      bottom: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(110px, 1fr)) auto;
+      gap: 12px;
+      align-items: center;
+      max-width: 760px;
+      padding: 14px;
+      border: 1px solid rgb(247 240 231 / .14);
+      background: rgb(5 8 10 / .68);
+      backdrop-filter: blur(16px);
+    }
+
+    .readout {
+      min-width: 0;
+    }
+
+    .readout span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .readout strong {
+      display: block;
+      margin-top: 3px;
+      font-size: 17px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    .hud {
+      position: absolute;
+      left: 18px;
+      top: 18px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      max-width: calc(100% - 36px);
+      pointer-events: none;
+    }
+
+    .ui-toggle {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      z-index: 3;
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgb(247 240 231 / .16);
+      background: rgb(5 8 10 / .58);
+      color: var(--ink);
+      backdrop-filter: blur(14px);
+    }
+
+    .hud,
+    .control-dock {
+      transition: opacity .18s ease, transform .18s ease;
+    }
+
+    body.ui-hidden .hud,
+    body.ui-hidden .control-dock {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    body.ui-hidden .control-dock {
+      transform: translateY(10px);
+    }
+
+    .chip {
+      min-width: 104px;
+      padding: 9px 10px;
+      border: 1px solid rgb(247 240 231 / .12);
+      background: rgb(5 8 10 / .6);
+      backdrop-filter: blur(14px);
+    }
+
+    .chip span,
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .chip strong,
+    .metric strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 22px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    aside {
+      display: grid;
+      grid-template-rows: auto auto auto auto 1fr auto;
+      gap: 14px;
+      padding: 18px;
+      border-left: 1px solid var(--line);
+      background: rgb(9 12 14 / .94);
+      min-width: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .sub {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 13px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .metric {
+      min-width: 0;
+      border: 1px solid rgb(255 255 255 / .08);
+      background: #0a0e11;
+      padding: 10px;
+    }
+
+    .controls {
+      display: grid;
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      grid-template-columns: 78px 1fr 48px;
+      align-items: center;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    input[type="range"],
+    select {
+      width: 100%;
+      accent-color: var(--coral);
+    }
+
+    select {
+      min-height: 34px;
+      border: 1px solid #3b464b;
+      background: #11171b;
+      color: var(--ink);
+      padding: 0 8px;
+    }
+
+    button {
+      min-height: 38px;
+      border: 1px solid #3b464b;
+      background: #171d20;
+      color: var(--ink);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover { background: #20282c; }
+
+    .legend {
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      align-content: start;
+    }
+
+    .crw-map {
+      display: grid;
+      gap: 8px;
+    }
+
+    .crw-map img {
+      width: 100%;
+      display: block;
+      border: 1px solid rgb(255 255 255 / .1);
+      background: #dbeff2;
+    }
+
+    .crw-map span {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .dot {
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      border: 1px solid rgb(255 255 255 / .16);
+    }
+
+    .dot.low { background: var(--cyan); }
+    .dot.mid { background: var(--gold); }
+    .dot.high { background: var(--coral); }
+    .dot.unknown { background: var(--bleach); }
+
+    .source {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .source a {
+      color: #c8e9ff;
+      text-decoration: none;
+    }
+
+    .source a:hover { text-decoration: underline; }
+
+    @media (max-width: 900px) {
+      canvas { height: 100vh; min-height: 520px; }
+      .control-dock {
+        grid-template-columns: 1fr;
+        max-width: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="stage">
+      <canvas id="sphere" width="1400" height="1000" aria-label="global coral bleaching data on a sphere"></canvas>
+      <button class="ui-toggle" id="uiToggle" type="button" aria-pressed="false">Hide UI</button>
+      <div class="hud">
+        <div class="chip"><span>Global coral bleached</span><strong id="visibleChip">0%</strong></div>
+        <div class="chip"><span>Heat stress cue</span><strong id="dhwOut">No stress</strong></div>
+      </div>
+      <div class="control-dock">
+        <div class="readout"><span>Influence</span><strong id="influenceOut">idle</strong></div>
+        <div class="readout"><span>SST anomaly</span><strong id="stressOut">+0.0°C</strong></div>
+        <div class="readout"><span>Recovery</span><strong id="recoveryOut">stable</strong></div>
+        <button id="toggle">Pause rotation</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="bleaching_data.js"></script>
+  <script src="coral_bleaching_webgl_app.js"></script>
+  <script type="text/plain" id="legacy-cpu-renderer">
+    const canvas = document.getElementById("sphere");
+    const ctx = canvas.getContext("2d");
+    const data = window.CORAL_BLEACHING_DATA;
+    const ui = {
+      stress: document.getElementById("stress"),
+      stressOut: document.getElementById("stressOut"),
+      toggle: document.getElementById("toggle"),
+      dhwOut: document.getElementById("dhwOut"),
+      visibleChip: document.getElementById("visibleChip")
+    };
+
+    const TAU = Math.PI * 2;
+    let frame = 0;
+    let running = true;
+    let hover = null;
+    // NOAA CRW-style thermal response anchors.
+    // DHW >4 is associated with significant bleaching, >8 with severe bleaching
+    // and mortality risk; Dec 2023 Alert Area levels continue in 4 DHW bands.
+    const DHW_RESPONSE = [
+      [0, 0],
+      [2, 0.03],
+      [4, 0.14],
+      [8, 0.46],
+      [12, 0.68],
+      [16, 0.82],
+      [20, 0.92],
+      [24, 1]
+    ];
+    const fluidCanvas = document.createElement("canvas");
+    const fluidCtx = fluidCanvas.getContext("2d");
+    let geoRiskGrid = null;
+    let dirty = true;
+    let lastRenderTime = 0;
+    let orientationQuat = null;
+    let isDragging = false;
+    let dragStart = null;
+    const TARGET_FRAME_MS = 100;
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 1);
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.max(680, Math.floor(rect.width * dpr));
+      canvas.height = Math.max(520, Math.floor(rect.height * dpr));
+      dirty = true;
+    }
+
+    function metrics() {
+      const r = Math.min(canvas.width, canvas.height) * 0.415;
+      return { cx: canvas.width * 0.5, cy: canvas.height * 0.51, r };
+    }
+
+    function project(lat, lon, spin) {
+      const { cx, cy, r } = metrics();
+      const latR = (lat * Math.PI) / 180;
+      const lonR = ((lon + spin) * Math.PI) / 180;
+      const cl = Math.cos(latR);
+      const x3 = Math.sin(lonR) * cl;
+      const y3 = Math.sin(latR);
+      const z3 = Math.cos(lonR) * cl;
+      return {
+        x: cx + x3 * r,
+        y: cy - y3 * r,
+        z: z3,
+        scale: 0.56 + z3 * 0.44
+      };
+    }
+
+    function colorFor(point) {
+      if (!point.known) return [218, 214, 204];
+      const t = Math.max(0, Math.min(1, point.p / 100));
+      if (t < 0.5) {
+        const p = t / 0.5;
+        return [
+          Math.round(90 + (255 - 90) * p),
+          Math.round(215 + (208 - 215) * p),
+          Math.round(255 + (112 - 255) * p)
+        ];
+      }
+      const p = (t - 0.5) / 0.5;
+      return [
+        255,
+        Math.round(208 + (109 - 208) * p),
+        Math.round(112 + (88 - 112) * p)
+      ];
+    }
+
+    function mix(a, b, p) {
+      return a + (b - a) * p;
+    }
+
+    function mixColor(a, b, p) {
+      return [
+        Math.round(mix(a[0], b[0], p)),
+        Math.round(mix(a[1], b[1], p)),
+        Math.round(mix(a[2], b[2], p))
+      ];
+    }
+
+    function rgba(c, a) {
+      return `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${a})`;
+    }
+
+    function clamp01(v) {
+      return Math.max(0, Math.min(1, v));
+    }
+
+    function smoothstep(edge0, edge1, x) {
+      const t = clamp01((x - edge0) / (edge1 - edge0));
+      return t * t * (3 - 2 * t);
+    }
+
+    function quatNormalize(q) {
+      const len = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+      return [q[0] / len, q[1] / len, q[2] / len, q[3] / len];
+    }
+
+    function quatMultiply(a, b) {
+      return [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]
+      ];
+    }
+
+    function quatFromAxisAngle(x, y, z, angle) {
+      const half = angle * 0.5;
+      const s = Math.sin(half);
+      return quatNormalize([x * s, y * s, z * s, Math.cos(half)]);
+    }
+
+    function quatFromTo(from, to) {
+      const dot = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
+      if (dot > 0.9999) return [0, 0, 0, 1];
+      if (dot < -0.9999) {
+        const axis = Math.abs(from[0]) < 0.8
+          ? [0, -from[2], from[1]]
+          : [-from[1], from[0], 0];
+        const len = Math.hypot(axis[0], axis[1], axis[2]) || 1;
+        return [axis[0] / len, axis[1] / len, axis[2] / len, 0];
+      }
+      const cross = [
+        from[1] * to[2] - from[2] * to[1],
+        from[2] * to[0] - from[0] * to[2],
+        from[0] * to[1] - from[1] * to[0]
+      ];
+      return quatNormalize([cross[0], cross[1], cross[2], 1 + dot]);
+    }
+
+    function rotateByQuat(q, v) {
+      const x = v[0], y = v[1], z = v[2];
+      const qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+      const tx = 2 * (qy * z - qz * y);
+      const ty = 2 * (qz * x - qx * z);
+      const tz = 2 * (qx * y - qy * x);
+      return [
+        x + qw * tx + qy * tz - qz * ty,
+        y + qw * ty + qz * tx - qx * tz,
+        z + qw * tz + qx * ty - qy * tx
+      ];
+    }
+
+    function pointerToTrackball(event) {
+      const rect = canvas.getBoundingClientRect();
+      const { cx, cy, r } = metrics();
+      let x = ((event.clientX - rect.left) * (canvas.width / rect.width) - cx) / r;
+      let y = (cy - (event.clientY - rect.top) * (canvas.height / rect.height)) / r;
+      const d = x * x + y * y;
+      if (d > 1) {
+        const len = Math.sqrt(d);
+        x /= len;
+        y /= len;
+        return [x, y, 0];
+      }
+      return [x, y, Math.sqrt(1 - d)];
+    }
+
+    function fract(v) {
+      return v - Math.floor(v);
+    }
+
+    function hash2(x, y) {
+      return fract(Math.sin(x * 127.1 + y * 311.7) * 43758.5453);
+    }
+
+    function valueNoise(x, y) {
+      const ix = Math.floor(x);
+      const iy = Math.floor(y);
+      const fx = fract(x);
+      const fy = fract(y);
+      const ux = fx * fx * (3 - 2 * fx);
+      const uy = fy * fy * (3 - 2 * fy);
+      const a = hash2(ix, iy);
+      const b = hash2(ix + 1, iy);
+      const c = hash2(ix, iy + 1);
+      const d = hash2(ix + 1, iy + 1);
+      return mix(mix(a, b, ux), mix(c, d, ux), uy);
+    }
+
+    function fbm(x, y) {
+      let sum = 0;
+      let amp = 0.5;
+      let freq = 1;
+      for (let octave = 0; octave < 2; octave++) {
+        sum += valueNoise(x * freq, y * freq) * amp;
+        freq *= 2.15;
+        amp *= 0.48;
+      }
+      return sum;
+    }
+
+    function coralPore(u, v, scale, t) {
+      const organicWarp = fbm(u * 9.0 + t * 0.02, v * 9.0 - t * 0.018) - 0.5;
+      const gx = u * scale + Math.sin(v * TAU * 1.8 + t * 0.12) * 0.35 + organicWarp * 1.1;
+      const gy = v * scale + Math.sin(u * TAU * 1.6 - t * 0.1) * 0.28 - organicWarp * 0.9;
+      const ix = Math.floor(gx);
+      const iy = Math.floor(gy);
+      const fx = fract(gx);
+      const fy = fract(gy);
+      const ox = 0.22 + hash2(ix, iy) * 0.56;
+      const oy = 0.22 + hash2(ix + 17, iy - 9) * 0.56;
+      const dist = Math.hypot(fx - ox, fy - oy);
+      return smoothstep(0.32, 0.05, dist);
+    }
+
+    function coralHeight(u, v, t) {
+      const warp = fbm(u * 4.0 + t * 0.04, v * 4.0 - t * 0.03) - 0.5;
+      const sheetCoord =
+        v * 7.4 +
+        u * 2.05 +
+        warp * 1.15 +
+        Math.sin(u * TAU * 1.35 + t * 0.45) * 0.42 +
+        Math.sin((u + v) * TAU * 0.9 - t * 0.28) * 0.24;
+      const sheet = Math.sin(sheetCoord);
+      const fold = Math.pow(0.5 + 0.5 * sheet, 2.2);
+      const terrace = smoothstep(0.38, 0.78, fold);
+      const velvet = fbm(u * 22.0 + t * 0.02, v * 20.0 - t * 0.015);
+      const fine =
+        Math.sin(u * TAU * 34.0 + Math.sin(v * TAU * 8.0 + warp) * 2.2) *
+        Math.sin(v * TAU * 30.0 + t * 0.15);
+      const poreSeed = fbm(u * 76.0 + warp * 3.0, v * 76.0 - warp * 2.0);
+      const pores = smoothstep(0.52, 0.86, poreSeed);
+      const poreMask = smoothstep(0.42, 0.78, fbm(u * 8.0 + t * 0.018, v * 7.0 - t * 0.014));
+      const cellular = coralPore(u, v, 74.0, t) * poreMask;
+      return terrace * 0.64 + velvet * 0.18 + fine * 0.016 + pores * 0.09 + cellular * 0.09;
+    }
+
+    function surfaceFbm(p, scale, t) {
+      const a = fbm(p[0] * scale + t * 0.31, p[1] * scale - t * 0.23);
+      const b = fbm(p[1] * scale + t * 0.19, p[2] * scale + t * 0.29);
+      return (a + b) * 0.5;
+    }
+
+    function surfaceCell(p, scale, t) {
+      const n = surfaceFbm(p, scale, t);
+      return smoothstep(0.5, 0.82, n);
+    }
+
+    function surfaceHeight(p, t) {
+      const warp = surfaceFbm(p, 3.8, t) - 0.5;
+      const sheet =
+        Math.sin((p[0] * 1.7 + p[1] * 1.15 + p[2] * 1.45 + warp * 0.42) * TAU + t * 0.42);
+      const terrace = Math.pow(0.5 + 0.5 * sheet, 2.15);
+      const velvet = surfaceFbm(p, 12.0, t * 0.5);
+      return terrace * 0.72 + velvet * 0.28;
+    }
+
+    function buildGeoRiskGrid(points) {
+      const cols = 720;
+      const rows = 360;
+      const values = new Float32Array(cols * rows);
+
+      for (const p of points) {
+        const col = Math.max(0, Math.min(cols - 1, Math.floor(((p.lon + 180) / 360) * cols)));
+        const row = Math.max(0, Math.min(rows - 1, Math.floor(((90 - p.lat) / 180) * rows)));
+        const severity = p.known ? p.p / 100 : 0.34;
+        const recency = 0.74 + smoothstep(data.metadata.yearMin, data.metadata.yearMax, p.year) * 0.26;
+        const radius = p.known ? 20 : 12;
+
+        for (let yy = -radius; yy <= radius; yy++) {
+          for (let xx = -radius; xx <= radius; xx++) {
+            const x = (col + xx + cols) % cols;
+            const y = Math.max(0, Math.min(rows - 1, row + yy));
+            const smear = 0.55 + hash2(col * 1.7, row * 2.1) * 0.65;
+            const dist = Math.hypot(xx * smear, yy * (1.28 - smear * 0.28));
+            const soft = Math.max(0, 1 - dist / (radius + 1.8));
+            const w = soft * soft * (3 - 2 * soft);
+            values[y * cols + x] += (0.12 + severity * 0.88) * recency * w;
+          }
+        }
+      }
+
+      let max = 0;
+      for (let i = 0; i < values.length; i++) max = Math.max(max, values[i]);
+      for (let i = 0; i < values.length; i++) values[i] = max ? Math.pow(values[i] / max, 0.7) : 0;
+
+      return { cols, rows, values };
+    }
+
+    function sampleGeoRisk(lat, lon) {
+      const grid = geoRiskGrid;
+      if (!grid) return 0;
+      const wrappedLon = ((((lon + 180) % 360) + 360) % 360) - 180;
+      const x = ((wrappedLon + 180) / 360) * grid.cols;
+      const y = ((90 - lat) / 180) * grid.rows;
+      const x0 = Math.floor(x);
+      const y0 = Math.floor(y);
+      const fx = x - x0;
+      const fy = y - y0;
+      const x1 = (x0 + 1) % grid.cols;
+      const yy0 = Math.max(0, Math.min(grid.rows - 1, y0));
+      const yy1 = Math.max(0, Math.min(grid.rows - 1, y0 + 1));
+      const xx0 = (x0 + grid.cols) % grid.cols;
+      const a = grid.values[yy0 * grid.cols + xx0];
+      const b = grid.values[yy0 * grid.cols + x1];
+      const c = grid.values[yy1 * grid.cols + xx0];
+      const d = grid.values[yy1 * grid.cols + x1];
+      return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+    }
+
+    function sampleGeoRiskWide(lat, lon) {
+      return (
+        sampleGeoRisk(lat, lon) * 0.64 +
+        sampleGeoRisk(lat, lon - 12) * 0.18 +
+        sampleGeoRisk(lat, lon + 12) * 0.18
+      );
+    }
+
+    function responseFromDhw(dhw) {
+      const value = Math.max(0, dhw);
+      for (let i = 0; i < DHW_RESPONSE.length - 1; i++) {
+        const [x0, y0] = DHW_RESPONSE[i];
+        const [x1, y1] = DHW_RESPONSE[i + 1];
+        if (value <= x1) {
+          return mix(y0, y1, smoothstep(x0, x1, value));
+        }
+      }
+      return 1;
+    }
+
+    function alertFromDhw(dhw) {
+      if (dhw <= 0) return "No stress";
+      if (dhw < 1) return "Watch";
+      if (dhw < 4) return "Warning";
+      if (dhw < 8) return "AL1";
+      if (dhw < 12) return "AL2";
+      if (dhw < 16) return "AL3";
+      if (dhw < 20) return "AL4";
+      return "AL5";
+    }
+
+    function bleachingState(dhw) {
+      const thermalResponse = responseFromDhw(dhw);
+      return {
+        coverage: clamp01(thermalResponse),
+        mode: "Global extent",
+        alert: alertFromDhw(dhw)
+      };
+    }
+
+    function drawBackground() {
+      const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      g.addColorStop(0, "#07090b");
+      g.addColorStop(0.58, "#11161a");
+      g.addColorStop(1, "#06080a");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function drawSphereBase(dhw, state) {
+      const { cx, cy, r } = metrics();
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,.72)";
+      ctx.shadowBlur = r * 0.28;
+      ctx.shadowOffsetY = r * 0.12;
+      ctx.fillStyle = "#071017";
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, TAU);
+      ctx.clip();
+
+      const stress = clamp01(dhw / 20);
+      const coverage = clamp01(state.coverage);
+      const res = Math.min(320, Math.max(220, Math.floor(r * 0.78)));
+      if (fluidCanvas.width !== res || fluidCanvas.height !== res) {
+        fluidCanvas.width = res;
+        fluidCanvas.height = res;
+      }
+      const img = fluidCtx.createImageData(res, res);
+      const autoQuat = quatFromAxisAngle(0, 1, 0, (frame * 0.055 * Math.PI) / 180);
+      const viewQuat = quatMultiply(autoQuat, orientationQuat);
+
+      const coralA = [255, 92, 126];
+      const coralB = [255, 152, 94];
+      const coralC = [255, 206, 132];
+      const rose = [255, 128, 166];
+      const peach = [255, 184, 128];
+      const coolPearl = [176, 226, 232];
+      const bleach = [244, 239, 226];
+
+      for (let y = 0; y < res; y++) {
+        const py = (y / (res - 1)) * 2 - 1;
+        for (let x = 0; x < res; x++) {
+          const px = (x / (res - 1)) * 2 - 1;
+          const d = px * px + py * py;
+          const i = (y * res + x) * 4;
+          if (d > 1) {
+            img.data[i + 3] = 0;
+            continue;
+          }
+
+          const z = Math.sqrt(1 - d);
+          const world = rotateByQuat(viewQuat, [px, -py, z]);
+          const lon = (Math.atan2(world[0], world[2]) * 180) / Math.PI;
+          const lat = (Math.asin(clamp01((world[1] + 1) * 0.5) * 2 - 1) * 180) / Math.PI;
+          const u = ((lon + 540) % 360) / 360;
+          const v = (lat + 90) / 180;
+          const t = frame * 0.018;
+          const h = surfaceHeight(world, t);
+          const hx = Math.sin((u * 13.0 + v * 7.0) * TAU + t * 0.9) * 0.045;
+          const hy = Math.cos((u * 6.0 - v * 11.0) * TAU - t * 0.7) * 0.045;
+          const nLow = surfaceFbm(world, 2.6, frame * 0.012);
+          const nMid = surfaceFbm(world, 6.2, -frame * 0.01);
+          const nFine = surfaceFbm(world, 18.0, frame * 0.006);
+          const flow =
+            (nLow - 0.5) * 1.05 +
+            (nMid - 0.5) * 0.62 +
+            Math.sin((world[0] * 1.25 + world[1] * 1.7 - world[2] * 0.8) * TAU + frame * 0.014) * 0.24;
+          const slow = nLow;
+          const pearl = nMid;
+          const band = clamp01(flow * 0.38 + 0.5);
+          const livingGrain = nFine;
+          const poreMask = smoothstep(0.43, 0.82, nMid);
+          const pore = smoothstep(0.55, 0.86, nFine) * poreMask;
+          const poreEdge = smoothstep(0.1, 0.58, pore) * (1 - smoothstep(0.62, 0.98, pore));
+          let color = mixColor(coralA, coralB, band);
+          color = mixColor(color, coralC, clamp01(Math.sin(v * TAU * 2.0 + frame * 0.01) * 0.28 + 0.34));
+          color = mixColor(color, rose, clamp01(nLow * 0.34 + 0.08));
+          color = mixColor(color, peach, slow * 0.2);
+          color = mixColor(color, coolPearl, clamp01((1 - band) * 0.045 + pearl * 0.02));
+          const warmTop = clamp01((1 - v) * 0.62 + (px * 0.5 + 0.5) * 0.14);
+          color = mixColor(color, [255, 218, 146], warmTop * 0.2);
+          color = mixColor(color, [255, 238, 204], clamp01((livingGrain - 0.54) * 0.22));
+
+          const bleachFlow =
+            nLow * 0.54 +
+            nMid * 0.3 +
+            clamp01(flow * 0.2 + 0.5) * 0.16;
+          const geoRisk = sampleGeoRiskWide(lat, lon);
+          const tropicalBand = smoothstep(0.58, 0.05, Math.abs(lat) / 90);
+          const reefSignal = Math.pow(clamp01(geoRisk), 0.62);
+          const vein =
+            nMid * 0.52 +
+            nFine * 0.24 +
+            clamp01(flow * 0.24 + 0.52) * 0.24;
+          const erodedGeo = clamp01(reefSignal * (0.62 + vein * 0.48) + Math.pow(reefSignal, 2.1) * 0.16);
+          const localRisk = clamp01(erodedGeo * 0.88 + tropicalBand * 0.045 + bleachFlow * 0.075);
+          const localSensitivity = mix(0.72, 1.24, localRisk);
+          const effectiveDhw = dhw * localSensitivity;
+          const onset = smoothstep(3.6, 5.2, effectiveDhw);
+          const severe = smoothstep(7.2, 9.2, effectiveDhw);
+          const multiSpecies = smoothstep(11.4, 16.4, effectiveDhw);
+          const nearComplete = smoothstep(19.0, 23.2, effectiveDhw);
+          let thermalProbability = clamp01(
+            onset * 0.26 +
+            severe * 0.34 +
+            multiSpecies * 0.26 +
+            nearComplete * 0.14
+          );
+          thermalProbability = Math.max(thermalProbability, coverage * 0.72);
+          const spreadingWave = clamp01(localRisk * 0.66 + nMid * 0.22 + nFine * 0.12);
+          const expansionCut = mix(1.03, -0.06, Math.pow(thermalProbability, 0.92));
+          const bleachEdge = mix(0.045, 0.17, thermalProbability);
+          const liftedBleach = smoothstep(expansionCut - bleachEdge, expansionCut + bleachEdge, spreadingWave);
+          const bleachingEdge = liftedBleach * (1 - liftedBleach) * 4;
+          const washed = clamp01(
+            smoothstep(0.18, 0.92, liftedBleach) *
+            (0.5 + severe * 0.28 + multiSpecies * 0.14 + nearComplete * 0.08)
+          );
+          const opal = mixColor([238, 247, 244], [246, 220, 226], pearl);
+          color = mixColor(color, bleach, washed);
+          color = mixColor(color, opal, washed * (0.22 + pearl * 0.16));
+
+          const ridgeLight = clamp01(0.54 + hx * -5.8 + hy * -3.2 + h * 0.62 + poreEdge * 0.09);
+          const poreSparkle = (smoothstep(0.68, 0.96, h) * 0.13 + poreEdge * 0.13) * (0.72 + pearl * 0.18);
+          const highlight = Math.pow(clamp01(flow * 0.18 + pearl * 0.38 + ridgeLight * 0.52), 4.6) * (0.18 + washed * 0.32);
+          const frontGlow = bleachingEdge * (0.1 + stress * 0.16) * z;
+          const light = clamp01(z * 0.94 + 0.35 - d * 0.035 + ridgeLight * 0.24);
+          const rim = Math.pow(1 - z, 1.5) * 0.26;
+          const microContrast = 0.93 + (livingGrain - 0.5) * 0.08 - pore * 0.018;
+          const shade = clamp01((0.94 + h * 0.19 - Math.max(0, hy) * 0.2) * microContrast);
+          img.data[i] = Math.min(255, color[0] * light * shade + 252 * rim + 255 * highlight + 248 * frontGlow + 240 * poreSparkle);
+          img.data[i + 1] = Math.min(255, color[1] * light * shade + 246 * rim + 238 * highlight + 238 * frontGlow + 228 * poreSparkle);
+          img.data[i + 2] = Math.min(255, color[2] * light * shade + 235 * rim + 220 * highlight + 220 * frontGlow + 210 * poreSparkle);
+          img.data[i + 3] = 255;
+        }
+      }
+
+      fluidCtx.putImageData(img, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(fluidCanvas, cx - r, cy - r, r * 2, r * 2);
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,245,220,.32)";
+      ctx.lineWidth = Math.max(1.5, r * 0.006);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawPoints(points) {
+      const spin = frame * 0.055;
+      const drawn = [];
+      for (const p of points) {
+        const pr = project(p.lat, p.lon, spin);
+        if (pr.z < -0.08) continue;
+        drawn.push({ p, pr });
+      }
+
+      return drawn;
+    }
+
+    function drawHover() {
+      if (!hover) return;
+      const text = `${hover.p.year} · ${hover.p.c} · ${hover.p.s}`;
+      const detail = hover.p.known ? `${hover.p.p}% bleached` : "bleaching record";
+      const x = Math.min(canvas.width - 260, Math.max(18, hover.pr.x + 16));
+      const y = Math.min(canvas.height - 70, Math.max(18, hover.pr.y - 18));
+      ctx.save();
+      ctx.fillStyle = "rgba(4,7,9,.78)";
+      ctx.strokeStyle = "rgba(255,255,255,.14)";
+      ctx.lineWidth = 1;
+      ctx.fillRect(x, y, 240, 54);
+      ctx.strokeRect(x, y, 240, 54);
+      ctx.fillStyle = "#f7f0e7";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillText(text.slice(0, 34), x + 10, y + 20);
+      ctx.fillStyle = "#a8a097";
+      ctx.fillText(detail, x + 10, y + 38);
+      ctx.restore();
+    }
+
+    function updateUi(state) {
+      const dhw = Number(ui.stress.value);
+      ui.stressOut.textContent = dhw.toFixed(1);
+      ui.visibleChip.textContent = `${Math.round(state.coverage * 100)}%`;
+      ui.dhwOut.textContent = state.alert;
+    }
+
+    function loop(time = 0) {
+      if (running && time - lastRenderTime < TARGET_FRAME_MS) {
+        requestAnimationFrame(loop);
+        return;
+      }
+      if (!running && !dirty) {
+        requestAnimationFrame(loop);
+        return;
+      }
+      lastRenderTime = time;
+      if (running) frame++;
+      const state = bleachingState(Number(ui.stress.value));
+      drawBackground();
+      drawSphereBase(Number(ui.stress.value), state);
+      const drawn = [];
+      updateUi(state);
+      dirty = false;
+      requestAnimationFrame(loop);
+      window.__drawn = drawn;
+    }
+
+    canvas.addEventListener("pointerdown", (event) => {
+      if (running) {
+        const autoQuat = quatFromAxisAngle(0, 1, 0, (frame * 0.055 * Math.PI) / 180);
+        orientationQuat = quatNormalize(quatMultiply(autoQuat, orientationQuat));
+        frame = 0;
+      }
+      isDragging = true;
+      dragStart = {
+        vector: pointerToTrackball(event),
+        orientation: orientationQuat.slice()
+      };
+      running = false;
+      ui.toggle.textContent = "Resume rotation";
+      canvas.style.cursor = "grabbing";
+      canvas.setPointerCapture(event.pointerId);
+      dirty = true;
+    });
+
+    canvas.addEventListener("pointermove", (event) => {
+      if (isDragging && dragStart) {
+        const current = pointerToTrackball(event);
+        const delta = quatFromTo(current, dragStart.vector);
+        orientationQuat = quatNormalize(quatMultiply(dragStart.orientation, delta));
+        dirty = true;
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const x = (event.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (event.clientY - rect.top) * (canvas.height / rect.height);
+      let best = null;
+      let bestDist = 18 * (canvas.width / rect.width);
+      for (const d of window.__drawn || []) {
+        const dist = Math.hypot(d.pr.x - x, d.pr.y - y);
+        if (dist < bestDist) {
+          best = d;
+          bestDist = dist;
+        }
+      }
+      hover = best;
+    });
+
+    canvas.addEventListener("pointerleave", () => {
+      hover = null;
+    });
+
+    canvas.addEventListener("pointerup", (event) => {
+      isDragging = false;
+      dragStart = null;
+      canvas.style.cursor = "grab";
+      canvas.releasePointerCapture(event.pointerId);
+      dirty = true;
+    });
+
+    canvas.addEventListener("pointercancel", () => {
+      isDragging = false;
+      dragStart = null;
+      canvas.style.cursor = "grab";
+      dirty = true;
+    });
+
+    ui.toggle.addEventListener("click", () => {
+      running = !running;
+      ui.toggle.textContent = running ? "Pause rotation" : "Resume rotation";
+      dirty = true;
+    });
+
+    ui.stress.addEventListener("input", () => {
+      dirty = true;
+    });
+
+    function init() {
+      orientationQuat = quatFromAxisAngle(0, 1, 0, (80 * Math.PI) / 180);
+      geoRiskGrid = buildGeoRiskGrid(data.points);
+      resize();
+      loop();
+    }
+
+    window.addEventListener("resize", resize);
+    init();
+  </script>
+</body>
+</html>
