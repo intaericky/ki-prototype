@@ -123,7 +123,7 @@ function setupThree() {
 
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
-  camera.position.set(0, 0, 4.2);
+  camera.position.set(0, 0, 3.8);
 
   globeGroup = new THREE.Group();
   scene.add(globeGroup);

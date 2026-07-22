@@ -49,10 +49,10 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: Glo
     setRuntimeError(false);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf7f7f3);
+    scene.background = new THREE.Color(0x000000);
 
     const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
-    camera.position.set(0, 0.25, 11.6);
+    camera.position.set(0, 0.25, 20.5);
 
     let renderer: THREE.WebGLRenderer;
     try {
@@ -79,7 +79,7 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: Glo
     controls.maxPolarAngle = Math.PI - 0.12;
     controls.update();
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0xd8d8d2, 2.6));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x181818, 2.6));
     const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
     keyLight.position.set(-4, 7, 8);
     scene.add(keyLight);
@@ -87,13 +87,13 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: Glo
     const shellGeometry = new THREE.SphereGeometry(CONTAINER_RADIUS, 48, 32);
     const shell = new THREE.Mesh(
       shellGeometry,
-      new THREE.MeshBasicMaterial({ color: 0x11110f, wireframe: true, transparent: true, opacity: 0.11 }),
+      new THREE.MeshBasicMaterial({ color: 0xf3f3ef, wireframe: true, transparent: true, opacity: 0.14 }),
     );
     scene.add(shell);
 
     const rim = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.CircleGeometry(CONTAINER_RADIUS, 96)),
-      new THREE.LineBasicMaterial({ color: 0x11110f, transparent: true, opacity: 0.65 }),
+      new THREE.LineBasicMaterial({ color: 0xf3f3ef, transparent: true, opacity: 0.55 }),
     );
     rim.rotation.x = Math.PI / 2;
     scene.add(rim);

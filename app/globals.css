@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-:root { --paper: #f7f7f3; --ink: #11110f; --line: #c9c8c1; }
+:root { color-scheme: dark; --paper: #000; --ink: #f4f4ef; --line: #393936; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--paper); color: var(--ink); font-family: Arial, "Apple SD Gothic Neo", sans-serif; }
 button, select, input { font: inherit; color: inherit; }
@@ -46,7 +46,7 @@ a { color: inherit; }
 .legend { min-width: 0; display: flex; align-items: center; gap: 15px; overflow: hidden; }
 .legend span { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; white-space: nowrap; font: 10px "Courier New", monospace; }
 .legend i { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--ink); }
-.legend b { font-weight: 400; color: #77766f; }
+.legend b { font-weight: 400; color: #92928c; }
 .encoding { white-space: nowrap; font: 10px "Courier New", monospace; }
 .encoding a { text-underline-offset: 3px; }
 

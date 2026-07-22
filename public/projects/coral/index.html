@@ -7,16 +7,16 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #07090b;
-      --ink: #f7f0e7;
-      --muted: #a8a097;
-      --line: #2a3135;
-      --panel: #101417;
-      --cyan: #5ad7ff;
-      --coral: #ff6d58;
-      --rose: #f6a0a7;
-      --gold: #ffd070;
-      --bleach: #ded9cf;
+      --bg: #000;
+      --ink: #f4f4ef;
+      --muted: #92928c;
+      --line: #363633;
+      --panel: #080808;
+      --cyan: #d7d7d2;
+      --coral: #f4f4ef;
+      --rose: #c8c8c3;
+      --gold: #a4a49f;
+      --bleach: #f4f4ef;
     }
 
     * { box-sizing: border-box; }
@@ -26,11 +26,8 @@
       min-height: 100vh;
       overflow: hidden;
       color: var(--ink);
-      background:
-        radial-gradient(circle at 48% 42%, rgb(84 205 230 / .14), transparent 31%),
-        radial-gradient(circle at 50% 66%, rgb(255 109 88 / .06), transparent 28%),
-        linear-gradient(180deg, #03131c, #082532 58%, #02070b);
-      font: 14px/1.42 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      font: 13px/1.42 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
     }
 
     main {
@@ -59,13 +56,13 @@
       bottom: 18px;
       display: grid;
       grid-template-columns: repeat(3, minmax(110px, 1fr)) auto;
-      gap: 12px;
+      gap: 14px;
       align-items: center;
-      max-width: 760px;
-      padding: 14px;
-      border: 1px solid rgb(247 240 231 / .14);
-      background: rgb(5 8 10 / .68);
-      backdrop-filter: blur(16px);
+      max-width: 720px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      background: rgb(0 0 0 / .78);
+      backdrop-filter: blur(12px);
     }
 
     .readout {
@@ -106,8 +103,8 @@
       z-index: 3;
       min-height: 34px;
       padding: 0 12px;
-      border: 1px solid rgb(247 240 231 / .16);
-      background: rgb(5 8 10 / .58);
+      border: 1px solid var(--line);
+      background: rgb(0 0 0 / .78);
       color: var(--ink);
       backdrop-filter: blur(14px);
     }
@@ -130,9 +127,9 @@
     .chip {
       min-width: 104px;
       padding: 9px 10px;
-      border: 1px solid rgb(247 240 231 / .12);
-      background: rgb(5 8 10 / .6);
-      backdrop-filter: blur(14px);
+      border: 1px solid var(--line);
+      background: rgb(0 0 0 / .76);
+      backdrop-filter: blur(12px);
     }
 
     .chip span,
@@ -212,27 +209,27 @@
     input[type="range"],
     select {
       width: 100%;
-      accent-color: var(--coral);
+      accent-color: var(--ink);
     }
 
     select {
       min-height: 34px;
-      border: 1px solid #3b464b;
-      background: #11171b;
+      border: 1px solid var(--line);
+      background: var(--bg);
       color: var(--ink);
       padding: 0 8px;
     }
 
     button {
       min-height: 38px;
-      border: 1px solid #3b464b;
-      background: #171d20;
+      border: 1px solid var(--line);
+      background: #080808;
       color: var(--ink);
-      font-weight: 700;
+      font-weight: 500;
       cursor: pointer;
     }
 
-    button:hover { background: #20282c; }
+    button:hover { background: var(--ink); color: var(--bg); }
 
     .legend {
       display: grid;

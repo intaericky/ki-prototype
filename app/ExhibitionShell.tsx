@@ -92,14 +92,6 @@ export default function ExhibitionShell() {
       </header>
 
       <section className="artwork-stage" aria-label={`${active.title}: ${active.subtitle}`}>
-        <div className="artwork-key" key={active.id}>
-          <span>{active.number}</span>
-          <div>
-            <strong>{active.title}</strong>
-            <small>{active.subtitle}</small>
-          </div>
-        </div>
-
         {active.kind === "video" ? (
           <div className="video-stage" key={active.id}>
             <video src={active.source} controls autoPlay muted loop playsInline aria-label="Daisy World video" />
@@ -107,8 +99,6 @@ export default function ExhibitionShell() {
         ) : (
           <iframe key={active.id} className="artwork-frame" src={active.source} title={`${active.title} interactive artwork`} />
         )}
-
-        <div className="navigation-hint" aria-hidden="true">← → &nbsp; SWITCH &nbsp;·&nbsp; 1—4</div>
       </section>
     </main>
   );

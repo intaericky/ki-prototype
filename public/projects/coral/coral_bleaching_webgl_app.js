@@ -25,13 +25,13 @@
   // NOAA CRW thresholds remain the semantic markers, but the visual response is
   // continuous so bleaching does not pause between alert bands.
   // Interaction changes SST anomaly first; HotSpot and DHW are derived from it.
-  const SIM_DAYS_PER_SECOND = 1.8;
-  const ACTIVE_SST_ANOMALY_MIN = 1.0;
+  const SIM_DAYS_PER_SECOND = 8;
+  const ACTIVE_SST_ANOMALY_MIN = 1.6;
   const ACTIVE_SST_ANOMALY_MAX = 2.2;
-  const SST_HEATING_TAU_DAYS = 21;
+  const SST_HEATING_TAU_DAYS = 6;
   const SST_COOLING_TAU_DAYS = 112;
   const DHW_WINDOW_DAYS = 84;
-  const BLEACH_ONSET_TAU_DAYS = 21;
+  const BLEACH_ONSET_TAU_DAYS = 8;
   const COLOR_RECOVERY_TAU_DAYS = 180;
   const SEVERE_RECOVERY_TAU_DAYS = 1460;
 
@@ -151,18 +151,16 @@
     void main() {
       vec2 pixel = vUv * uResolution;
       vec2 center = uResolution * vec2(0.5, 0.51);
-      float radius = min(uResolution.x, uResolution.y) * 0.455;
+      float radius = min(uResolution.x, uResolution.y) * 0.28;
       vec2 p = (pixel - center) / radius;
       p.y *= -1.0;
       float d = dot(p, p);
 
-      vec3 bgTop = vec3(0.012, 0.075, 0.105);
-      vec3 bgBot = vec3(0.004, 0.018, 0.032);
-      vec3 bg = mix(bgBot, bgTop, smoothstep(0.0, 1.0, vUv.y));
+      vec3 bg = vec3(0.0);
 
       if (d > 1.0) {
-        float halo = exp(-abs(sqrt(d) - 1.0) * 16.0) * 0.07;
-        gl_FragColor = vec4(bg + vec3(0.08, 0.34, 0.42) * halo, 1.0);
+        float halo = exp(-abs(sqrt(d) - 1.0) * 18.0) * 0.035;
+        gl_FragColor = vec4(bg + vec3(halo), 1.0);
         return;
       }
 
@@ -387,7 +385,7 @@
   }
 
   function metrics() {
-    const r = Math.min(canvas.width, canvas.height) * 0.455;
+    const r = Math.min(canvas.width, canvas.height) * 0.28;
     return { cx: canvas.width * 0.5, cy: canvas.height * 0.51, r };
   }
 
@@ -531,6 +529,15 @@
     }
   }
 
+  function applyContactPulse() {
+    sim.influenceSeconds = Math.max(sim.influenceSeconds, 4);
+    sim.sstAnomaly = Math.max(sim.sstAnomaly, 1.25);
+    sim.hotSpot = Math.max(sim.hotSpot, sim.sstAnomaly);
+    sim.dhw = Math.max(sim.dhw, 4.2);
+    sim.coverage = Math.max(sim.coverage, 0.12);
+    sim.maxDhwMemory = Math.max(sim.maxDhwMemory, sim.dhw);
+  }
+
   function compileShader(type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
@@ -614,6 +621,7 @@
   canvas.addEventListener("pointerdown", (event) => {
     pointerInside = pointerIsOnSphere(event);
     touchInfluence = event.pointerType !== "mouse" && pointerInside;
+    if (pointerInside) applyContactPulse();
     if (running) {
       manualYaw += (frame * 0.018 * Math.PI) / 180;
       frame = 0;
@@ -647,7 +655,7 @@
     isDragging = false;
     dragStart = null;
     touchInfluence = false;
-    pointerInside = pointerIsOnSphere(event);
+    pointerInside = event.pointerType === "mouse" && pointerIsOnSphere(event);
     canvas.style.cursor = "grab";
     canvas.releasePointerCapture(event.pointerId);
   });
