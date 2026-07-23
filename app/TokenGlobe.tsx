@@ -129,7 +129,7 @@ function circleLine(radius: number, material: THREE.LineBasicMaterial) {
   return new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), material);
 }
 
-export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: GlobeToken[]; resetKey: number; budgetKg: number }) {
+export default function TokenGlobe({ tokens, resetKey, budgetKg, theme = "dark" }: { tokens: GlobeToken[]; resetKey: number; budgetKg: number; theme?: "dark" | "light" }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const [runtimeError, setRuntimeError] = useState(false);
 
@@ -139,7 +139,7 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: Glo
     setRuntimeError(false);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x000000, 0.022);
+    scene.fog = new THREE.FogExp2(theme === "light" ? 0xffffff : 0x000000, 0.022);
 
     const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
     camera.position.set(0, 0.25, 20.5);
@@ -435,7 +435,7 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: Glo
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
     };
-  }, [tokens, resetKey, budgetKg]);
+  }, [tokens, resetKey, budgetKg, theme]);
 
   return (
     <div ref={mountRef} className="token-globe" role="img" aria-label={`${tokens.length}개의 탄소 토큰이 1일 탄소예산 구 안으로 낙하한다. 드래그해 회전하고 휠 또는 핀치로 확대할 수 있다.`}>

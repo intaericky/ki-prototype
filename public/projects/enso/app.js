@@ -65,10 +65,22 @@ const state = {
   lastTick: performance.now(),
   episodesSent: false,
   ready: false,
+  theme: "dark",
 };
 
 window.addEventListener("message", (event) => {
-  if (event.origin !== window.location.origin || event.data?.type !== "ENSO_CONTROL") return;
+  if (event.origin !== window.location.origin || !event.data) return;
+  if (event.data.type === "KI_THEME") {
+    state.theme = event.data.theme === "light" ? "light" : "dark";
+    document.documentElement.dataset.theme = state.theme;
+    document.documentElement.style.colorScheme = state.theme;
+    if (renderer) {
+      renderer.setClearColor(state.theme === "light" ? 0xffffff : 0x050505, 1);
+      renderScene();
+    }
+    return;
+  }
+  if (event.data.type !== "ENSO_CONTROL") return;
   const height = Number(event.data.height);
   if (Number.isFinite(height)) {
     state.heightScale = clamp(height, 0, 0.5);
@@ -140,7 +152,7 @@ async function init() {
 
 function setupThree() {
   renderer = new THREE.WebGLRenderer({ canvas: globeCanvas, antialias: true, alpha: false });
-  renderer.setClearColor(0x050505, 1);
+  renderer.setClearColor(state.theme === "light" ? 0xffffff : 0x050505, 1);
   renderer.setPixelRatio(window.devicePixelRatio || 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;

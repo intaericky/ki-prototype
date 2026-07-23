@@ -9,6 +9,17 @@
   --accent: #f4f4ef;
 }
 
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fff;
+  --panel: #fff;
+  --panel-2: #f7f7f5;
+  --text: #11110f;
+  --muted: #62625d;
+  --line: #c8c8c2;
+  --accent: #11110f;
+}
+
 * {
   box-sizing: border-box;
 }

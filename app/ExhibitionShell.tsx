@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type ProjectId = "enso" | "daisy" | "coral" | "food";
+type Theme = "dark" | "light";
 type EnsoEpisode = { phase: "El Niño" | "La Niña"; start: number; end: number };
 type EnsoStatus = { date: string; value: number; phase: "El Niño" | "La Niña" | "Neutral"; episodes: EnsoEpisode[] };
 type CoralStatus = { anomaly: number; dhw: number; coverage: number; alert: string; influence: number; recovery: string; active: boolean };
@@ -61,6 +62,7 @@ export default function ExhibitionShell() {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [theme, setTheme] = useState<Theme>("dark");
   const [stageSize, setStageSize] = useState({ width: 1280, height: 720 });
   const [artworkReady, setArtworkReady] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
@@ -76,6 +78,18 @@ export default function ExhibitionShell() {
   const [foodCafeteria, setFoodCafeteria] = useState("fclt");
   const [foodStatus, setFoodStatus] = useState<FoodStatus>({ totalKg: 0, budgetUse: 0, legend: [], menu: [], optionTitle: "" });
   const active = PROJECTS[activeIndex];
+
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem("ki-prototype-theme");
+    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem("ki-prototype-theme", theme);
+    frameRef.current?.contentWindow?.postMessage({ type: "KI_THEME", theme }, window.location.origin);
+  }, [theme, active.id]);
 
   const selectProject = useCallback((index: number) => {
     setEnsoPlaying(false);
@@ -214,9 +228,9 @@ export default function ExhibitionShell() {
   };
 
   return (
-    <main className="prototype-shell">
+    <main className="prototype-shell" data-theme={theme}>
       <section ref={stageRef} className="original-stage" aria-label={`${active.en} original artwork`}>
-        {active.id === "daisy" ? <video ref={videoRef} className={`original-video ${artworkReady ? "ready" : ""}`} src={active.source} autoPlay muted loop playsInline onCanPlay={() => setArtworkReady(true)} /> : <iframe ref={frameRef} key={active.id} className={`original-frame ${artworkReady ? "ready" : ""}`} style={frameStyle} src={active.source} title={`${active.en} original prototype`} onLoad={() => { if (active.id === "enso") postFrame({ type: "ENSO_CONTROL", height: ensoHeight }); if (active.id === "coral") postFrame({ type: "CORAL_EMBED" }); if (active.id === "food") postFrame({ type: "FOOD_CONTROL", date: foodDate, meal: foodMeal, cafeteria: foodCafeteria }); }} />}
+        {active.id === "daisy" ? <video ref={videoRef} className={`original-video ${artworkReady ? "ready" : ""}`} src={active.source} autoPlay muted loop playsInline onCanPlay={() => setArtworkReady(true)} /> : <iframe ref={frameRef} key={active.id} className={`original-frame ${artworkReady ? "ready" : ""}`} style={frameStyle} src={active.source} title={`${active.en} original prototype`} onLoad={() => { postFrame({ type: "KI_THEME", theme }); if (active.id === "enso") postFrame({ type: "ENSO_CONTROL", height: ensoHeight }); if (active.id === "coral") postFrame({ type: "CORAL_EMBED" }); if (active.id === "food") postFrame({ type: "FOOD_CONTROL", date: foodDate, meal: foodMeal, cafeteria: foodCafeteria }); }} />}
         <div className={`artwork-loading ${artworkReady ? "hidden" : ""}`} aria-hidden="true"><i className="artwork-placeholder" /></div>
       </section>
 
@@ -227,7 +241,12 @@ export default function ExhibitionShell() {
         </section>
 
         <section className="description-view">
-          <header className="research-heading"><span>KI PROTOTYPE</span><h2>행성지능 인터페이스를 위한<br />기후 빅데이터 구면 시각화 프로토타입 개발</h2></header>
+          <header className="research-heading">
+            <div><span>KI PROTOTYPE</span><h2>행성지능 인터페이스를 위한<br />기후 빅데이터 구면 시각화 프로토타입 개발</h2></div>
+            <button className="theme-toggle" type="button" role="switch" aria-checked={theme === "light"} aria-label={`${theme === "dark" ? "라이트" : "다크"} 모드로 전환`} onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}>
+              <span>DARK</span><i aria-hidden="true" /><span>LIGHT</span>
+            </button>
+          </header>
           <div className="work-heading"><h1>{active.ko}</h1><p>{active.en} · {active.maker}</p></div>
           <p className="work-description">{active.description}</p>
           <dl><div><dt>DATA</dt><dd>{active.dataset}</dd></div><div><dt>INTERACTION</dt><dd>{active.interaction}</dd></div></dl>

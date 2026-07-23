@@ -54,6 +54,7 @@
     uniform float uTime;
     uniform float uDhw;
     uniform float uCoverage;
+    uniform float uLightMode;
     uniform sampler2D uRiskMap;
     uniform vec4 uQuat;
     varying vec2 vUv;
@@ -158,11 +159,11 @@
       p.y *= -1.0;
       float d = dot(p, p);
 
-      vec3 bg = vec3(0.0);
+      vec3 bg = vec3(uLightMode);
 
       if (d > 1.0) {
         float halo = exp(-abs(sqrt(d) - 1.0) * 18.0) * 0.035;
-        gl_FragColor = vec4(bg + vec3(halo), 1.0);
+        gl_FragColor = vec4(bg + vec3(halo * (1.0 - uLightMode)) - vec3(halo * uLightMode * 2.2), 1.0);
         return;
       }
 
@@ -308,6 +309,7 @@
   let dragStart = null;
   let pointerInside = false;
   let touchInfluence = false;
+  let lightMode = 0;
   let lastTime = 0;
   const sim = {
     sstAnomaly: 0,
@@ -629,6 +631,7 @@
     gl.uniform1f(locations.time, time * 0.001);
     gl.uniform1f(locations.dhw, sim.dhw);
     gl.uniform1f(locations.coverage, state.coverage);
+    gl.uniform1f(locations.lightMode, lightMode);
     gl.uniform4f(locations.quat, shaderQuat[0], shaderQuat[1], shaderQuat[2], shaderQuat[3]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
@@ -708,6 +711,12 @@
 
   window.addEventListener("message", (event) => {
     if (event.origin !== window.location.origin || !event.data) return;
+    if (event.data.type === "KI_THEME") {
+      lightMode = event.data.theme === "light" ? 1 : 0;
+      document.documentElement.dataset.theme = lightMode ? "light" : "dark";
+      document.documentElement.style.colorScheme = lightMode ? "light" : "dark";
+      return;
+    }
     if (event.data.type === "CORAL_EMBED") {
       document.body.classList.add("ui-hidden");
       ui.uiToggle.textContent = "Show UI";
@@ -731,6 +740,7 @@
       time: gl.getUniformLocation(program, "uTime"),
       dhw: gl.getUniformLocation(program, "uDhw"),
       coverage: gl.getUniformLocation(program, "uCoverage"),
+      lightMode: gl.getUniformLocation(program, "uLightMode"),
       riskMap: gl.getUniformLocation(program, "uRiskMap"),
       quat: gl.getUniformLocation(program, "uQuat")
     };

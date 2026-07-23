@@ -52,6 +52,7 @@ function splitOptions(lines: string[]): Option[] {
 
 export default function MenuInstrument() {
   const [embedded, setEmbedded] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [date, setDate] = useState(koreaDate);
   const [meal, setMeal] = useState<MealKey>("lunch");
   const [data, setData] = useState<MenuResponse | null>(null);
@@ -94,7 +95,15 @@ export default function MenuInstrument() {
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin || event.data?.type !== "FOOD_CONTROL") return;
+      if (event.origin !== window.location.origin || !event.data) return;
+      if (event.data.type === "KI_THEME") {
+        const nextTheme = event.data.theme === "light" ? "light" : "dark";
+        setTheme(nextTheme);
+        document.documentElement.dataset.theme = nextTheme;
+        document.documentElement.style.colorScheme = nextTheme;
+        return;
+      }
+      if (event.data.type !== "FOOD_CONTROL") return;
       const command = event.data as { date?: string; meal?: MealKey; cafeteria?: string; reset?: boolean };
       if (command.date && /^\d{4}-\d{2}-\d{2}$/.test(command.date)) setDate(command.date);
       if (command.meal && MEALS.some((item) => item.id === command.meal)) setMeal(command.meal);
@@ -150,7 +159,7 @@ export default function MenuInstrument() {
   }, [embedded, loading]);
 
   return (
-    <main className={`edo-three${embedded ? " embedded" : ""}`}>
+    <main className={`edo-three${embedded ? " embedded" : ""}`} data-theme={theme}>
       <header className="three-header">
         <h1>EDO / KAIST</h1>
         <div className="control date-control">
@@ -170,7 +179,7 @@ export default function MenuInstrument() {
       </header>
 
       <section className="three-stage">
-        {tokens.length ? <TokenGlobe tokens={tokens} resetKey={resetKey} budgetKg={DAILY_BUDGET_KG} /> : (
+        {tokens.length ? <TokenGlobe tokens={tokens} resetKey={resetKey} budgetKg={DAILY_BUDGET_KG} theme={theme} /> : (
           <div className="three-empty" aria-live="polite">
             {loading ? "메뉴 불러오는 중" : error ? <><span>식단 연결 실패</span><button onClick={load}>다시 시도</button></> : "공식 메뉴 미게시"}
           </div>
