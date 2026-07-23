@@ -44,7 +44,7 @@ a { color: inherit; }
   --line: #c8c8c2;
 }
 .edo-three[data-theme="light"] .token-globe {
-  background: radial-gradient(circle at 48% 43%, #fff 0, #f8f8f6 36%, #eeeeeb 66%, #e4e4e0 100%);
+  background: #fff;
 }
 .token-globe canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 .token-globe canvas:active { cursor: grabbing; }
