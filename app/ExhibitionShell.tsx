@@ -66,7 +66,7 @@ export default function ExhibitionShell() {
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0);
   const [ensoTime, setEnsoTime] = useState(1000);
-  const [ensoHeight, setEnsoHeight] = useState(.14);
+  const [ensoHeight, setEnsoHeight] = useState(0);
   const [ensoPlaying, setEnsoPlaying] = useState(false);
   const [ensoStatus, setEnsoStatus] = useState<EnsoStatus>({ date: "2025-12-01", value: 0, phase: "Neutral", episodes: [] });
   const [coralTouch, setCoralTouch] = useState(false);
@@ -217,7 +217,7 @@ export default function ExhibitionShell() {
     <main className="prototype-shell">
       <section ref={stageRef} className="original-stage" aria-label={`${active.en} original artwork`}>
         {active.id === "daisy" ? <video ref={videoRef} className={`original-video ${artworkReady ? "ready" : ""}`} src={active.source} autoPlay muted loop playsInline onCanPlay={() => setArtworkReady(true)} /> : <iframe ref={frameRef} key={active.id} className={`original-frame ${artworkReady ? "ready" : ""}`} style={frameStyle} src={active.source} title={`${active.en} original prototype`} onLoad={() => { if (active.id === "enso") postFrame({ type: "ENSO_CONTROL", height: ensoHeight }); if (active.id === "coral") postFrame({ type: "CORAL_EMBED" }); if (active.id === "food") postFrame({ type: "FOOD_CONTROL", date: foodDate, meal: foodMeal, cafeteria: foodCafeteria }); }} />}
-        <div className={`artwork-loading ${artworkReady ? "hidden" : ""}`} aria-hidden="true" />
+        <div className={`artwork-loading ${artworkReady ? "hidden" : ""}`} aria-hidden="true"><i className="artwork-placeholder" /></div>
       </section>
 
       <aside className="interface-column">

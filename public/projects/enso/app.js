@@ -7,7 +7,7 @@ if (new URLSearchParams(window.location.search).has("embed")) document.body.clas
 const TEMP_SCALE = { min: -2, max: 32, ground: 15 };
 const ANOM_SCALE = { min: -4, max: 4, ground: 0 };
 const CELL_DEGREES = 2;
-const DEFAULT_EXTRUSION_RATIO = 0.14;
+const DEFAULT_EXTRUSION_RATIO = 0;
 const GEODESIC_DETAIL = 39;
 const ENSO_THRESHOLD = 0.5;
 const ENSO_MIN_SEASONS = 5;
@@ -142,6 +142,11 @@ function setupThree() {
   renderer = new THREE.WebGLRenderer({ canvas: globeCanvas, antialias: true, alpha: false });
   renderer.setClearColor(0x050505, 1);
   renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.18;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
@@ -159,10 +164,30 @@ function setupThree() {
   );
   globeGroup.add(wire);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.95));
-  const light = new THREE.DirectionalLight(0xffffff, 1.25);
-  light.position.set(-2, 2, 4);
-  scene.add(light);
+  scene.add(new THREE.HemisphereLight(0xd8e8ff, 0x050507, 0.72));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.16));
+
+  const key = new THREE.DirectionalLight(0xfff4df, 3.1);
+  key.position.set(-3.5, 4.8, 5.5);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.camera.left = -2.1;
+  key.shadow.camera.right = 2.1;
+  key.shadow.camera.top = 2.1;
+  key.shadow.camera.bottom = -2.1;
+  key.shadow.camera.near = 1;
+  key.shadow.camera.far = 12;
+  key.shadow.bias = -0.00035;
+  key.shadow.normalBias = 0.018;
+  scene.add(key);
+
+  const fill = new THREE.DirectionalLight(0x5f8cff, 0.72);
+  fill.position.set(4, -1.5, 2.5);
+  scene.add(fill);
+
+  const rim = new THREE.DirectionalLight(0xffffff, 1.45);
+  rim.position.set(1.5, 3, -5);
+  scene.add(rim);
 
   raycaster = new THREE.Raycaster();
   pointer = new THREE.Vector2();
@@ -343,68 +368,55 @@ function updateTitles() {
 function rebuildGlobeMesh() {
   const variable = ui.variable.value;
   const cells = currentCells();
-  updateInstancedGlobe(cells, variable);
+  updateSolidGlobe(cells, variable);
   rebuildNinoGuides(cells);
 }
 
-function updateInstancedGlobe(cells, variable) {
+function updateSolidGlobe(cells, variable) {
   const { units } = getGeodesicTopology();
   if (!cellMesh) {
-    cellMesh = new THREE.InstancedMesh(
-      buildSolidHexWedgeGeometry(),
-      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
-      units.length
+    cellMesh = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshStandardMaterial({
+        side: THREE.DoubleSide,
+        vertexColors: true,
+        roughness: 0.64,
+        metalness: 0.06,
+        envMapIntensity: 0.35,
+      })
     );
-    cellMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    cellMesh.castShadow = true;
+    cellMesh.receiveShadow = true;
     cellMesh.renderOrder = 1;
     globeGroup.add(cellMesh);
   }
   const scale = variable === "sst" ? TEMP_SCALE : ANOM_SCALE;
-  const matrix = new THREE.Matrix4();
-  const quaternion = new THREE.Quaternion();
-  const position = new THREE.Vector3(0, 0, 0);
-  const size = new THREE.Vector3();
-  const up = new THREE.Vector3(0, 1, 0);
-  const normal = new THREE.Vector3();
+  const positions = [];
+  const colors = [];
+  const core = new THREE.Vector3(0, 0, 0);
   state.faceCells = [];
-  let instance = 0;
   units.forEach((unit) => {
     const cell = nearestSourceCell(unit, cells);
     const value = cell ? cell[variable] : NaN;
     if (!cell || !Number.isFinite(value)) return;
-    normal.copy(spherePoint(unit.lon, unit.lat, 1)).normalize();
     const radius = Math.max(0.05, 1 + reliefHeight(value, variable));
-    const cellRadius = unit.boundary.reduce((sum, point) => sum + point.distanceTo(normal), 0) / unit.boundary.length;
-    quaternion.setFromUnitVectors(up, normal);
-    size.set(cellRadius * 1.06, radius, cellRadius * 1.06);
-    matrix.compose(position, quaternion, size);
-    cellMesh.setMatrixAt(instance, matrix);
-    cellMesh.setColorAt(instance, unitColor(value, variable, scale));
-    state.faceCells[instance] = { ...cell, sampleLat: unit.lat, sampleLon: unit.lon };
-    instance += 1;
+    const color = unitColor(value, variable, scale);
+    const faceCell = { ...cell, sampleLat: unit.lat, sampleLon: unit.lon };
+    const center = spherePoint(unit.lon, unit.lat, radius);
+    const boundary = unit.boundary.map((point) => point.clone().multiplyScalar(radius));
+    for (let index = 0; index < boundary.length; index += 1) {
+      const next = (index + 1) % boundary.length;
+      pushTriangle(positions, colors, state.faceCells, center, boundary[index], boundary[next], color, faceCell);
+      pushTriangle(positions, colors, state.faceCells, core, boundary[next], boundary[index], color, faceCell);
+    }
   });
-  cellMesh.count = instance;
-  cellMesh.instanceMatrix.needsUpdate = true;
-  if (cellMesh.instanceColor) cellMesh.instanceColor.needsUpdate = true;
-  cellMesh.computeBoundingSphere();
-}
-
-function buildSolidHexWedgeGeometry() {
-  const positions = [];
-  const top = Array.from({ length: 6 }, (_, index) => {
-    const angle = Math.PI / 6 + index * Math.PI / 3;
-    return new THREE.Vector3(Math.cos(angle), 1, Math.sin(angle));
-  });
-  const core = new THREE.Vector3(0, 0, 0);
-  for (let index = 0; index < 6; index += 1) {
-    const next = (index + 1) % 6;
-    [core, top[index], top[next]].forEach((point) => positions.push(point.x, point.y, point.z));
-    [new THREE.Vector3(0, 1, 0), top[next], top[index]].forEach((point) => positions.push(point.x, point.y, point.z));
-  }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   geometry.computeVertexNormals();
-  return geometry;
+  geometry.computeBoundingSphere();
+  cellMesh.geometry.dispose();
+  cellMesh.geometry = geometry;
 }
 
 function buildReliefGeometry(cells, variable) {
@@ -515,7 +527,7 @@ function rebuildNinoGuides(cells) {
   const phase = currentNino().phase;
   const currentColor = phase === "El Niño" ? 0xff2400 : phase === "La Niña" ? 0x004cff : 0xffffff;
   const geometry = buildNinoGuideGeometry(cells);
-  const material = new THREE.LineBasicMaterial({ color: currentColor, transparent: true, opacity: 1, depthTest: false, depthWrite: false });
+  const material = new THREE.LineBasicMaterial({ color: currentColor, transparent: true, opacity: 0.96, depthTest: true, depthWrite: false });
   const guide = new THREE.LineSegments(geometry, material);
   guide.renderOrder = 6;
   ninoGuideGroup.add(guide);

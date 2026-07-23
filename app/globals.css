@@ -465,8 +465,17 @@ a { color: inherit; }
 .original-frame.ready { opacity: 1; }
 .original-video { position: absolute; top: 50%; left: 50%; width: auto; height: 100%; min-width: 100%; object-fit: cover; transform: translate(-50%, -50%); background: #000; opacity: 0; transition: opacity 260ms ease; }
 .original-video.ready { opacity: 1; }
-.artwork-loading { position: absolute; z-index: 2; inset: 0; background: #000; opacity: 1; pointer-events: none; transition: opacity 260ms ease; }
+.artwork-loading { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; background: #000; opacity: 1; pointer-events: none; transition: opacity 360ms cubic-bezier(.22,.75,.25,1); }
 .artwork-loading.hidden { opacity: 0; }
+.artwork-placeholder {
+  display: block;
+  width: min(56%, 69svh);
+  aspect-ratio: 1;
+  border: 1px solid rgb(255 255 255 / .09);
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, #111 0%, #080808 48%, #030303 78%, #000 100%);
+  box-shadow: inset -22px -26px 52px rgb(0 0 0 / .72), inset 12px 11px 28px rgb(255 255 255 / .018);
+}
 .artwork-caption { position: absolute; z-index: 3; left: 22px; bottom: 20px; display: grid; gap: 4px; padding: 8px 10px; background: rgb(0 0 0 / .66); border: 1px solid rgb(255 255 255 / .1); pointer-events: none; backdrop-filter: blur(10px); }
 .artwork-caption span { color: #777772; font-size: 7px; letter-spacing: .12em; }
 .artwork-caption strong { font-family: var(--font-geist-sans), Arial, sans-serif; font-size: 18px; font-weight: 450; }
