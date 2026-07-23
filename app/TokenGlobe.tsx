@@ -28,6 +28,9 @@ const CONTAINER_RADIUS = 3.55;
 const PACKED_VOLUME_AT_BUDGET = 0.42;
 const FIXED_STEP = 1 / 120;
 const MAX_SPEED = 7;
+const QUIET_LINEAR_SPEED_SQ = 0.035 ** 2;
+const QUIET_ANGULAR_SPEED_SQ = 0.045 ** 2;
+const QUIET_STEPS_TO_SLEEP = 120;
 
 const TOKEN_MARKS: Record<string, string> = {
   "red-meat": "RM",
@@ -289,6 +292,14 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: Glo
     let frame = 0;
     let previousTime = performance.now() / 1000;
     let accumulator = 0;
+    let quietSteps = 0;
+    let physicsSleeping = false;
+    const activationEnd = bodies.reduce((latest, body) => Math.max(latest, body.delay), 0);
+    const overBudget = tokens.reduce((sum, token) => sum + token.kg, 0) > budgetKg;
+    // An over-budget meal can exceed the geometric packing capacity of the
+    // daily-budget shell. In that case the positional solver cannot find a
+    // perfect non-overlapping state, so it receives a shorter hard settle time.
+    const hardSleepAfter = activationEnd + (overBudget ? 5.5 : 9);
     const normal = new THREE.Vector3();
     const delta = new THREE.Vector3();
     const relative = new THREE.Vector3();
@@ -332,6 +343,7 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: Glo
     };
 
     const stepPhysics = (dt: number) => {
+      if (physicsSleeping) return;
       elapsed += dt;
       for (const body of bodies) {
         if (!body.active && elapsed >= body.delay) {
@@ -341,7 +353,7 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: Glo
         if (!body.active) continue;
         body.velocity.y -= 4.2 * dt;
         body.velocity.multiplyScalar(Math.pow(0.992, dt * 60));
-        body.angularVelocity.multiplyScalar(Math.pow(0.994, dt * 60));
+        body.angularVelocity.multiplyScalar(Math.pow(0.986, dt * 60));
         if (body.velocity.lengthSq() > MAX_SPEED ** 2) body.velocity.setLength(MAX_SPEED);
         body.position.addScaledVector(body.velocity, dt);
         body.mesh.rotation.x += body.angularVelocity.x * dt;
@@ -354,6 +366,21 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg }: { tokens: Glo
         for (let i = 0; i < bodies.length; i += 1) {
           for (let j = i + 1; j < bodies.length; j += 1) collideBodies(bodies[i], bodies[j]);
           if (bodies[i].active) collideWithShell(bodies[i]);
+        }
+      }
+
+      if (elapsed < activationEnd || bodies.some((body) => !body.active)) return;
+      const quiet = bodies.every((body) => (
+        body.velocity.lengthSq() < QUIET_LINEAR_SPEED_SQ
+        && body.angularVelocity.lengthSq() < QUIET_ANGULAR_SPEED_SQ
+      ));
+      quietSteps = quiet ? quietSteps + 1 : 0;
+
+      if (quietSteps >= QUIET_STEPS_TO_SLEEP || elapsed >= hardSleepAfter) {
+        physicsSleeping = true;
+        for (const body of bodies) {
+          body.velocity.set(0, 0, 0);
+          body.angularVelocity.set(0, 0, 0);
         }
       }
     };
