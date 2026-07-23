@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>OISST ENSO Globe Explorer</title>
+    <script>if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("embedded");</script>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -26,7 +27,7 @@
           </label>
           <label>
             Height scale
-            <input id="heightScaleSlider" type="range" min="0" max="0.28" step="0.01" value="0.14" />
+            <input id="heightScaleSlider" type="range" min="0" max="0.5" step="0.01" value="0.14" />
           </label>
           <label>
             Color
@@ -72,6 +73,10 @@
             <p id="statusReadout">Loading</p>
           </div>
           <canvas id="mapCanvas" aria-label="OISST gridded spherical globe"></canvas>
+          <div class="nino-globe-state" id="ninoGlobeState" data-phase="neutral" aria-live="polite">
+            <span>NIÑO 3.4</span><strong id="globePhaseReadout">NEUTRAL</strong><b id="globeNinoReadout">+0.00°C</b>
+            <i><em class="cool"></em>−0.5°C</i><i><em class="warm"></em>+0.5°C</i>
+          </div>
           <div class="height-key" aria-label="Color mapping legend">
             <span id="heightLowLabel">Cold / cool anomaly</span>
             <div class="height-track">

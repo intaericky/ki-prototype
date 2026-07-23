@@ -11,7 +11,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const host = requestHeaders.get("x-forwarded-host") || requestHeaders.get("host") || "localhost:3000";
   const protocol = requestHeaders.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
   const image = `${protocol}://${host}/og.png`;
-  const title = "Spherical Studies — WIP";
+  const title = "KI Prototype";
   const description = "Interactive climate data artworks developed for a spherical display.";
 
   return {
@@ -21,7 +21,7 @@ export async function generateMetadata(): Promise<Metadata> {
       title,
       description,
       type: "website",
-      images: [{ url: image, width: 1672, height: 941, alt: "Four original spherical climate and carbon studies" }],
+      images: [{ url: image, width: 1672, height: 941, alt: "KI Prototype spherical climate and carbon studies" }],
     },
     twitter: { card: "summary_large_image", title, description, images: [image] },
   };

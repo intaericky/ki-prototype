@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DAILY_BUDGET_KG, estimateMenu } from "../lib/carbon";
 import { TOKEN_COLORS } from "../lib/token-colors";
 import TokenGlobe, { type GlobeToken } from "./TokenGlobe";
@@ -62,7 +62,7 @@ export default function MenuInstrument() {
   const [resetKey, setResetKey] = useState(0);
   const requestRef = useRef(0);
 
-  useEffect(() => setEmbedded(new URLSearchParams(window.location.search).has("embed")), []);
+  useLayoutEffect(() => setEmbedded(new URLSearchParams(window.location.search).has("embed")), []);
 
   const load = useCallback(async () => {
     const requestId = ++requestRef.current;
@@ -136,8 +136,18 @@ export default function MenuInstrument() {
       totalKg: estimate?.kg ?? 0,
       budgetUse,
       legend,
+      menu: selectedOption?.lines ?? [],
+      optionTitle: selectedOption?.title ?? "",
     }, window.location.origin);
-  }, [embedded, estimate, budgetUse, legend]);
+  }, [embedded, estimate, budgetUse, legend, selectedOption]);
+
+  useEffect(() => {
+    if (!embedded || loading || window.parent === window) return;
+    const first = requestAnimationFrame(() => requestAnimationFrame(() => {
+      window.parent.postMessage({ type: "ARTWORK_READY" }, window.location.origin);
+    }));
+    return () => cancelAnimationFrame(first);
+  }, [embedded, loading]);
 
   return (
     <main className={`edo-three${embedded ? " embedded" : ""}`}>

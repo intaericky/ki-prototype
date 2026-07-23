@@ -35,6 +35,7 @@
   const COLOR_RECOVERY_TAU_DAYS = 180;
   const SEVERE_RECOVERY_TAU_DAYS = 1460;
   let lastParentUpdate = 0;
+  let readySent = false;
 
   const vertexShaderSource = `
     attribute vec2 aPosition;
@@ -630,6 +631,11 @@
     gl.uniform1f(locations.coverage, state.coverage);
     gl.uniform4f(locations.quat, shaderQuat[0], shaderQuat[1], shaderQuat[2], shaderQuat[3]);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+    if (!readySent && window.parent !== window) {
+      readySent = true;
+      window.parent.postMessage({ type: "ARTWORK_READY" }, window.location.origin);
+    }
 
     updateUi(state);
     requestAnimationFrame(render);

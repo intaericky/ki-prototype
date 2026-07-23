@@ -1,5 +1,6 @@
 const THREE_URL = "./three.module.js";
 const HIRES_MANIFEST_FILE = "oisst-hires-manifest.json";
+const GEODESIC_TOPOLOGY_FILE = "geodesic-39.bin";
 const FRAME_DATES = makeFrameDates();
 if (new URLSearchParams(window.location.search).has("embed")) document.body.classList.add("embedded");
 
@@ -7,7 +8,7 @@ const TEMP_SCALE = { min: -2, max: 32, ground: 15 };
 const ANOM_SCALE = { min: -4, max: 4, ground: 0 };
 const CELL_DEGREES = 2;
 const DEFAULT_EXTRUSION_RATIO = 0.14;
-const GEODESIC_DETAIL = 11;
+const GEODESIC_DETAIL = 39;
 const ENSO_THRESHOLD = 0.5;
 const ENSO_MIN_SEASONS = 5;
 const MS_PER_MONTH_AT_PLAYBACK = 1000 / 12;
@@ -34,6 +35,9 @@ const ui = {
   mapCaption: document.querySelector("#mapCaption"),
   heightLow: document.querySelector("#heightLowLabel"),
   heightHigh: document.querySelector("#heightHighLabel"),
+  globeState: document.querySelector("#ninoGlobeState"),
+  globePhase: document.querySelector("#globePhaseReadout"),
+  globeNino: document.querySelector("#globeNinoReadout"),
 };
 
 let THREE;
@@ -43,6 +47,8 @@ let camera;
 let globeGroup;
 let cellMesh;
 let outlineMesh;
+let ninoGuideGroup;
+let geodesicTopology;
 let raycaster;
 let pointer;
 
@@ -61,7 +67,18 @@ const state = {
   colorMode: "data",
   lastTick: performance.now(),
   episodesSent: false,
+  ready: false,
 };
+
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin || event.data?.type !== "ENSO_CONTROL") return;
+  const height = Number(event.data.height);
+  if (Number.isFinite(height)) {
+    state.heightScale = clamp(height, 0, 0.5);
+    ui.heightScale.value = String(state.heightScale);
+    if (state.ready) updateAll();
+  }
+});
 
 init().catch((error) => {
   console.error(error);
@@ -118,7 +135,9 @@ async function init() {
   ui.time.max = String(state.nino.length - 1);
   state.cursor = state.nino.length - 1;
   ui.time.value = String(state.cursor);
+  state.ready = true;
   updateAll();
+  if (window.parent !== window) window.parent.postMessage({ type: "ARTWORK_READY" }, window.location.origin);
   requestAnimationFrame(tick);
 }
 
@@ -133,6 +152,9 @@ function setupThree() {
 
   globeGroup = new THREE.Group();
   scene.add(globeGroup);
+  ninoGuideGroup = new THREE.Group();
+  ninoGuideGroup.renderOrder = 4;
+  globeGroup.add(ninoGuideGroup);
 
   const wire = new THREE.Mesh(
     new THREE.SphereGeometry(1.003, 36, 18),
@@ -155,13 +177,20 @@ async function loadData() {
     if (!response.ok) throw new Error(`Missing ${HIRES_MANIFEST_FILE}`);
     return response.json();
   });
-  const frameBinaries = await Promise.all(manifest.chunks.map(({ file }) => fetch(file).then((response) => {
+  const [frameBinaries, topologyBuffer] = await Promise.all([
+    Promise.all(manifest.chunks.map(({ file }) => fetch(file).then((response) => {
       if (!response.ok) throw new Error(`Missing ${file}`);
       return response.arrayBuffer();
-    })));
+    }))),
+    fetch(GEODESIC_TOPOLOGY_FILE).then((response) => {
+      if (!response.ok) throw new Error(`Missing ${GEODESIC_TOPOLOGY_FILE}`);
+      return response.arrayBuffer();
+    }),
+  ]);
 
   state.frameManifest = manifest;
   state.frameBinaries = frameBinaries;
+  geodesicTopology = parseGeodesicTopology(topologyBuffer);
   if (manifest.dates.length !== FRAME_DATES.length || manifest.dates.some((date, index) => date !== FRAME_DATES[index])) {
     throw new Error("High-resolution frame manifest does not match the ENSO timeline");
   }
@@ -287,6 +316,10 @@ function updateSummary() {
   ui.nino.textContent = `${formatValue(nino.rolling)} deg C ${nino.phase}`;
   ui.frame.textContent = formatDate(currentFrameDate());
   ui.status.textContent = `Historical cursor ${formatDate(nino.date)}`;
+  const phaseKey = nino.phase === "El Niño" ? "el-nino" : nino.phase === "La Niña" ? "la-nina" : "neutral";
+  ui.globeState.dataset.phase = phaseKey;
+  ui.globePhase.textContent = nino.phase.toUpperCase();
+  ui.globeNino.textContent = `${nino.rolling >= 0 ? "+" : ""}${nino.rolling.toFixed(2)}°C`;
   if (window.parent !== window) {
     const message = {
       type: "ENSO_STATUS",
@@ -315,31 +348,73 @@ function updateTitles() {
 }
 
 function rebuildGlobeMesh() {
-  if (cellMesh) {
-    globeGroup.remove(cellMesh);
-    cellMesh.geometry.dispose();
-    cellMesh.material.dispose();
-  }
-  if (outlineMesh) {
-    globeGroup.remove(outlineMesh);
-    outlineMesh.geometry.dispose();
-    outlineMesh.material.dispose();
-  }
-
   const variable = ui.variable.value;
-  const geometry = buildReliefGeometry(currentCells(), variable);
-  cellMesh = new THREE.Mesh(
-    geometry,
-    new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.82,
-      metalness: 0,
-      side: THREE.DoubleSide,
-      flatShading: true,
-    })
-  );
-  cellMesh.renderOrder = 1;
-  globeGroup.add(cellMesh);
+  const cells = currentCells();
+  updateInstancedGlobe(cells, variable);
+  rebuildNinoGuides(cells);
+}
+
+function updateInstancedGlobe(cells, variable) {
+  const { units } = getGeodesicTopology();
+  if (!cellMesh) {
+    cellMesh = new THREE.InstancedMesh(
+      buildOpenHexPrismGeometry(),
+      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
+      units.length
+    );
+    cellMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    cellMesh.renderOrder = 1;
+    globeGroup.add(cellMesh);
+  }
+  const scale = variable === "sst" ? TEMP_SCALE : ANOM_SCALE;
+  const matrix = new THREE.Matrix4();
+  const quaternion = new THREE.Quaternion();
+  const position = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  const up = new THREE.Vector3(0, 1, 0);
+  const normal = new THREE.Vector3();
+  state.faceCells = [];
+  let instance = 0;
+  units.forEach((unit) => {
+    const cell = nearestSourceCell(unit, cells);
+    const value = cell ? cell[variable] : NaN;
+    if (!cell || !Number.isFinite(value)) return;
+    normal.copy(spherePoint(unit.lon, unit.lat, 1)).normalize();
+    const height = reliefHeight(value, variable);
+    const direction = height < 0 ? normal.clone().multiplyScalar(-1) : normal;
+    const thickness = Math.max(0.004, Math.abs(height));
+    const cellRadius = unit.boundary.reduce((sum, point) => sum + point.distanceTo(normal), 0) / unit.boundary.length;
+    position.copy(normal).multiplyScalar(1 + height / 2);
+    quaternion.setFromUnitVectors(up, direction);
+    size.set(cellRadius * 1.06, thickness, cellRadius * 1.06);
+    matrix.compose(position, quaternion, size);
+    cellMesh.setMatrixAt(instance, matrix);
+    cellMesh.setColorAt(instance, unitColor(value, variable, scale));
+    state.faceCells[instance] = { ...cell, sampleLat: unit.lat, sampleLon: unit.lon };
+    instance += 1;
+  });
+  cellMesh.count = instance;
+  cellMesh.instanceMatrix.needsUpdate = true;
+  if (cellMesh.instanceColor) cellMesh.instanceColor.needsUpdate = true;
+  cellMesh.computeBoundingSphere();
+}
+
+function buildOpenHexPrismGeometry() {
+  const positions = [];
+  const top = Array.from({ length: 6 }, (_, index) => {
+    const angle = Math.PI / 6 + index * Math.PI / 3;
+    return new THREE.Vector3(Math.cos(angle), 0.5, Math.sin(angle));
+  });
+  const bottom = top.map((point) => new THREE.Vector3(point.x, -0.5, point.z));
+  for (let index = 0; index < 6; index += 1) {
+    const next = (index + 1) % 6;
+    [bottom[index], top[index], top[next], bottom[index], top[next], bottom[next]].forEach((point) => positions.push(point.x, point.y, point.z));
+    [new THREE.Vector3(0, 0.5, 0), top[index], top[next]].forEach((point) => positions.push(point.x, point.y, point.z));
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 function buildReliefGeometry(cells, variable) {
@@ -347,7 +422,7 @@ function buildReliefGeometry(cells, variable) {
   const colors = [];
   state.faceCells = [];
 
-  const { units, edges } = buildDualGeodesicUnits(GEODESIC_DETAIL);
+  const { units, edges } = getGeodesicTopology();
   const scale = variable === "sst" ? TEMP_SCALE : ANOM_SCALE;
   const renderedUnits = new Map();
 
@@ -396,6 +471,114 @@ function buildReliefGeometry(cells, variable) {
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positionsOut, 3));
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   geometry.computeVertexNormals();
+  return geometry;
+}
+
+function getGeodesicTopology() {
+  if (!geodesicTopology) geodesicTopology = buildDualGeodesicUnits(GEODESIC_DETAIL);
+  return geodesicTopology;
+}
+
+function parseGeodesicTopology(buffer) {
+  const view = new DataView(buffer);
+  let offset = 0;
+  if (view.getUint32(offset, true) !== 0x4b494754) throw new Error("Invalid geodesic topology"); offset += 4;
+  const version = view.getUint32(offset, true); offset += 4;
+  if (version !== 1) throw new Error(`Unsupported geodesic topology ${version}`);
+  const unitCount = view.getUint32(offset, true); offset += 4;
+  const edgeCount = view.getUint32(offset, true); offset += 4;
+  const units = [];
+  for (let index = 0; index < unitCount; index += 1) {
+    const id = view.getUint32(offset, true); offset += 4;
+    const boundaryCount = view.getUint8(offset); offset += 4;
+    const lat = view.getFloat32(offset, true); offset += 4;
+    const lon = view.getFloat32(offset, true); offset += 4;
+    const boundary = [];
+    for (let pointIndex = 0; pointIndex < 6; pointIndex += 1) {
+      const point = new THREE.Vector3(view.getFloat32(offset, true), view.getFloat32(offset + 4, true), view.getFloat32(offset + 8, true));
+      offset += 12;
+      if (pointIndex < boundaryCount) boundary.push(point);
+    }
+    units.push({ id, boundary, lat, lon });
+  }
+  const edges = [];
+  for (let index = 0; index < edgeCount; index += 1) {
+    const a = view.getUint32(offset, true); offset += 4;
+    const b = view.getUint32(offset, true); offset += 4;
+    const ends = [];
+    for (let pointIndex = 0; pointIndex < 2; pointIndex += 1) {
+      ends.push(new THREE.Vector3(view.getFloat32(offset, true), view.getFloat32(offset + 4, true), view.getFloat32(offset + 8, true)));
+      offset += 12;
+    }
+    edges.push({ a, b, ends });
+  }
+  return { units, edges };
+}
+
+function rebuildNinoGuides(cells) {
+  while (ninoGuideGroup.children.length) {
+    const child = ninoGuideGroup.children[0];
+    ninoGuideGroup.remove(child);
+    child.geometry.dispose();
+    child.material.dispose();
+  }
+  const phase = currentNino().phase;
+  const currentColor = phase === "El Niño" ? 0xff2400 : phase === "La Niña" ? 0x004cff : 0xffffff;
+  [
+    { offset: -ENSO_THRESHOLD, color: 0x004cff, opacity: 0.78 },
+    { offset: ENSO_THRESHOLD, color: 0xff2400, opacity: 0.78 },
+    { offset: null, color: currentColor, opacity: 1 },
+  ].forEach(({ offset, color, opacity }) => {
+    const geometry = offset === null ? buildNinoGuideGeometry(cells) : buildNinoBoundaryGeometry(cells, offset);
+    const material = offset === null
+      ? new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false })
+      : new THREE.PointsMaterial({ color, size: 3.2, sizeAttenuation: false, transparent: true, opacity: 1, depthTest: false, depthWrite: false });
+    const guide = offset === null ? new THREE.LineSegments(geometry, material) : new THREE.Points(geometry, material);
+    guide.renderOrder = offset === null ? 6 : 7;
+    ninoGuideGroup.add(guide);
+  });
+}
+
+function buildNinoGuideGeometry(cells) {
+  const positions = [];
+  const { units } = getGeodesicTopology();
+  units.forEach((unit) => {
+    if (unit.lat < -5 || unit.lat > 5 || unit.lon < -170 || unit.lon > -120) return;
+    const cell = nearestSourceCell(unit, cells);
+    if (!cell || !Number.isFinite(cell.sst) || !Number.isFinite(cell.anom)) return;
+    const radius = 1 + reliefHeight(cell.sst, "sst") + 0.0025;
+    for (let index = 0; index < unit.boundary.length; index += 1) {
+      const a = unit.boundary[index].clone().multiplyScalar(radius);
+      const b = unit.boundary[(index + 1) % unit.boundary.length].clone().multiplyScalar(radius);
+      positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+  });
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  return geometry;
+}
+
+function buildNinoBoundaryGeometry(cells, anomalyOffset) {
+  const positions = [];
+  const addPath = (samples) => {
+    for (let index = 0; index < samples.length - 1; index += 1) {
+      const points = [samples[index], samples[index + 1]].map(({ lat, lon }) => {
+        const cell = nearestSourceCell({ lat, lon }, cells);
+        if (!cell || !Number.isFinite(cell.sst) || !Number.isFinite(cell.anom)) return null;
+        const thresholdSst = cell.sst - cell.anom + anomalyOffset;
+        return spherePoint(lon, lat, 1 + reliefHeight(thresholdSst, "sst") + 0.0012);
+      });
+      if (points[0] && points[1]) positions.push(points[0].x, points[0].y, points[0].z, points[1].x, points[1].y, points[1].z);
+    }
+  };
+  const longitudes = Array.from({ length: 51 }, (_, index) => -170 + index);
+  const latitudes = Array.from({ length: 11 }, (_, index) => -5 + index);
+  addPath(longitudes.map((lon) => ({ lat: -5, lon })));
+  addPath(longitudes.map((lon) => ({ lat: 5, lon })));
+  addPath(latitudes.map((lat) => ({ lat, lon: -170 })));
+  addPath(latitudes.map((lat) => ({ lat, lon: -120 })));
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   return geometry;
 }
 
@@ -580,8 +763,9 @@ function handleGlobePointer(event) {
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
   const hit = cellMesh ? raycaster.intersectObject(cellMesh, false)[0] : null;
-  if (hit && state.faceCells[hit.faceIndex]) {
-    const cell = state.faceCells[hit.faceIndex];
+  const hitIndex = hit?.instanceId ?? hit?.faceIndex;
+  if (hit && Number.isInteger(hitIndex) && state.faceCells[hitIndex]) {
+    const cell = state.faceCells[hitIndex];
     ui.hover.textContent =
       `unit ${formatLat(cell.sampleLat)}, ${formatLon(cell.sampleLon)} | source ${formatLat(cell.lat)}, ${formatLon(cell.lon)} | ` +
       `SST ${formatValue(cell.sst)} deg C | anomaly ${formatValue(cell.anom)} deg C | radius ${formatValue(1 + reliefHeight(cell[ui.variable.value], ui.variable.value))}`;
@@ -759,11 +943,11 @@ function binValues(values, min, max, count) {
 }
 
 function tempColor(t) {
-  return new THREE.Color(rgb(interpolateStops([[0, [11, 35, 74]], [0.22, [35, 96, 145]], [0.45, [82, 153, 139]], [0.65, [210, 185, 106]], [0.82, [204, 94, 50]], [1, [130, 34, 28]]], t)));
+  return new THREE.Color(rgb(interpolateStops([[0, [0, 8, 255]], [0.2, [0, 64, 255]], [0.4, [0, 210, 255]], [0.58, [0, 255, 174]], [0.7, [255, 238, 0]], [0.84, [255, 92, 0]], [1, [255, 0, 22]]], t)));
 }
 
 function anomalyColor(t) {
-  return new THREE.Color(rgb(interpolateStops([[0, [48, 79, 148]], [0.42, [200, 215, 230]], [0.5, [238, 238, 238]], [0.58, [236, 205, 184]], [1, [170, 54, 42]]], t)));
+  return new THREE.Color(rgb(interpolateStops([[0, [0, 22, 255]], [0.46, [0, 190, 255]], [0.5, [245, 245, 245]], [0.54, [255, 214, 0]], [1, [255, 0, 18]]], t)));
 }
 
 function interpolateStops(stops, t) {

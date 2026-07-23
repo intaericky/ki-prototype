@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Coral Bleaching Data Sphere</title>
+  <script>if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("embedded");</script>
   <style>
     :root {
       color-scheme: dark;
@@ -123,6 +124,10 @@
     body.ui-hidden .control-dock {
       transform: translateY(10px);
     }
+
+    html.embedded .hud,
+    html.embedded .control-dock,
+    html.embedded .ui-toggle { display: none; }
 
     .chip {
       min-width: 104px;

@@ -7,7 +7,7 @@ type EnsoEpisode = { phase: "El Niño" | "La Niña"; start: number; end: number 
 type EnsoStatus = { date: string; value: number; phase: "El Niño" | "La Niña" | "Neutral"; episodes: EnsoEpisode[] };
 type CoralStatus = { anomaly: number; dhw: number; coverage: number; alert: string; influence: number; recovery: string; active: boolean };
 type FoodLegendItem = { id: string; label: string; kg: number; color: string };
-type FoodStatus = { totalKg: number; budgetUse: number; legend: FoodLegendItem[] };
+type FoodStatus = { totalKg: number; budgetUse: number; legend: FoodLegendItem[]; menu: string[]; optionTitle: string };
 type Project = {
   id: ProjectId;
   number: string;
@@ -37,7 +37,7 @@ const PROJECTS: Project[] = [
     reference: { x: 640, y: 360, scale: 1 },
   },
   {
-    id: "coral", number: "03", ko: "산호 백화", en: "Coral Bleaching", maker: "서민혁", source: "/projects/coral/index.html",
+    id: "coral", number: "03", ko: "산호 백화", en: "Coral Bleaching", maker: "서민혁", source: "/projects/coral/index.html?embed=1",
     description: "해양 표면 온도에 따른 산호의 백화 현상을 시각화한 인터랙티브 데이터 작업이다. 인간의 터치가 구의 온도 상승에 기여하여 산호빛 구가 하얗게 물드는 장면을 보여준다. 적극적으로 백화를 가속할 수도, 개입하지 않고 관망할 수도 있다.",
     dataset: "NOAA 지역별 산호 백화 자료 · DHW 위험도 · 산호 회복 속도",
     interaction: "터치 패드를 누르는 동안 가열·백화 · 손을 떼면 회복 · 구 드래그",
@@ -62,6 +62,7 @@ export default function ExhibitionShell() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [stageSize, setStageSize] = useState({ width: 1280, height: 720 });
+  const [artworkReady, setArtworkReady] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0);
   const [ensoTime, setEnsoTime] = useState(1000);
@@ -73,11 +74,12 @@ export default function ExhibitionShell() {
   const [foodDate, setFoodDate] = useState(koreaDate);
   const [foodMeal, setFoodMeal] = useState("lunch");
   const [foodCafeteria, setFoodCafeteria] = useState("fclt");
-  const [foodStatus, setFoodStatus] = useState<FoodStatus>({ totalKg: 0, budgetUse: 0, legend: [] });
+  const [foodStatus, setFoodStatus] = useState<FoodStatus>({ totalKg: 0, budgetUse: 0, legend: [], menu: [], optionTitle: "" });
   const active = PROJECTS[activeIndex];
 
   const selectProject = useCallback((index: number) => {
     setEnsoPlaying(false);
+    setArtworkReady(false);
     setActiveIndex((index + PROJECTS.length) % PROJECTS.length);
   }, []);
 
@@ -124,7 +126,7 @@ export default function ExhibitionShell() {
 
   useEffect(() => {
     const receive = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin || event.source !== frameRef.current?.contentWindow || !event.data) return;
+      if (event.origin !== window.location.origin || !event.data) return;
       if (event.data.type === "ENSO_STATUS") {
         setEnsoStatus((current) => ({
           date: event.data.date,
@@ -135,6 +137,7 @@ export default function ExhibitionShell() {
       }
       if (event.data.type === "CORAL_STATUS") setCoralStatus(event.data);
       if (event.data.type === "FOOD_STATUS") setFoodStatus(event.data);
+      if (event.data.type === "ARTWORK_READY") setArtworkReady(true);
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
@@ -168,11 +171,11 @@ export default function ExhibitionShell() {
       const dateLabel = new Intl.DateTimeFormat("en", { month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${ensoStatus.date}T00:00:00Z`));
       return (
       <div className="original-controls enso-controls">
-        <label><span>ENSO TIMELINE <output>{ensoTime === 1000 ? "LATEST" : `${Math.round(1982 + ensoTime / 1000 * 43)}`}</output></span><input type="range" min="0" max="1000" value={ensoTime} onChange={(event) => { const normalized = Number(event.target.value); setEnsoTime(normalized); const slider = frameRef.current?.contentDocument?.getElementById("timeSlider") as HTMLInputElement | null; if (slider) frameControl("timeSlider", String(Math.round(normalized / 1000 * Number(slider.max)))); }} /></label>
+        <label><span>ENSO TIMELINE <output>{ensoTime === 1000 ? "LATEST" : `${Math.round(1982 + ensoTime / 1000 * 43)}`}</output></span><input type="range" min="0" max="1000" value={ensoTime} onInput={(event) => { const normalized = Number(event.currentTarget.value); setEnsoTime(normalized); const slider = frameRef.current?.contentDocument?.getElementById("timeSlider") as HTMLInputElement | null; if (slider) frameControl("timeSlider", String(Math.round(normalized / 1000 * Number(slider.max)))); }} /></label>
         <div className="enso-episodes" aria-label="ENSO episode timeline">{ensoStatus.episodes.map((episode, index) => <i key={`${episode.phase}-${index}`} className={episode.phase === "El Niño" ? "warm" : "cool"} style={{ left: `${episode.start * 100}%`, width: `${Math.max(.35, (episode.end - episode.start) * 100)}%` }} />)}</div>
         <div className={`enso-state ${phaseClass}`}><span><b>{dateLabel}</b><em>3-MONTH NIÑO 3.4</em></span><strong>{ensoStatus.phase}</strong><output>{ensoStatus.value >= 0 ? "+" : ""}{ensoStatus.value.toFixed(2)}°C</output></div>
         <div className="enso-thresholds"><span className="warm"><b>EL NIÑO</b><i>+0.5°C</i></span><span><b>NEUTRAL</b><i>±0.5°C</i></span><span className="cool"><b>LA NIÑA</b><i>−0.5°C</i></span></div>
-        <label><span>RELIEF HEIGHT <output>{Math.round(ensoHeight * 100)}% R</output></span><input type="range" min="0" max="0.28" step="0.01" value={ensoHeight} onChange={(event) => { setEnsoHeight(Number(event.target.value)); frameControl("heightScaleSlider", event.target.value); }} /></label>
+        <label><span>RELIEF HEIGHT <output>{Math.round(ensoHeight * 100)}% R</output></span><input type="range" min="0" max="0.5" step="0.01" value={ensoHeight} onInput={(event) => { setEnsoHeight(Number(event.currentTarget.value)); frameControl("heightScaleSlider", event.currentTarget.value); }} /></label>
         <button className="panel-primary" onClick={() => { frameControl("playButton"); setEnsoPlaying((value) => !value); }}>{ensoPlaying ? "PAUSE" : "PLAY"}</button>
       </div>
       );
@@ -201,7 +204,10 @@ export default function ExhibitionShell() {
         <select value={foodCafeteria} onChange={(event) => { setFoodCafeteria(event.target.value); postFrame({ type: "FOOD_CONTROL", cafeteria: event.target.value }); }}><option value="fclt">카이마루 / N11</option><option value="west">서맛골 / W2</option><option value="east1">동맛골 / E5</option><option value="east2">동맛골 교직원 / E5</option><option value="emp">교수회관 / N6</option></select></div>
         <div className="panel-segments three">{[["breakfast","조식"],["lunch","중식"],["dinner","석식"]].map(([id,label]) => <button key={id} className={foodMeal === id ? "active" : ""} onClick={() => { setFoodMeal(id); postFrame({ type: "FOOD_CONTROL", meal: id }); }}>{label}</button>)}</div>
         <div className="food-summary"><span>MEAL <b>{foodStatus.totalKg.toFixed(2)} kg CO₂e</b></span><span>DAILY BUDGET <b>{Math.round(foodStatus.budgetUse)}%</b></span></div>
-        <div className="food-legend" aria-label="식재료군 색상 범례">{foodStatus.legend.length ? foodStatus.legend.map((item) => <span key={item.id}><i style={{ background: item.color }} /><b>{item.label}</b><em>{item.kg.toFixed(2)}</em></span>) : <small>메뉴를 불러오는 중</small>}</div>
+        <div className="food-details">
+          <div className="food-menu" aria-label="현재 식단"><b>MENU{foodStatus.optionTitle && foodStatus.optionTitle !== "기본" ? ` · ${foodStatus.optionTitle}` : ""}</b><p>{foodStatus.menu.length ? foodStatus.menu.join(" · ") : "식단을 불러오는 중"}</p></div>
+          <div className="food-legend" aria-label="식재료군 색상 범례">{foodStatus.legend.length ? foodStatus.legend.map((item) => <span key={item.id}><i style={{ background: item.color }} /><b>{item.label}</b><em>{item.kg.toFixed(2)}</em></span>) : <small>분류 대기 중</small>}</div>
+        </div>
         <button className="panel-primary" onClick={() => postFrame({ type: "FOOD_CONTROL", reset: true })}>다시 떨어뜨리기</button>
       </div>
     );
@@ -210,7 +216,8 @@ export default function ExhibitionShell() {
   return (
     <main className="prototype-shell">
       <section ref={stageRef} className="original-stage" aria-label={`${active.en} original artwork`}>
-        {active.id === "daisy" ? <video ref={videoRef} className="original-video" src={active.source} autoPlay muted loop playsInline /> : <iframe ref={frameRef} key={active.id} className="original-frame" style={frameStyle} src={active.source} title={`${active.en} original prototype`} onLoad={() => { if (active.id === "enso") frameControl("variableSelect", "sst", "change"); if (active.id === "coral") postFrame({ type: "CORAL_EMBED" }); if (active.id === "food") postFrame({ type: "FOOD_CONTROL", date: foodDate, meal: foodMeal, cafeteria: foodCafeteria }); }} />}
+        {active.id === "daisy" ? <video ref={videoRef} className={`original-video ${artworkReady ? "ready" : ""}`} src={active.source} autoPlay muted loop playsInline onCanPlay={() => setArtworkReady(true)} /> : <iframe ref={frameRef} key={active.id} className={`original-frame ${artworkReady ? "ready" : ""}`} style={frameStyle} src={active.source} title={`${active.en} original prototype`} onLoad={() => { if (active.id === "enso") postFrame({ type: "ENSO_CONTROL", height: ensoHeight }); if (active.id === "coral") postFrame({ type: "CORAL_EMBED" }); if (active.id === "food") postFrame({ type: "FOOD_CONTROL", date: foodDate, meal: foodMeal, cafeteria: foodCafeteria }); }} />}
+        <div className={`artwork-loading ${artworkReady ? "hidden" : ""}`} aria-hidden="true" />
       </section>
 
       <aside className="interface-column">
