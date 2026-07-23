@@ -34,6 +34,7 @@
   const BLEACH_ONSET_TAU_DAYS = 8;
   const COLOR_RECOVERY_TAU_DAYS = 180;
   const SEVERE_RECOVERY_TAU_DAYS = 1460;
+  let lastParentUpdate = 0;
 
   const vertexShaderSource = `
     attribute vec2 aPosition;
@@ -478,15 +479,31 @@
 
   function updateUi(state) {
     const dhw = sim.dhw;
+    const active = pointerInside || touchInfluence;
+    const recovery = sim.coverage < 0.01
+      ? "stable"
+      : (active ? "stressed" : "restoring");
     ui.stressOut.textContent = `+${sim.sstAnomaly.toFixed(1)}°C`;
     ui.visibleChip.textContent = `${Math.round(state.coverage * 100)}%`;
     ui.dhwOut.textContent = `${state.alert} · ${dhw.toFixed(1)} DHW`;
-    ui.influenceOut.textContent = (pointerInside || touchInfluence)
+    ui.influenceOut.textContent = active
       ? `${sim.influenceSeconds.toFixed(1)}s`
       : "idle";
-    ui.recoveryOut.textContent = sim.coverage < 0.01
-      ? "stable"
-      : ((pointerInside || touchInfluence) ? "stressed" : "restoring");
+    ui.recoveryOut.textContent = recovery;
+    const now = performance.now();
+    if (window.parent !== window && now - lastParentUpdate > 100) {
+      lastParentUpdate = now;
+      window.parent.postMessage({
+        type: "CORAL_STATUS",
+        anomaly: sim.sstAnomaly,
+        dhw,
+        coverage: state.coverage,
+        alert: state.alert,
+        influence: sim.influenceSeconds,
+        recovery,
+        active,
+      }, window.location.origin);
+    }
   }
 
   function updateSimulation(dt) {

@@ -1,5 +1,4 @@
 const THREE_URL = "./three.module.js";
-const NINO_FILE = "oisst-nino34-anom-1982-2025.csv";
 const HIRES_MANIFEST_FILE = "oisst-hires-manifest.json";
 const FRAME_DATES = makeFrameDates();
 if (new URLSearchParams(window.location.search).has("embed")) document.body.classList.add("embedded");
@@ -9,6 +8,9 @@ const ANOM_SCALE = { min: -4, max: 4, ground: 0 };
 const CELL_DEGREES = 2;
 const DEFAULT_EXTRUSION_RATIO = 0.14;
 const GEODESIC_DETAIL = 11;
+const ENSO_THRESHOLD = 0.5;
+const ENSO_MIN_SEASONS = 5;
+const MS_PER_MONTH_AT_PLAYBACK = 1000 / 12;
 
 const globeCanvas = document.querySelector("#mapCanvas");
 const ninoCanvas = document.querySelector("#histCanvas");
@@ -58,6 +60,7 @@ const state = {
   heightScale: DEFAULT_EXTRUSION_RATIO,
   colorMode: "data",
   lastTick: performance.now(),
+  episodesSent: false,
 };
 
 init().catch((error) => {
@@ -152,23 +155,17 @@ async function loadData() {
     if (!response.ok) throw new Error(`Missing ${HIRES_MANIFEST_FILE}`);
     return response.json();
   });
-  const [ninoCsv, frameBinaries] = await Promise.all([
-    fetch(NINO_FILE).then((response) => {
-      if (!response.ok) throw new Error(`Missing ${NINO_FILE}`);
-      return response.text();
-    }),
-    Promise.all(manifest.chunks.map(({ file }) => fetch(file).then((response) => {
+  const frameBinaries = await Promise.all(manifest.chunks.map(({ file }) => fetch(file).then((response) => {
       if (!response.ok) throw new Error(`Missing ${file}`);
       return response.arrayBuffer();
-    }))),
-  ]);
+    })));
 
-  state.nino = parseNino34(ninoCsv);
   state.frameManifest = manifest;
   state.frameBinaries = frameBinaries;
   if (manifest.dates.length !== FRAME_DATES.length || manifest.dates.some((date, index) => date !== FRAME_DATES[index])) {
     throw new Error("High-resolution frame manifest does not match the ENSO timeline");
   }
+  state.nino = buildNino34FromPackedFrames();
   ui.source.textContent = "NOAA OISST 2° high-resolution frames, 1982–2025, packed for exhibition playback";
 }
 
@@ -211,26 +208,52 @@ function parsePackedFrame(date) {
   return cells;
 }
 
-function parseNino34(csv) {
-  const groups = new Map();
-  csv
-    .trim()
-    .split(/\r?\n/)
-    .forEach((line) => {
-      const [time, depth, lat, lon, anom] = line.split(",");
-      const value = Number(anom);
-      if (!time || !Number.isFinite(Number(depth)) || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lon))) return;
-      if (!Number.isFinite(value)) return;
-      const date = time.slice(0, 10);
-      const group = groups.get(date) ?? { date, total: 0, count: 0 };
-      group.total += value;
-      group.count += 1;
-      groups.set(date, group);
-    });
+function buildNino34FromPackedFrames() {
+  const manifest = state.frameManifest;
+  const cellCount = manifest.rows * manifest.cols;
+  const points = manifest.dates.map((date, frameIndex) => {
+    const chunkIndex = manifest.chunks.findIndex(({ startFrame, frameCount }) => frameIndex >= startFrame && frameIndex < startFrame + frameCount);
+    const chunk = manifest.chunks[chunkIndex];
+    const view = new DataView(state.frameBinaries[chunkIndex]);
+    const frameOffset = (frameIndex - chunk.startFrame) * cellCount * 4;
+    let total = 0;
+    let count = 0;
+    for (let row = 0; row < manifest.rows; row += 1) {
+      const lat = manifest.latitudeStart + row * manifest.stepDegrees;
+      if (lat < -5 || lat > 5) continue;
+      for (let col = 0; col < manifest.cols; col += 1) {
+        const lon = manifest.longitudeStart + col * manifest.stepDegrees;
+        if (lon < -170 || lon > -120) continue;
+        const offset = frameOffset + (row * manifest.cols + col) * 4 + 2;
+        const rawAnom = view.getInt16(offset, true);
+        if (rawAnom === manifest.missing) continue;
+        total += rawAnom / 100;
+        count += 1;
+      }
+    }
+    return { date, value: count ? total / count : 0 };
+  });
 
-  return [...groups.values()]
-    .map((group) => ({ date: group.date, value: group.total / group.count }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+  points.forEach((point, index) => {
+    const window = points.slice(Math.max(0, index - 1), Math.min(points.length, index + 2));
+    point.rolling = window.reduce((sum, item) => sum + item.value, 0) / window.length;
+    point.phase = "Neutral";
+  });
+
+  for (const phase of ["El Niño", "La Niña"]) {
+    const qualifies = (value) => phase === "El Niño" ? value >= ENSO_THRESHOLD : value <= -ENSO_THRESHOLD;
+    let start = 0;
+    while (start < points.length) {
+      while (start < points.length && !qualifies(points[start].rolling)) start += 1;
+      let end = start;
+      while (end < points.length && qualifies(points[end].rolling)) end += 1;
+      if (end - start >= ENSO_MIN_SEASONS) {
+        for (let index = start; index < end; index += 1) points[index].phase = phase;
+      }
+      start = Math.max(end, start + 1);
+    }
+  }
+  return points;
 }
 
 function tick(now) {
@@ -238,7 +261,7 @@ function tick(now) {
   state.lastTick = now;
   if (state.playing && state.nino.length) {
     const previous = Math.round(state.cursor);
-    const next = state.cursor + dt / 250;
+    const next = state.cursor + dt / MS_PER_MONTH_AT_PLAYBACK;
     state.cursor = next >= state.nino.length ? 0 : next;
     ui.time.value = String(Math.round(state.cursor));
     if (Math.round(state.cursor) !== previous) updateAll();
@@ -261,9 +284,22 @@ function updateSummary() {
   const nino = currentNino();
   const cells = currentCells().filter((cell) => Number.isFinite(cell.sst));
   ui.cells.textContent = `${cells.length.toLocaleString()} source ocean cells`;
-  ui.nino.textContent = `${formatValue(nino.value)} deg C ${ensoLabel(nino.value)}`;
+  ui.nino.textContent = `${formatValue(nino.rolling)} deg C ${nino.phase}`;
   ui.frame.textContent = formatDate(currentFrameDate());
   ui.status.textContent = `Historical cursor ${formatDate(nino.date)}`;
+  if (window.parent !== window) {
+    const message = {
+      type: "ENSO_STATUS",
+      date: nino.date,
+      value: nino.rolling,
+      phase: nino.phase,
+    };
+    if (!state.episodesSent) {
+      message.episodes = ensoEpisodes();
+      state.episodesSent = true;
+    }
+    window.parent.postMessage(message, window.location.origin);
+  }
 }
 
 function updateTitles() {
@@ -577,6 +613,24 @@ function drawNinoTimeline() {
   ninoCtx.fillRect(0, 0, width, height);
   ninoCtx.strokeStyle = "rgba(255,255,255,0.2)";
   ninoCtx.strokeRect(plot.left, plot.top, plot.width, plot.height);
+  const warmY = yForNino(ENSO_THRESHOLD, plot);
+  const coolY = yForNino(-ENSO_THRESHOLD, plot);
+  ninoCtx.fillStyle = "rgba(190,68,49,0.13)";
+  ninoCtx.fillRect(plot.left, plot.top, plot.width, warmY - plot.top);
+  ninoCtx.fillStyle = "rgba(54,99,162,0.15)";
+  ninoCtx.fillRect(plot.left, coolY, plot.width, plot.bottom - coolY);
+  ninoCtx.setLineDash([4, 4]);
+  ninoCtx.strokeStyle = "rgba(225,116,91,0.8)";
+  ninoCtx.beginPath(); ninoCtx.moveTo(plot.left, warmY); ninoCtx.lineTo(plot.right, warmY); ninoCtx.stroke();
+  ninoCtx.strokeStyle = "rgba(111,155,221,0.85)";
+  ninoCtx.beginPath(); ninoCtx.moveTo(plot.left, coolY); ninoCtx.lineTo(plot.right, coolY); ninoCtx.stroke();
+  ninoCtx.setLineDash([]);
+  ninoCtx.font = "10px system-ui, sans-serif";
+  ninoCtx.textAlign = "left";
+  ninoCtx.fillStyle = "rgba(235,144,122,0.9)";
+  ninoCtx.fillText("EL NIÑO +0.5", plot.left + 5, warmY - 5);
+  ninoCtx.fillStyle = "rgba(139,177,232,0.95)";
+  ninoCtx.fillText("LA NIÑA -0.5", plot.left + 5, coolY + 13);
   const zeroY = yForNino(0, plot);
   ninoCtx.strokeStyle = "rgba(255,255,255,0.45)";
   ninoCtx.beginPath();
@@ -586,7 +640,7 @@ function drawNinoTimeline() {
   ninoCtx.beginPath();
   state.nino.forEach((point, index) => {
     const x = xForIndex(index, plot);
-    const y = yForNino(point.value, plot);
+    const y = yForNino(point.rolling, plot);
     if (index === 0) ninoCtx.moveTo(x, y);
     else ninoCtx.lineTo(x, y);
   });
@@ -645,6 +699,25 @@ function drawMiniLabels(ctx, plot, leftLabel, rightLabel, yLabel) {
 
 function currentNino() {
   return state.nino[Math.max(0, Math.min(state.nino.length - 1, Math.round(state.cursor)))] ?? { date: "2024-01-01", value: 0 };
+}
+
+function ensoEpisodes() {
+  const episodes = [];
+  let start = 0;
+  while (start < state.nino.length) {
+    const phase = state.nino[start].phase;
+    let end = start + 1;
+    while (end < state.nino.length && state.nino[end].phase === phase) end += 1;
+    if (phase !== "Neutral") {
+      episodes.push({
+        phase,
+        start: start / Math.max(1, state.nino.length - 1),
+        end: (end - 1) / Math.max(1, state.nino.length - 1),
+      });
+    }
+    start = end;
+  }
+  return episodes;
 }
 
 function currentFrameDate() {
@@ -718,12 +791,6 @@ function wrappedLonDifference(a, b) {
   while (diff > 180) diff -= 360;
   while (diff < -180) diff += 360;
   return diff;
-}
-
-function ensoLabel(value) {
-  if (value >= 0.5) return "El Niño";
-  if (value <= -0.5) return "La Niña";
-  return "Neutral";
 }
 
 function formatDate(date) {

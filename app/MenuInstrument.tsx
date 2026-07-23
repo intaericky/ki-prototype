@@ -129,6 +129,16 @@ export default function MenuInstrument() {
   const dateLabel = new Intl.DateTimeFormat("ko-KR", { month: "numeric", day: "numeric", weekday: "short", timeZone: "Asia/Seoul" }).format(new Date(`${date}T12:00:00+09:00`));
   const budgetUse = estimate ? estimate.kg / DAILY_BUDGET_KG * 100 : 0;
 
+  useEffect(() => {
+    if (!embedded || window.parent === window) return;
+    window.parent.postMessage({
+      type: "FOOD_STATUS",
+      totalKg: estimate?.kg ?? 0,
+      budgetUse,
+      legend,
+    }, window.location.origin);
+  }, [embedded, estimate, budgetUse, legend]);
+
   return (
     <main className={`edo-three${embedded ? " embedded" : ""}`}>
       <header className="three-header">

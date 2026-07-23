@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type ProjectId = "enso" | "daisy" | "coral" | "food";
+type EnsoEpisode = { phase: "El Niño" | "La Niña"; start: number; end: number };
+type EnsoStatus = { date: string; value: number; phase: "El Niño" | "La Niña" | "Neutral"; episodes: EnsoEpisode[] };
+type CoralStatus = { anomaly: number; dhw: number; coverage: number; alert: string; influence: number; recovery: string; active: boolean };
+type FoodLegendItem = { id: string; label: string; kg: number; color: string };
+type FoodStatus = { totalKg: number; budgetUse: number; legend: FoodLegendItem[] };
 type Project = {
   id: ProjectId;
   number: string;
@@ -19,9 +24,9 @@ type Project = {
 const PROJECTS: Project[] = [
   {
     id: "enso", number: "01", ko: "해양의 진동", en: "ENSO", maker: "황인태", source: "/projects/enso/index.html?embed=1",
-    description: "〈ENSO〉는 NOAA 해수면 온도 자료를 구형 디스플레이 위에 펼쳐, 적도 태평양의 온도 변화가 행성 규모의 진동으로 이어지는 과정을 보여준다. 1982년부터 2025년까지의 전체 타임라인에서 해수면 온도와 평년 편차를 오가며 엘니뇨와 라니냐의 움직임을 관찰한다.",
-    dataset: "NOAA NCEI OISST v2.1 · 1982–2025 전 월 528개 전 지구 프레임 · 2° SST / anomaly · Niño 3.4",
-    interaction: "타임라인 이동 · 재생 · SST/평년 편차 · 높이 조절 · 구 드래그",
+    description: "〈ENSO〉는 NOAA 해수면 온도 자료를 구형 디스플레이 위에 펼쳐, 적도 태평양의 온도 변화가 행성 규모의 진동으로 이어지는 과정을 보여준다. 1982년부터 2025년까지의 SST와 Niño 3.4 지수를 따라 엘니뇨와 라니냐가 형성되고 사라지는 시간을 관찰한다.",
+    dataset: "NOAA NCEI OISST v2.1 · 1982–2025 전 월 528개 전 지구 프레임 · 2° SST · Niño 3.4",
+    interaction: "타임라인 이동 · 1초당 약 1년 재생 · 높이 조절 · 구 드래그",
     reference: { x: 640, y: 360, scale: .8 },
   },
   {
@@ -60,13 +65,15 @@ export default function ExhibitionShell() {
   const [videoPlaying, setVideoPlaying] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0);
   const [ensoTime, setEnsoTime] = useState(1000);
-  const [ensoVariable, setEnsoVariable] = useState("sst");
   const [ensoHeight, setEnsoHeight] = useState(.14);
   const [ensoPlaying, setEnsoPlaying] = useState(false);
+  const [ensoStatus, setEnsoStatus] = useState<EnsoStatus>({ date: "2025-12-01", value: 0, phase: "Neutral", episodes: [] });
   const [coralTouch, setCoralTouch] = useState(false);
+  const [coralStatus, setCoralStatus] = useState<CoralStatus>({ anomaly: 0, dhw: 0, coverage: 0, alert: "No stress", influence: 0, recovery: "stable", active: false });
   const [foodDate, setFoodDate] = useState(koreaDate);
   const [foodMeal, setFoodMeal] = useState("lunch");
   const [foodCafeteria, setFoodCafeteria] = useState("fclt");
+  const [foodStatus, setFoodStatus] = useState<FoodStatus>({ totalKg: 0, budgetUse: 0, legend: [] });
   const active = PROJECTS[activeIndex];
 
   const selectProject = useCallback((index: number) => {
@@ -115,6 +122,24 @@ export default function ExhibitionShell() {
     return () => window.clearInterval(timer);
   }, [ensoPlaying, active.id]);
 
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== frameRef.current?.contentWindow || !event.data) return;
+      if (event.data.type === "ENSO_STATUS") {
+        setEnsoStatus((current) => ({
+          date: event.data.date,
+          value: Number(event.data.value) || 0,
+          phase: event.data.phase,
+          episodes: Array.isArray(event.data.episodes) ? event.data.episodes : current.episodes,
+        }));
+      }
+      if (event.data.type === "CORAL_STATUS") setCoralStatus(event.data);
+      if (event.data.type === "FOOD_STATUS") setFoodStatus(event.data);
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, []);
+
   const frameControl = (id: string, value?: string, eventName = "input") => {
     const element = frameRef.current?.contentDocument?.getElementById(id) as HTMLInputElement | HTMLSelectElement | HTMLButtonElement | null;
     if (!element) return;
@@ -138,14 +163,20 @@ export default function ExhibitionShell() {
   };
 
   const renderControls = () => {
-    if (active.id === "enso") return (
-      <div className="original-controls">
+    if (active.id === "enso") {
+      const phaseClass = ensoStatus.phase === "El Niño" ? "warm" : ensoStatus.phase === "La Niña" ? "cool" : "neutral";
+      const dateLabel = new Intl.DateTimeFormat("en", { month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${ensoStatus.date}T00:00:00Z`));
+      return (
+      <div className="original-controls enso-controls">
         <label><span>ENSO TIMELINE <output>{ensoTime === 1000 ? "LATEST" : `${Math.round(1982 + ensoTime / 1000 * 43)}`}</output></span><input type="range" min="0" max="1000" value={ensoTime} onChange={(event) => { const normalized = Number(event.target.value); setEnsoTime(normalized); const slider = frameRef.current?.contentDocument?.getElementById("timeSlider") as HTMLInputElement | null; if (slider) frameControl("timeSlider", String(Math.round(normalized / 1000 * Number(slider.max)))); }} /></label>
-        <div className="panel-segments"><button className={ensoVariable === "sst" ? "active" : ""} onClick={() => { setEnsoVariable("sst"); frameControl("variableSelect", "sst", "change"); }}>SST</button><button className={ensoVariable === "anom" ? "active" : ""} onClick={() => { setEnsoVariable("anom"); frameControl("variableSelect", "anom", "change"); }}>ANOMALY</button></div>
-        <label><span>RELIEF HEIGHT <output>{ensoHeight.toFixed(2)}</output></span><input type="range" min="0" max="0.28" step="0.01" value={ensoHeight} onChange={(event) => { setEnsoHeight(Number(event.target.value)); frameControl("heightScaleSlider", event.target.value); }} /></label>
+        <div className="enso-episodes" aria-label="ENSO episode timeline">{ensoStatus.episodes.map((episode, index) => <i key={`${episode.phase}-${index}`} className={episode.phase === "El Niño" ? "warm" : "cool"} style={{ left: `${episode.start * 100}%`, width: `${Math.max(.35, (episode.end - episode.start) * 100)}%` }} />)}</div>
+        <div className={`enso-state ${phaseClass}`}><span><b>{dateLabel}</b><em>3-MONTH NIÑO 3.4</em></span><strong>{ensoStatus.phase}</strong><output>{ensoStatus.value >= 0 ? "+" : ""}{ensoStatus.value.toFixed(2)}°C</output></div>
+        <div className="enso-thresholds"><span className="warm"><b>EL NIÑO</b><i>+0.5°C</i></span><span><b>NEUTRAL</b><i>±0.5°C</i></span><span className="cool"><b>LA NIÑA</b><i>−0.5°C</i></span></div>
+        <label><span>RELIEF HEIGHT <output>{Math.round(ensoHeight * 100)}% R</output></span><input type="range" min="0" max="0.28" step="0.01" value={ensoHeight} onChange={(event) => { setEnsoHeight(Number(event.target.value)); frameControl("heightScaleSlider", event.target.value); }} /></label>
         <button className="panel-primary" onClick={() => { frameControl("playButton"); setEnsoPlaying((value) => !value); }}>{ensoPlaying ? "PAUSE" : "PLAY"}</button>
       </div>
-    );
+      );
+    }
     if (active.id === "daisy") return (
       <div className="original-controls">
         <label><span>VIDEO POSITION <output>{Math.round(videoProgress)}%</output></span><input type="range" min="0" max="100" value={videoProgress} onChange={(event) => { const video = videoRef.current; if (video?.duration) video.currentTime = video.duration * Number(event.target.value) / 100; }} /></label>
@@ -153,16 +184,24 @@ export default function ExhibitionShell() {
       </div>
     );
     if (active.id === "coral") return (
-      <div className="original-controls">
+      <div className="original-controls coral-controls">
+        <div className="coral-metrics">
+          <span><b>BLEACHED</b><strong>{Math.round(coralStatus.coverage * 100)}%</strong></span>
+          <span><b>SST ANOMALY</b><strong>+{coralStatus.anomaly.toFixed(1)}°C</strong></span>
+          <span><b>HEAT STRESS</b><strong>{coralStatus.alert} · {coralStatus.dhw.toFixed(1)} DHW</strong></span>
+          <span><b>INFLUENCE / STATE</b><strong>{coralStatus.influence.toFixed(1)}s · {coralStatus.recovery}</strong></span>
+        </div>
         <button className={`panel-touch ${coralTouch ? "active" : ""}`} onPointerDown={() => { setCoralTouch(true); postFrame({ type: "CORAL_TOUCH", active: true }); }} onPointerUp={() => { setCoralTouch(false); postFrame({ type: "CORAL_TOUCH", active: false }); }} onPointerCancel={() => { setCoralTouch(false); postFrame({ type: "CORAL_TOUCH", active: false }); }} onPointerLeave={() => { setCoralTouch(false); postFrame({ type: "CORAL_TOUCH", active: false }); }}><b>{coralTouch ? "HEATING" : "TOUCH + HOLD"}</b><span>RELEASE TO STOP</span></button>
         <button className="panel-primary" onClick={() => frameControl("toggle")}>PAUSE / RESUME ROTATION</button>
       </div>
     );
     return (
-      <div className="original-controls">
-        <input className="panel-date" type="date" value={foodDate} max={koreaDate()} onChange={(event) => { setFoodDate(event.target.value); postFrame({ type: "FOOD_CONTROL", date: event.target.value }); }} />
-        <select value={foodCafeteria} onChange={(event) => { setFoodCafeteria(event.target.value); postFrame({ type: "FOOD_CONTROL", cafeteria: event.target.value }); }}><option value="fclt">카이마루 / N11</option><option value="west">서맛골 / W2</option><option value="east1">동맛골 / E5</option><option value="east2">동맛골 교직원 / E5</option><option value="emp">교수회관 / N6</option></select>
+      <div className="original-controls food-controls">
+        <div className="food-fields"><input className="panel-date" type="date" value={foodDate} max={koreaDate()} onChange={(event) => { setFoodDate(event.target.value); postFrame({ type: "FOOD_CONTROL", date: event.target.value }); }} />
+        <select value={foodCafeteria} onChange={(event) => { setFoodCafeteria(event.target.value); postFrame({ type: "FOOD_CONTROL", cafeteria: event.target.value }); }}><option value="fclt">카이마루 / N11</option><option value="west">서맛골 / W2</option><option value="east1">동맛골 / E5</option><option value="east2">동맛골 교직원 / E5</option><option value="emp">교수회관 / N6</option></select></div>
         <div className="panel-segments three">{[["breakfast","조식"],["lunch","중식"],["dinner","석식"]].map(([id,label]) => <button key={id} className={foodMeal === id ? "active" : ""} onClick={() => { setFoodMeal(id); postFrame({ type: "FOOD_CONTROL", meal: id }); }}>{label}</button>)}</div>
+        <div className="food-summary"><span>MEAL <b>{foodStatus.totalKg.toFixed(2)} kg CO₂e</b></span><span>DAILY BUDGET <b>{Math.round(foodStatus.budgetUse)}%</b></span></div>
+        <div className="food-legend" aria-label="식재료군 색상 범례">{foodStatus.legend.length ? foodStatus.legend.map((item) => <span key={item.id}><i style={{ background: item.color }} /><b>{item.label}</b><em>{item.kg.toFixed(2)}</em></span>) : <small>메뉴를 불러오는 중</small>}</div>
         <button className="panel-primary" onClick={() => postFrame({ type: "FOOD_CONTROL", reset: true })}>다시 떨어뜨리기</button>
       </div>
     );
@@ -171,7 +210,7 @@ export default function ExhibitionShell() {
   return (
     <main className="prototype-shell">
       <section ref={stageRef} className="original-stage" aria-label={`${active.en} original artwork`}>
-        {active.id === "daisy" ? <video ref={videoRef} className="original-video" src={active.source} autoPlay muted loop playsInline /> : <iframe ref={frameRef} key={active.id} className="original-frame" style={frameStyle} src={active.source} title={`${active.en} original prototype`} onLoad={() => { if (active.id === "coral") postFrame({ type: "CORAL_EMBED" }); if (active.id === "food") postFrame({ type: "FOOD_CONTROL", date: foodDate, meal: foodMeal, cafeteria: foodCafeteria }); }} />}
+        {active.id === "daisy" ? <video ref={videoRef} className="original-video" src={active.source} autoPlay muted loop playsInline /> : <iframe ref={frameRef} key={active.id} className="original-frame" style={frameStyle} src={active.source} title={`${active.en} original prototype`} onLoad={() => { if (active.id === "enso") frameControl("variableSelect", "sst", "change"); if (active.id === "coral") postFrame({ type: "CORAL_EMBED" }); if (active.id === "food") postFrame({ type: "FOOD_CONTROL", date: foodDate, meal: foodMeal, cafeteria: foodCafeteria }); }} />}
       </section>
 
       <aside className="interface-column">
