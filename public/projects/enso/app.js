@@ -150,7 +150,7 @@ function setupThree() {
 
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100);
-  camera.position.set(0, 0, 3.8);
+  camera.position.set(0, 0, 5);
 
   globeGroup = new THREE.Group();
   scene.add(globeGroup);
@@ -525,26 +525,44 @@ function rebuildNinoGuides(cells) {
     child.material.dispose();
   }
   const phase = currentNino().phase;
-  const currentColor = phase === "El Niño" ? 0xff2400 : phase === "La Niña" ? 0x004cff : 0xffffff;
-  const geometry = buildNinoGuideGeometry(cells);
-  const material = new THREE.LineBasicMaterial({ color: currentColor, transparent: true, opacity: 0.96, depthTest: true, depthWrite: false });
-  const guide = new THREE.LineSegments(geometry, material);
-  guide.renderOrder = 6;
-  ninoGuideGroup.add(guide);
+  const currentColor = phase === "El Niño" ? 0xff0038 : phase === "La Niña" ? 0x0057ff : 0xffffff;
+  [
+    { width: 0.010, lift: 0.0035, color: 0x050505, order: 6 },
+    { width: 0.0048, lift: 0.0065, color: currentColor, order: 7 },
+  ].forEach(({ width, lift, color, order }) => {
+    const geometry = buildNinoGuideGeometry(cells, width, lift);
+    const material = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, depthTest: true, depthWrite: false });
+    const guide = new THREE.Mesh(geometry, material);
+    guide.renderOrder = order;
+    ninoGuideGroup.add(guide);
+  });
 }
 
-function buildNinoGuideGeometry(cells) {
+function buildNinoGuideGeometry(cells, width, lift) {
   const positions = [];
   const { units } = getGeodesicTopology();
+  const lateral = new THREE.Vector3();
+  const radial = new THREE.Vector3();
+  const tangent = new THREE.Vector3();
   units.forEach((unit) => {
     if (unit.lat < -5 || unit.lat > 5 || unit.lon < -170 || unit.lon > -120) return;
     const cell = nearestSourceCell(unit, cells);
     if (!cell || !Number.isFinite(cell.sst) || !Number.isFinite(cell.anom)) return;
-    const radius = 1 + reliefHeight(cell.sst, "sst") + 0.0025;
+    const radius = 1 + reliefHeight(cell.sst, "sst") + lift;
     for (let index = 0; index < unit.boundary.length; index += 1) {
       const a = unit.boundary[index].clone().multiplyScalar(radius);
       const b = unit.boundary[(index + 1) % unit.boundary.length].clone().multiplyScalar(radius);
-      positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      radial.copy(a).add(b).normalize();
+      tangent.copy(b).sub(a).normalize();
+      lateral.crossVectors(radial, tangent).normalize().multiplyScalar(width / 2);
+      const a0 = a.clone().sub(lateral);
+      const a1 = a.clone().add(lateral);
+      const b0 = b.clone().sub(lateral);
+      const b1 = b.clone().add(lateral);
+      positions.push(
+        a0.x, a0.y, a0.z, b0.x, b0.y, b0.z, b1.x, b1.y, b1.z,
+        a0.x, a0.y, a0.z, b1.x, b1.y, b1.z, a1.x, a1.y, a1.z,
+      );
     }
   });
   const geometry = new THREE.BufferGeometry();

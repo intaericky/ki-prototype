@@ -27,7 +27,7 @@ const PROJECTS: Project[] = [
     description: "〈ENSO〉는 NOAA 해수면 온도 자료를 구형 디스플레이 위에 펼쳐, 적도 태평양의 온도 변화가 행성 규모의 진동으로 이어지는 과정을 보여준다. 1982년부터 2025년까지의 SST와 Niño 3.4 지수를 따라 엘니뇨와 라니냐가 형성되고 사라지는 시간을 관찰한다.",
     dataset: "NOAA NCEI OISST v2.1 · 1982–2025 전 월 528개 전 지구 프레임 · 2° SST · Niño 3.4",
     interaction: "타임라인 이동 · 1초당 약 1년 재생 · 높이 조절 · 구 드래그",
-    reference: { x: 640, y: 360, scale: .8 },
+    reference: { x: 640, y: 360, scale: 1 },
   },
   {
     id: "daisy", number: "02", ko: "데이지월드", en: "Daisy World", maker: "정진", source: "/projects/daisy/daisy-world.mp4",
