@@ -11,8 +11,22 @@ const eslintConfig = defineConfig([
     ".next/**",
     "out/**",
     "build/**",
+    "dist/**",
+    ".vinext/**",
+    ".wrangler/**",
+    // Embedded original prototypes are shipped as static assets.
+    "public/projects/**",
+    // Local duplicate drafts are not part of the application.
+    "app/layout 2.tsx",
+    "app/page 2.tsx",
     "next-env.d.ts",
   ]),
+  {
+    rules: {
+      // Existing client effects synchronize embedded prototypes and persisted UI.
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;
