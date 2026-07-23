@@ -78,6 +78,22 @@ export default function ExhibitionShell() {
   const [foodCafeteria, setFoodCafeteria] = useState("fclt");
   const [foodStatus, setFoodStatus] = useState<FoodStatus>({ totalKg: 0, budgetUse: 0, legend: [], menu: [], optionTitle: "" });
   const active = PROJECTS[activeIndex];
+  const frameStateRef = useRef({
+    activeId: active.id,
+    theme,
+    ensoHeight,
+    foodDate,
+    foodMeal,
+    foodCafeteria,
+  });
+  frameStateRef.current = {
+    activeId: active.id,
+    theme,
+    ensoHeight,
+    foodDate,
+    foodMeal,
+    foodCafeteria,
+  };
 
   useEffect(() => {
     const savedTheme = window.localStorage.getItem("ki-prototype-theme");
@@ -151,7 +167,23 @@ export default function ExhibitionShell() {
       }
       if (event.data.type === "CORAL_STATUS") setCoralStatus(event.data);
       if (event.data.type === "FOOD_STATUS") setFoodStatus(event.data);
-      if (event.data.type === "ARTWORK_READY") setArtworkReady(true);
+      if (event.data.type === "ARTWORK_READY") {
+        setArtworkReady(true);
+        const frame = frameRef.current?.contentWindow;
+        if (!frame) return;
+        const current = frameStateRef.current;
+        frame.postMessage({ type: "KI_THEME", theme: current.theme }, window.location.origin);
+        if (current.activeId === "enso") frame.postMessage({ type: "ENSO_CONTROL", height: current.ensoHeight }, window.location.origin);
+        if (current.activeId === "coral") frame.postMessage({ type: "CORAL_EMBED" }, window.location.origin);
+        if (current.activeId === "food") {
+          frame.postMessage({
+            type: "FOOD_CONTROL",
+            date: current.foodDate,
+            meal: current.foodMeal,
+            cafeteria: current.foodCafeteria,
+          }, window.location.origin);
+        }
+      }
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
