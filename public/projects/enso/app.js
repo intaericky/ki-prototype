@@ -35,9 +35,6 @@ const ui = {
   mapCaption: document.querySelector("#mapCaption"),
   heightLow: document.querySelector("#heightLowLabel"),
   heightHigh: document.querySelector("#heightHighLabel"),
-  globeState: document.querySelector("#ninoGlobeState"),
-  globePhase: document.querySelector("#globePhaseReadout"),
-  globeNino: document.querySelector("#globeNinoReadout"),
 };
 
 let THREE;
@@ -316,10 +313,6 @@ function updateSummary() {
   ui.nino.textContent = `${formatValue(nino.rolling)} deg C ${nino.phase}`;
   ui.frame.textContent = formatDate(currentFrameDate());
   ui.status.textContent = `Historical cursor ${formatDate(nino.date)}`;
-  const phaseKey = nino.phase === "El Niño" ? "el-nino" : nino.phase === "La Niña" ? "la-nina" : "neutral";
-  ui.globeState.dataset.phase = phaseKey;
-  ui.globePhase.textContent = nino.phase.toUpperCase();
-  ui.globeNino.textContent = `${nino.rolling >= 0 ? "+" : ""}${nino.rolling.toFixed(2)}°C`;
   if (window.parent !== window) {
     const message = {
       type: "ENSO_STATUS",
@@ -358,7 +351,7 @@ function updateInstancedGlobe(cells, variable) {
   const { units } = getGeodesicTopology();
   if (!cellMesh) {
     cellMesh = new THREE.InstancedMesh(
-      buildOpenHexPrismGeometry(),
+      buildSolidHexWedgeGeometry(),
       new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
       units.length
     );
@@ -369,7 +362,7 @@ function updateInstancedGlobe(cells, variable) {
   const scale = variable === "sst" ? TEMP_SCALE : ANOM_SCALE;
   const matrix = new THREE.Matrix4();
   const quaternion = new THREE.Quaternion();
-  const position = new THREE.Vector3();
+  const position = new THREE.Vector3(0, 0, 0);
   const size = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
   const normal = new THREE.Vector3();
@@ -380,13 +373,10 @@ function updateInstancedGlobe(cells, variable) {
     const value = cell ? cell[variable] : NaN;
     if (!cell || !Number.isFinite(value)) return;
     normal.copy(spherePoint(unit.lon, unit.lat, 1)).normalize();
-    const height = reliefHeight(value, variable);
-    const direction = height < 0 ? normal.clone().multiplyScalar(-1) : normal;
-    const thickness = Math.max(0.004, Math.abs(height));
+    const radius = Math.max(0.05, 1 + reliefHeight(value, variable));
     const cellRadius = unit.boundary.reduce((sum, point) => sum + point.distanceTo(normal), 0) / unit.boundary.length;
-    position.copy(normal).multiplyScalar(1 + height / 2);
-    quaternion.setFromUnitVectors(up, direction);
-    size.set(cellRadius * 1.06, thickness, cellRadius * 1.06);
+    quaternion.setFromUnitVectors(up, normal);
+    size.set(cellRadius * 1.06, radius, cellRadius * 1.06);
     matrix.compose(position, quaternion, size);
     cellMesh.setMatrixAt(instance, matrix);
     cellMesh.setColorAt(instance, unitColor(value, variable, scale));
@@ -399,17 +389,17 @@ function updateInstancedGlobe(cells, variable) {
   cellMesh.computeBoundingSphere();
 }
 
-function buildOpenHexPrismGeometry() {
+function buildSolidHexWedgeGeometry() {
   const positions = [];
   const top = Array.from({ length: 6 }, (_, index) => {
     const angle = Math.PI / 6 + index * Math.PI / 3;
-    return new THREE.Vector3(Math.cos(angle), 0.5, Math.sin(angle));
+    return new THREE.Vector3(Math.cos(angle), 1, Math.sin(angle));
   });
-  const bottom = top.map((point) => new THREE.Vector3(point.x, -0.5, point.z));
+  const core = new THREE.Vector3(0, 0, 0);
   for (let index = 0; index < 6; index += 1) {
     const next = (index + 1) % 6;
-    [bottom[index], top[index], top[next], bottom[index], top[next], bottom[next]].forEach((point) => positions.push(point.x, point.y, point.z));
-    [new THREE.Vector3(0, 0.5, 0), top[index], top[next]].forEach((point) => positions.push(point.x, point.y, point.z));
+    [core, top[index], top[next]].forEach((point) => positions.push(point.x, point.y, point.z));
+    [new THREE.Vector3(0, 1, 0), top[next], top[index]].forEach((point) => positions.push(point.x, point.y, point.z));
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
@@ -524,19 +514,11 @@ function rebuildNinoGuides(cells) {
   }
   const phase = currentNino().phase;
   const currentColor = phase === "El Niño" ? 0xff2400 : phase === "La Niña" ? 0x004cff : 0xffffff;
-  [
-    { offset: -ENSO_THRESHOLD, color: 0x004cff, opacity: 0.78 },
-    { offset: ENSO_THRESHOLD, color: 0xff2400, opacity: 0.78 },
-    { offset: null, color: currentColor, opacity: 1 },
-  ].forEach(({ offset, color, opacity }) => {
-    const geometry = offset === null ? buildNinoGuideGeometry(cells) : buildNinoBoundaryGeometry(cells, offset);
-    const material = offset === null
-      ? new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false })
-      : new THREE.PointsMaterial({ color, size: 3.2, sizeAttenuation: false, transparent: true, opacity: 1, depthTest: false, depthWrite: false });
-    const guide = offset === null ? new THREE.LineSegments(geometry, material) : new THREE.Points(geometry, material);
-    guide.renderOrder = offset === null ? 6 : 7;
-    ninoGuideGroup.add(guide);
-  });
+  const geometry = buildNinoGuideGeometry(cells);
+  const material = new THREE.LineBasicMaterial({ color: currentColor, transparent: true, opacity: 1, depthTest: false, depthWrite: false });
+  const guide = new THREE.LineSegments(geometry, material);
+  guide.renderOrder = 6;
+  ninoGuideGroup.add(guide);
 }
 
 function buildNinoGuideGeometry(cells) {
@@ -553,30 +535,6 @@ function buildNinoGuideGeometry(cells) {
       positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
     }
   });
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  return geometry;
-}
-
-function buildNinoBoundaryGeometry(cells, anomalyOffset) {
-  const positions = [];
-  const addPath = (samples) => {
-    for (let index = 0; index < samples.length - 1; index += 1) {
-      const points = [samples[index], samples[index + 1]].map(({ lat, lon }) => {
-        const cell = nearestSourceCell({ lat, lon }, cells);
-        if (!cell || !Number.isFinite(cell.sst) || !Number.isFinite(cell.anom)) return null;
-        const thresholdSst = cell.sst - cell.anom + anomalyOffset;
-        return spherePoint(lon, lat, 1 + reliefHeight(thresholdSst, "sst") + 0.0012);
-      });
-      if (points[0] && points[1]) positions.push(points[0].x, points[0].y, points[0].z, points[1].x, points[1].y, points[1].z);
-    }
-  };
-  const longitudes = Array.from({ length: 51 }, (_, index) => -170 + index);
-  const latitudes = Array.from({ length: 11 }, (_, index) => -5 + index);
-  addPath(longitudes.map((lon) => ({ lat: -5, lon })));
-  addPath(longitudes.map((lon) => ({ lat: 5, lon })));
-  addPath(latitudes.map((lat) => ({ lat, lon: -170 })));
-  addPath(latitudes.map((lat) => ({ lat, lon: -120 })));
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   return geometry;
