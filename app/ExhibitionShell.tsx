@@ -24,14 +24,14 @@ type Project = {
 
 const PROJECTS: Project[] = [
   {
-    id: "enso", number: "01", ko: "해양의 진동", en: "ENSO", maker: "황인태", source: "/projects/enso/index.html?embed=1",
+    id: "enso", number: "01", ko: "엘니뇨 남방진동", en: "ENSO", maker: "황인태", source: "/projects/enso/index.html?embed=1",
     description: "〈ENSO〉는 NOAA 해수면 온도 자료를 구형 디스플레이 위에 펼쳐, 적도 태평양의 온도 변화가 행성 규모의 진동으로 이어지는 과정을 보여준다. 1982년부터 2025년까지의 SST와 Niño 3.4 지수를 따라 엘니뇨와 라니냐가 형성되고 사라지는 시간을 관찰한다.",
     dataset: "NOAA NCEI OISST v2.1 · 1982–2025 전 월 528개 전 지구 프레임 · 2° SST · Niño 3.4",
     interaction: "타임라인 이동 · 1초당 약 1년 재생 · 높이 조절 · 구 드래그",
     reference: { x: 640, y: 360, scale: 1 },
   },
   {
-    id: "daisy", number: "02", ko: "데이지월드", en: "Daisy World", maker: "정진", source: "/projects/daisy/daisy-world.mp4",
+    id: "daisy", number: "02", ko: "데이지 월드", en: "Daisy World", maker: "정진", source: "/projects/daisy/daisy-world.mp4",
     description: "〈데이지월드〉는 가이아 가설의 ‘데이지월드 모델’을 바탕으로, 생명체와 환경이 상호작용하며 행성의 온도를 스스로 조절하는 메커니즘을 시각화한 작업이다. 생명 활동이 지구의 항상성을 지키는 과정과 온실가스 증가로 균형이 무너지는 임계점을 보여준다.",
     dataset: "Daisyworld model simulation · video prototype",
     interaction: "영상 재생·정지 · 타임라인 이동",
