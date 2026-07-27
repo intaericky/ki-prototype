@@ -303,8 +303,6 @@
   let locations = null;
   let riskTexture = null;
   let orientationQuat = null;
-  let manualYaw = 80 * Math.PI / 180;
-  let manualPitch = 0;
   let isDragging = false;
   let dragStart = null;
   let pointerInside = false;
@@ -619,8 +617,10 @@
     updateSimulation(dt);
     if (running) frame = time * 0.06;
     const state = bleachingState(sim.dhw, sim.coverage);
-    const autoYaw = running ? (frame * 0.018 * Math.PI) / 180 : 0;
-    const viewQuat = quatFromYawPitch(manualYaw + autoYaw, manualPitch);
+    const autoQuat = running
+      ? quatFromAxisAngle(0, 1, 0, (frame * 0.018 * Math.PI) / 180)
+      : [0, 0, 0, 1];
+    const viewQuat = quatNormalize(quatMultiply(autoQuat, orientationQuat));
     const shaderQuat = inverseQuat(viewQuat);
 
     gl.useProgram(program);
@@ -649,18 +649,15 @@
     touchInfluence = event.pointerType !== "mouse" && pointerInside;
     if (pointerInside) applyContactPulse();
     if (running) {
-      manualYaw += (frame * 0.018 * Math.PI) / 180;
+      const autoQuat = quatFromAxisAngle(0, 1, 0, (frame * 0.018 * Math.PI) / 180);
+      orientationQuat = quatNormalize(quatMultiply(autoQuat, orientationQuat));
       frame = 0;
     }
     isDragging = true;
-    const rect = canvas.getBoundingClientRect();
     dragStart = {
-      x: event.clientX,
-      y: event.clientY,
-      width: rect.width || 1,
-      height: rect.height || 1,
-      yaw: manualYaw,
-      pitch: manualPitch
+      vector: pointerToTrackball(event),
+      orientation: orientationQuat.slice(),
+      resume: running
     };
     running = false;
     ui.toggle.textContent = "Resume rotation";
@@ -671,15 +668,17 @@
   canvas.addEventListener("pointermove", (event) => {
     pointerInside = pointerIsOnSphere(event);
     if (!isDragging || !dragStart) return;
-    const dx = (event.clientX - dragStart.x) / dragStart.width;
-    const dy = (event.clientY - dragStart.y) / dragStart.height;
-    manualYaw = dragStart.yaw + dx * Math.PI * 1.2;
-    manualPitch = Math.max(-1.15, Math.min(1.15, dragStart.pitch + dy * Math.PI * 0.78));
+    const current = pointerToTrackball(event);
+    const delta = quatFromTo(dragStart.vector, current);
+    orientationQuat = quatNormalize(quatMultiply(delta, dragStart.orientation));
   });
 
   canvas.addEventListener("pointerup", (event) => {
+    const resume = dragStart?.resume ?? true;
     isDragging = false;
     dragStart = null;
+    running = resume;
+    ui.toggle.textContent = running ? "Pause rotation" : "Resume rotation";
     touchInfluence = false;
     pointerInside = event.pointerType === "mouse" && pointerIsOnSphere(event);
     canvas.style.cursor = "grab";
@@ -687,8 +686,11 @@
   });
 
   canvas.addEventListener("pointercancel", () => {
+    const resume = dragStart?.resume ?? true;
     isDragging = false;
     dragStart = null;
+    running = resume;
+    ui.toggle.textContent = running ? "Pause rotation" : "Resume rotation";
     touchInfluence = false;
     pointerInside = false;
     canvas.style.cursor = "grab";
@@ -732,7 +734,7 @@
 
   function init() {
     canvas.style.cursor = "grab";
-    orientationQuat = quatFromYawPitch(manualYaw, manualPitch);
+    orientationQuat = quatFromAxisAngle(0, 1, 0, 80 * Math.PI / 180);
     program = createProgram();
     locations = {
       position: gl.getAttribLocation(program, "aPosition"),

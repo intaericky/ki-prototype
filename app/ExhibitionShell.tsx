@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 type ProjectId = "enso" | "daisy" | "coral" | "food";
 type Theme = "dark" | "light";
@@ -58,7 +58,13 @@ function koreaDate() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
 
-function EnsoTimelineChart({ series, progress, onChange }: { series: EnsoPoint[]; progress: number; onChange: (value: number) => void }) {
+function shiftDate(date: string, days: number) {
+  const [year, month, day] = date.split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + days));
+  return next.toISOString().slice(0, 10);
+}
+
+function EnsoTimelineChart({ series, progress, phase, onChange }: { series: EnsoPoint[]; progress: number; phase: "warm" | "cool" | "neutral"; onChange: (value: number) => void }) {
   const width = 420;
   const height = 118;
   const plotTop = 8;
@@ -71,9 +77,26 @@ function EnsoTimelineChart({ series, progress, onChange }: { series: EnsoPoint[]
   const cursorX = progress / 1000 * width;
   const cursorIndex = Math.round(progress / 1000 * Math.max(0, series.length - 1));
   const cursorValue = series[cursorIndex]?.value ?? 0;
+  const moveToPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    onChange(Math.max(0, Math.min(1000, (event.clientX - rect.left) / Math.max(1, rect.width) * 1000)));
+  };
 
   return (
-    <div className="enso-chart">
+    <div
+      className={`enso-chart phase-${phase}`}
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        moveToPointer(event);
+      }}
+      onPointerMove={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) moveToPointer(event);
+      }}
+      onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+      onPointerCancel={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+    >
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="1982년부터 2025년까지의 Niño 3.4 해수면 온도 편차">
         <rect className="enso-band warm" x="0" y={plotTop} width={width} height={yFor(.5) - plotTop} />
         <rect className="enso-band cool" x="0" y={yFor(-.5)} width={width} height={plotBottom - yFor(-.5)} />
@@ -252,6 +275,10 @@ export default function ExhibitionShell() {
     const slider = frameRef.current?.contentDocument?.getElementById("timeSlider") as HTMLInputElement | null;
     if (slider) frameControl("timeSlider", String(Math.round(normalized / 1000 * Number(slider.max))));
   };
+  const updateFoodDate = (date: string) => {
+    setFoodDate(date);
+    postFrame({ type: "FOOD_CONTROL", date });
+  };
   const fit = stageSize.height / 720;
   const visualScale = fit * active.reference.scale;
   const frameStyle = {
@@ -268,8 +295,8 @@ export default function ExhibitionShell() {
       const dateLabel = new Intl.DateTimeFormat("en", { month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${ensoStatus.date}T00:00:00Z`));
       return (
       <div className="original-controls enso-controls">
-        <EnsoTimelineChart series={ensoSeries} progress={ensoTime} onChange={updateEnsoTime} />
-        <div className={`enso-state ${phaseClass}`}><span><b>{dateLabel}</b><em>3-MONTH NIÑO 3.4</em></span><strong>{ensoStatus.phase}</strong><output>{ensoStatus.value >= 0 ? "+" : ""}{ensoStatus.value.toFixed(2)}°C</output></div>
+        <EnsoTimelineChart series={ensoSeries} progress={ensoTime} phase={phaseClass} onChange={updateEnsoTime} />
+        <div className={`enso-state ${phaseClass}`}><b>{dateLabel}</b><strong>{ensoStatus.phase}</strong><output>{ensoStatus.value >= 0 ? "+" : ""}{ensoStatus.value.toFixed(2)}°C</output></div>
         <label><span>RELIEF HEIGHT <output>{Math.round(ensoHeight * 100)}% R</output></span><input type="range" min="0" max="0.5" step="0.01" value={ensoHeight} onInput={(event) => { setEnsoHeight(Number(event.currentTarget.value)); frameControl("heightScaleSlider", event.currentTarget.value); }} /></label>
         <button className="panel-primary" onClick={() => { frameControl("playButton"); setEnsoPlaying((value) => !value); }}>{ensoPlaying ? "PAUSE" : "PLAY"}</button>
       </div>
@@ -290,12 +317,20 @@ export default function ExhibitionShell() {
           <span><b>INFLUENCE / STATE</b><strong>{coralStatus.influence.toFixed(1)}s · {coralStatus.recovery}</strong></span>
         </div>
         <button className={`panel-touch ${coralTouch ? "active" : ""}`} onPointerDown={() => { setCoralTouch(true); postFrame({ type: "CORAL_TOUCH", active: true }); }} onPointerUp={() => { setCoralTouch(false); postFrame({ type: "CORAL_TOUCH", active: false }); }} onPointerCancel={() => { setCoralTouch(false); postFrame({ type: "CORAL_TOUCH", active: false }); }} onPointerLeave={() => { setCoralTouch(false); postFrame({ type: "CORAL_TOUCH", active: false }); }}><b>{coralTouch ? "HEATING" : "TOUCH + HOLD"}</b><span>RELEASE TO STOP</span></button>
-        <button className="panel-primary" onClick={() => frameControl("toggle")}>PAUSE / RESUME ROTATION</button>
       </div>
     );
     return (
       <div className="original-controls food-controls">
-        <div className="food-fields"><input className="panel-date" type="date" value={foodDate} max={koreaDate()} onChange={(event) => { setFoodDate(event.target.value); postFrame({ type: "FOOD_CONTROL", date: event.target.value }); }} />
+        <div className="food-fields">
+          <div className="food-date-control">
+            <button type="button" aria-label="이전 날짜" onClick={() => updateFoodDate(shiftDate(foodDate, -1))}>←</button>
+            <label className="food-date-picker">
+              <span>{foodDate.replaceAll("-", ". ")}</span>
+              <b>CAL</b>
+              <input type="date" value={foodDate} onChange={(event) => updateFoodDate(event.target.value)} />
+            </label>
+            <button type="button" aria-label="다음 날짜" onClick={() => updateFoodDate(shiftDate(foodDate, 1))}>→</button>
+          </div>
         <select value={foodCafeteria} onChange={(event) => { setFoodCafeteria(event.target.value); postFrame({ type: "FOOD_CONTROL", cafeteria: event.target.value }); }}><option value="fclt">카이마루 / N11</option><option value="west">서맛골 / W2</option><option value="east1">동맛골 / E5</option><option value="east2">동맛골 교직원 / E5</option><option value="emp">교수회관 / N6</option></select></div>
         <div className="panel-segments three">{[["breakfast","조식"],["lunch","중식"],["dinner","석식"]].map(([id,label]) => <button key={id} className={foodMeal === id ? "active" : ""} onClick={() => { setFoodMeal(id); postFrame({ type: "FOOD_CONTROL", meal: id }); }}>{label}</button>)}</div>
         <div className="food-summary"><span>MEAL <b>{foodStatus.totalKg.toFixed(2)} kg CO₂e</b></span><span>DAILY BUDGET <b>{Math.round(foodStatus.budgetUse)}%</b></span></div>
@@ -317,6 +352,7 @@ export default function ExhibitionShell() {
 
       <aside className="interface-column">
         <section className="tablet-interface" aria-label="Landscape tablet controller">
+          <header className="tablet-identity"><b>TABLET INTERFACE</b><span>TOUCH CONTROL</span></header>
           <nav className="panel-tabs" aria-label="Projects">{PROJECTS.map((project, index) => <button key={project.id} className={index === activeIndex ? "active" : ""} onClick={() => selectProject(index)} aria-label={project.en}><span>{project.number}</span></button>)}</nav>
           {renderControls()}
         </section>
@@ -324,8 +360,8 @@ export default function ExhibitionShell() {
         <section className="description-view">
           <header className="research-heading">
             <div><span>KI PROTOTYPE</span><h2>행성지능 인터페이스를 위한<br />기후 빅데이터 구면 시각화 프로토타입 개발</h2></div>
-            <button className="theme-toggle" type="button" role="switch" aria-checked={theme === "light"} aria-label={`${theme === "dark" ? "라이트" : "다크"} 모드로 전환`} onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}>
-              <span>DARK</span><i aria-hidden="true" /><span>LIGHT</span>
+            <button className="theme-toggle" type="button" aria-pressed={theme === "light"} aria-label={`${theme === "dark" ? "라이트" : "다크"} 모드로 전환`} onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}>
+              <span className={theme === "dark" ? "active" : ""}>DARK</span><span aria-hidden="true">/</span><span className={theme === "light" ? "active" : ""}>LIGHT</span>
             </button>
           </header>
           <div className="work-heading"><h1>{active.ko}</h1><p>{active.en} · {active.maker}</p></div>
