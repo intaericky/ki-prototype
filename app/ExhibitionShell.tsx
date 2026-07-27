@@ -27,7 +27,7 @@ const PROJECTS: Project[] = [
   {
     id: "enso", number: "01", ko: "엘니뇨 남방진동", en: "El Niño–Southern Oscillation", maker: "황인태", source: "/projects/enso/index.html?embed=1",
     description: "〈엘니뇨 남방진동〉은 NOAA 해수면 온도 자료를 구형 디스플레이 위에 펼쳐, 적도 태평양의 온도 변화가 행성 규모의 진동으로 이어지는 과정을 보여준다. 1982년부터 2025년까지의 SST와 Niño 3.4 지수를 따라 엘니뇨와 라니냐가 형성되고 사라지는 시간을 관찰한다.",
-    dataset: "NOAA NCEI OISST v2.1 · 1982–2025 전 월 528개 전 지구 프레임 · 2° SST · Niño 3.4",
+    dataset: "NOAA NCEI OISST v2.1 · 1982–2025 월별 SST(2°) · Niño 3.4",
     interaction: "타임라인 이동 · 1초당 약 1년 재생 · 높이 조절 · 구 드래그",
     reference: { x: 640, y: 360, scale: 1 },
   },
@@ -86,6 +86,7 @@ function EnsoTimelineChart({ series, progress, phase, onChange }: { series: Enso
     <div
       className={`enso-chart phase-${phase}`}
       onPointerDown={(event) => {
+        event.preventDefault();
         event.currentTarget.setPointerCapture(event.pointerId);
         moveToPointer(event);
       }}
@@ -137,6 +138,9 @@ export default function ExhibitionShell() {
   const [foodDate, setFoodDate] = useState(koreaDate);
   const [foodMeal, setFoodMeal] = useState("lunch");
   const [foodCafeteria, setFoodCafeteria] = useState("fclt");
+  const [foodDateOpen, setFoodDateOpen] = useState(false);
+  const [foodCafeteriaOpen, setFoodCafeteriaOpen] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(() => koreaDate().slice(0, 7));
   const [foodStatus, setFoodStatus] = useState<FoodStatus>({ totalKg: 0, budgetUse: 0, legend: [], menu: [], optionTitle: "" });
   const active = PROJECTS[activeIndex];
   const frameStateRef = useRef({
@@ -277,7 +281,23 @@ export default function ExhibitionShell() {
   };
   const updateFoodDate = (date: string) => {
     setFoodDate(date);
+    setCalendarMonth(date.slice(0, 7));
+    setFoodDateOpen(false);
     postFrame({ type: "FOOD_CONTROL", date });
+  };
+  const cafeteriaOptions = [
+    ["fclt", "카이마루 / N11"],
+    ["west", "서맛골 / W2"],
+    ["east1", "동맛골 / E5"],
+    ["east2", "동맛골 교직원 / E5"],
+    ["emp", "교수회관 / N6"],
+  ];
+  const [calendarYear, calendarMonthNumber] = calendarMonth.split("-").map(Number);
+  const firstWeekday = new Date(Date.UTC(calendarYear, calendarMonthNumber - 1, 1)).getUTCDay();
+  const calendarDays = new Date(Date.UTC(calendarYear, calendarMonthNumber, 0)).getUTCDate();
+  const shiftCalendarMonth = (offset: number) => {
+    const next = new Date(Date.UTC(calendarYear, calendarMonthNumber - 1 + offset, 1));
+    setCalendarMonth(next.toISOString().slice(0, 7));
   };
   const fit = stageSize.height / 720;
   const visualScale = fit * active.reference.scale;
@@ -324,15 +344,75 @@ export default function ExhibitionShell() {
         <div className="food-fields">
           <div className="food-date-control">
             <button type="button" aria-label="이전 날짜" onClick={() => updateFoodDate(shiftDate(foodDate, -1))}>←</button>
-            <label className="food-date-picker">
+            <button
+              type="button"
+              className="food-date-picker"
+              aria-haspopup="dialog"
+              aria-expanded={foodDateOpen}
+              onClick={() => {
+                setCalendarMonth(foodDate.slice(0, 7));
+                setFoodDateOpen((open) => !open);
+                setFoodCafeteriaOpen(false);
+              }}
+            >
               <span>{foodDate.replaceAll("-", ". ")}</span>
-              <b>CAL</b>
-              <input type="date" value={foodDate} onChange={(event) => updateFoodDate(event.target.value)} />
-            </label>
+              <i aria-hidden="true">⌄</i>
+            </button>
             <button type="button" aria-label="다음 날짜" onClick={() => updateFoodDate(shiftDate(foodDate, 1))}>→</button>
           </div>
-        <select value={foodCafeteria} onChange={(event) => { setFoodCafeteria(event.target.value); postFrame({ type: "FOOD_CONTROL", cafeteria: event.target.value }); }}><option value="fclt">카이마루 / N11</option><option value="west">서맛골 / W2</option><option value="east1">동맛골 / E5</option><option value="east2">동맛골 교직원 / E5</option><option value="emp">교수회관 / N6</option></select></div>
-        <div className="panel-segments three">{[["breakfast","조식"],["lunch","중식"],["dinner","석식"]].map(([id,label]) => <button key={id} className={foodMeal === id ? "active" : ""} onClick={() => { setFoodMeal(id); postFrame({ type: "FOOD_CONTROL", meal: id }); }}>{label}</button>)}</div>
+          <button
+            type="button"
+            className="food-cafeteria-trigger"
+            aria-haspopup="listbox"
+            aria-expanded={foodCafeteriaOpen}
+            onClick={() => {
+              setFoodCafeteriaOpen((open) => !open);
+              setFoodDateOpen(false);
+            }}
+          >
+            <span>{cafeteriaOptions.find(([id]) => id === foodCafeteria)?.[1]}</span>
+            <i aria-hidden="true">⌄</i>
+          </button>
+        </div>
+        {foodDateOpen && (
+          <div className="food-calendar" role="dialog" aria-label="날짜 선택">
+            <header>
+              <button type="button" aria-label="이전 달" onClick={() => shiftCalendarMonth(-1)}>←</button>
+              <strong>{calendarYear}. {String(calendarMonthNumber).padStart(2, "0")}</strong>
+              <button type="button" aria-label="다음 달" onClick={() => shiftCalendarMonth(1)}>→</button>
+            </header>
+            <div className="food-calendar-week">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div>
+            <div className="food-calendar-days">
+              {Array.from({ length: firstWeekday }, (_, index) => <span key={`blank-${index}`} />)}
+              {Array.from({ length: calendarDays }, (_, index) => {
+                const day = index + 1;
+                const value = `${calendarMonth}-${String(day).padStart(2, "0")}`;
+                return <button type="button" key={value} className={value === foodDate ? "active" : ""} onClick={() => updateFoodDate(value)}>{day}</button>;
+              })}
+            </div>
+          </div>
+        )}
+        {foodCafeteriaOpen && (
+          <div className="food-cafeteria-menu" role="listbox" aria-label="식당 선택">
+            {cafeteriaOptions.map(([id, label]) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={id === foodCafeteria}
+                className={id === foodCafeteria ? "active" : ""}
+                key={id}
+                onClick={() => {
+                  setFoodCafeteria(id);
+                  setFoodCafeteriaOpen(false);
+                  postFrame({ type: "FOOD_CONTROL", cafeteria: id });
+                }}
+              >
+                <span>{label}</span><i aria-hidden="true">{id === foodCafeteria ? "●" : ""}</i>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="panel-segments three">{[["breakfast","조식"],["lunch","중식"],["dinner","석식"]].map(([id,label]) => <button key={id} className={foodMeal === id ? "active" : ""} onClick={() => { setFoodMeal(id); setFoodDateOpen(false); setFoodCafeteriaOpen(false); postFrame({ type: "FOOD_CONTROL", meal: id }); }}>{label}</button>)}</div>
         <div className="food-summary"><span>MEAL <b>{foodStatus.totalKg.toFixed(2)} kg CO₂e</b></span><span>DAILY BUDGET <b>{Math.round(foodStatus.budgetUse)}%</b></span></div>
         <div className="food-details">
           <div className="food-menu" aria-label="현재 식단"><b>MENU{foodStatus.optionTitle && foodStatus.optionTitle !== "기본" ? ` · ${foodStatus.optionTitle}` : ""}</b><p>{foodStatus.menu.length ? foodStatus.menu.join(" · ") : "식단을 불러오는 중"}</p></div>
@@ -352,7 +432,6 @@ export default function ExhibitionShell() {
 
       <aside className="interface-column">
         <section className="tablet-interface" aria-label="Landscape tablet controller">
-          <header className="tablet-identity"><b>TABLET INTERFACE</b><span>TOUCH CONTROL</span></header>
           <nav className="panel-tabs" aria-label="Projects">{PROJECTS.map((project, index) => <button key={project.id} className={index === activeIndex ? "active" : ""} onClick={() => selectProject(index)} aria-label={project.en}><span>{project.number}</span></button>)}</nav>
           {renderControls()}
         </section>
