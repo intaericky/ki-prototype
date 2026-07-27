@@ -1053,24 +1053,53 @@ a { color: inherit; }
 .prototype-shell[data-theme="light"] .enso-state.cool strong,
 .prototype-shell[data-theme="light"] .enso-state.cool output { color: #315f9e !important; fill: #315f9e; }
 
-/* Tablet separators are deliberately heavier than the 1px caption grid. */
-.tablet-interface { border-width: 2px; }
-.tablet-interface .panel-tabs { border-bottom-width: 2px; }
-.tablet-interface .panel-tabs button { border-right-width: 2px; }
-.tablet-interface .original-controls > label,
-.tablet-interface .enso-chart,
-.tablet-interface .enso-state,
-.tablet-interface .coral-metrics,
-.tablet-interface .coral-metrics span,
-.tablet-interface .food-fields,
-.tablet-interface .food-controls .panel-segments,
-.tablet-interface .food-summary { border-width: 2px; }
-.tablet-interface .food-date-control > button { border-right-width: 2px; }
-.tablet-interface .food-date-control > button:last-child { border-left-width: 2px; }
-.tablet-interface .food-cafeteria-trigger,
-.tablet-interface .food-summary span + span { border-left-width: 2px; }
+/* Only the tablet's outer frame is heavier; all internal dividers remain flat 1px lines. */
+.tablet-interface { border: 2px solid var(--p-ink); box-shadow: none; }
+
+/* Power-of-two spacing rhythm. */
+.tablet-interface .panel-tabs { flex-basis: 48px; }
+.tablet-interface .original-controls > label { min-height: 64px; padding: 8px 16px; }
+.tablet-interface .original-controls > .panel-primary:last-child,
+.food-controls .panel-primary { min-height: 48px; }
+.enso-state {
+  min-height: 48px;
+  gap: 16px;
+  padding: 8px 16px;
+}
+.interface-column .enso-state strong { font-size: 16px !important; }
+.coral-metrics span { gap: 4px; padding: 8px; }
+.tablet-interface .coral-controls .panel-touch { min-height: 80px; gap: 8px; }
+.food-date-control { grid-template-columns: 40px minmax(0, 1fr) 40px; }
+.food-date-control .food-date-picker { gap: 8px; padding: 0 8px; }
+.food-cafeteria-trigger { gap: 8px; padding: 0 16px; }
 .food-calendar,
-.food-cafeteria-menu { top: 90px; }
+.food-cafeteria-menu { top: 88px; }
+.food-calendar { padding: 8px; }
+.food-calendar header { height: 32px; margin-bottom: 8px; grid-template-columns: 32px 1fr 32px; }
+.food-calendar-week span { height: 24px; }
+.food-calendar-days button,
+.food-calendar-days > span { height: 24px; }
+.food-cafeteria-menu { padding: 4px; }
+.food-cafeteria-menu button { min-height: 32px; padding: 0 8px; }
+.food-summary span { gap: 8px; padding: 8px; }
+.food-details { padding: 8px 16px; }
+.food-menu { gap: 8px; padding-bottom: 8px; margin-bottom: 8px; }
+.food-menu p { line-height: 1.5; }
+.food-legend { gap: 4px 16px; }
+.food-legend span { gap: 4px; }
+.research-heading { gap: 16px; padding: 16px; }
+.research-heading > div > span { margin-bottom: 8px; }
+.research-heading h2 { line-height: 1.5; }
+.work-heading { padding: 16px; }
+.work-heading h1 { margin-bottom: 8px; }
+.work-description { padding: 0 16px 16px; line-height: 1.5; }
+.description-view dl div {
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 32px;
+  padding: 16px;
+}
+.description-view dd { line-height: 1.5; }
+.theme-toggle { gap: 8px; }
 
 @media (max-width: 900px) {
   .prototype-shell { height: auto; min-height: 100svh; grid-template-columns: 1fr; grid-template-rows: 56svh auto; overflow: visible; }
