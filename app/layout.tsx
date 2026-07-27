@@ -3,17 +3,11 @@ import localFont from "next/font/local";
 import { headers } from "next/headers";
 import "./globals.css";
 
-const geistSans = localFont({
-  src: "./fonts/geist-latin.woff2",
-  variable: "--font-geist-sans",
+const pretendard = localFont({
+  src: "./fonts/PretendardVariable.woff2",
+  variable: "--font-pretendard",
   display: "swap",
-  weight: "100 900",
-});
-const geistMono = localFont({
-  src: "./fonts/geist-mono-latin.woff2",
-  variable: "--font-geist-mono",
-  display: "swap",
-  weight: "100 900",
+  weight: "45 920",
 });
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -40,7 +34,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body>
+      <body className={pretendard.variable}>{children}</body>
     </html>
   );
 }
