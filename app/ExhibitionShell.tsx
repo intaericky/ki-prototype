@@ -25,28 +25,28 @@ type Project = {
 
 const PROJECTS: Project[] = [
   {
-    id: "enso", number: "01", ko: "엘니뇨 남방진동", en: "El Niño–Southern Oscillation", maker: "황인태", source: "/projects/enso/index.html?embed=1",
+    id: "enso", number: "1", ko: "엘니뇨 남방진동", en: "El Niño–Southern Oscillation", maker: "황인태", source: "/projects/enso/index.html?embed=1",
     description: "〈엘니뇨 남방진동〉은 NOAA 해수면 온도 자료를 구형 디스플레이 위에 펼쳐, 적도 태평양의 온도 변화가 행성 규모의 진동으로 이어지는 과정을 보여준다. 1982년부터 2025년까지의 SST와 Niño 3.4 지수를 따라 엘니뇨와 라니냐가 형성되고 사라지는 시간을 관찰한다.",
     dataset: "NOAA NCEI OISST v2.1, 1982–2025 월별 SST(2°), Niño 3.4",
     interaction: "타임라인 이동, 1초당 약 1년 재생, 높이 조절, 구 드래그",
     reference: { x: 640, y: 360, scale: 1 },
   },
   {
-    id: "daisy", number: "02", ko: "데이지월드", en: "Daisyworld", maker: "정진", source: "/projects/daisy/daisy-world.mp4",
+    id: "daisy", number: "2", ko: "데이지월드", en: "Daisyworld", maker: "정진", source: "/projects/daisy/daisy-world.mp4",
     description: "〈데이지월드〉는 가이아 가설의 ‘데이지월드 모델’을 바탕으로, 생명체와 환경이 상호작용하며 행성의 온도를 스스로 조절하는 메커니즘을 시각화한 작업이다. 생명 활동이 지구의 항상성을 지키는 과정과 온실가스 증가로 균형이 무너지는 임계점을 보여준다.",
     dataset: "Daisyworld model simulation, video prototype",
     interaction: "영상 재생·정지, 타임라인 이동",
     reference: { x: 640, y: 360, scale: 1 },
   },
   {
-    id: "coral", number: "03", ko: "산호 백화", en: "Coral Bleaching", maker: "서민혁", source: "/projects/coral/index.html?embed=1",
+    id: "coral", number: "3", ko: "산호 백화", en: "Coral Bleaching", maker: "서민혁", source: "/projects/coral/index.html?embed=1",
     description: "〈산호 백화〉는 해양 표면 온도에 따른 산호의 백화 현상을 시각화한 인터랙티브 데이터 작업이다. 인간의 터치가 구의 온도 상승에 기여하여 산호빛 구가 하얗게 물드는 장면을 보여준다. 적극적으로 백화를 가속할 수도, 개입하지 않고 관망할 수도 있다.",
     dataset: "NOAA 지역별 산호 백화 자료, DHW 위험도, 산호 회복 속도",
     interaction: "터치 패드를 누르는 동안 가열·백화, 손을 떼면 회복, 구 드래그",
     reference: { x: 640, y: 350, scale: 1.28 },
   },
   {
-    id: "food", number: "04", ko: "한 끼의 무게", en: "The Weight of a Meal", maker: "황인태", source: "/food?embed=1",
+    id: "food", number: "4", ko: "한 끼의 무게", en: "The Weight of a Meal", maker: "황인태", source: "/food?embed=1",
     description: "〈한 끼의 무게〉는 KAIST 교내 식당 메뉴를 탄소 데이터로 번역한다. 메뉴의 주요 식재료군과 대표 제공량별 배출계수를 바탕으로 예상 배출량을 계산하고, 서로 다른 색과 부피의 토큰으로 구 안에 쌓는다. 바깥 구는 한 사람의 하루 탄소예산 5.5 kg CO₂e를 나타낸다.",
     dataset: "KAIST 공식 식단, 18개 식재료군별 탄소배출계수, 5.5 kg CO₂e 하루 예산",
     interaction: "날짜·식당·끼니 선택, 물리 토큰 낙하, 구 드래그/확대",
