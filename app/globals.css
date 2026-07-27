@@ -468,10 +468,10 @@ a { color: inherit; }
 /* Original-prototype presentation: artwork is never re-rendered by the shell. */
 .prototype-shell {
   --p-ink: #f1f0ea;
-  --p-line: #353532;
+  --p-line: #7f7f7f;
   --p-bg: #000;
-  --p-surface: #070707;
-  --p-surface-2: #050505;
+  --p-surface: #000;
+  --p-surface-2: #000;
   --p-muted: #85857f;
   --p-soft: #b7b6b0;
   width: 100%; height: 100svh; min-height: 640px; overflow: hidden;
@@ -481,10 +481,10 @@ a { color: inherit; }
 }
 .prototype-shell[data-theme="light"] {
   --p-ink: #11110f;
-  --p-line: #d5d5d0;
+  --p-line: #808080;
   --p-bg: #fff;
   --p-surface: #fff;
-  --p-surface-2: #fafafa;
+  --p-surface-2: #fff;
   --p-muted: #686862;
   --p-soft: #383834;
 }
@@ -595,7 +595,7 @@ a { color: inherit; }
 .tablet-interface .panel-tabs { flex: 0 0 46px; }
 .tablet-interface .panel-tabs button { display: grid; height: 100%; place-items: center; font-weight: 500; }
 .tablet-interface .panel-tabs button::after { display: none; }
-.tablet-interface .panel-tabs button.active { background: rgb(255 255 255 / .08); color: var(--p-ink); font-weight: 600; }
+.tablet-interface .panel-tabs button.active { background: var(--p-ink); color: var(--p-bg); font-weight: 600; }
 .tablet-heading {
   flex: 0 0 34px;
   display: flex;
@@ -649,15 +649,15 @@ a { color: inherit; }
   pointer-events: none;
 }
 .enso-band { transition: fill 180ms ease; }
-.enso-band.warm { fill: rgb(194 96 74 / .18); }
-.enso-band.cool { fill: rgb(73 114 173 / .2); }
-.enso-chart.phase-warm .enso-band.warm { fill: rgb(194 96 74 / .48); }
-.enso-chart.phase-cool .enso-band.cool { fill: rgb(73 114 173 / .5); }
+.enso-band.warm { fill: #282828; }
+.enso-band.cool { fill: #151515; }
+.enso-chart.phase-warm .enso-band.warm { fill: #4b4b4b; }
+.enso-chart.phase-cool .enso-band.cool { fill: #383838; }
 .enso-threshold { stroke: none; }
 .enso-zero { stroke: var(--p-ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .enso-line { fill: none; stroke: var(--p-ink); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .enso-cursor { stroke: var(--p-ink); stroke-width: 2; vector-effect: non-scaling-stroke; }
-.enso-point { fill: var(--p-bg); stroke: var(--p-ink); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.enso-point { fill: var(--p-ink); stroke: none; }
 .enso-chart text { fill: var(--p-muted); font-size: 12px; font-weight: 500; letter-spacing: .02em; pointer-events: none; }
 .enso-chart text.warm,
 .enso-chart text.cool { fill: var(--p-ink); paint-order: normal; stroke: none; }
@@ -753,7 +753,7 @@ a { color: inherit; }
   border: 1px solid var(--p-ink);
   background: var(--p-surface);
   color: var(--p-ink);
-  box-shadow: 0 12px 28px rgb(0 0 0 / .28);
+  box-shadow: none;
 }
 .food-calendar { left: 0; padding: 10px; }
 .food-calendar header { height: 28px; display: grid; grid-template-columns: 28px 1fr 28px; align-items: center; margin-bottom: 6px; }
@@ -797,8 +797,8 @@ a { color: inherit; }
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  border: 1px solid rgb(255 255 255 / .28);
-  box-shadow: inset 1px 1px 0 rgb(255 255 255 / .18), inset -1px -1px 0 rgb(0 0 0 / .3);
+  border: 1px solid var(--p-line);
+  box-shadow: none;
 }
 .food-legend b { overflow: hidden; color: #c5c3bc; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .food-legend em { color: #777771; font-size: 12px; font-style: normal; }
@@ -927,11 +927,10 @@ a { color: inherit; }
   font-weight: 600;
 }
 
-/* Two-size high-contrast typography study. */
+/* Monochrome caption system: 24px display, 12px information. */
 .interface-column,
 .interface-column * {
   color: var(--p-ink);
-  font-weight: 600;
   letter-spacing: 0;
   opacity: 1;
 }
@@ -949,20 +948,29 @@ a { color: inherit; }
 .interface-column .food-calendar strong,
 .interface-column .food-cafeteria-menu button {
   color: var(--p-ink) !important;
-  font-size: 16px !important;
-  font-weight: 600 !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
   letter-spacing: 0 !important;
   opacity: 1 !important;
 }
 .interface-column .work-heading h1 {
   color: var(--p-ink) !important;
-  font-size: 32px !important;
+  font-size: 24px !important;
   font-weight: 600 !important;
 }
+.interface-column :where(.research-heading h2, .panel-tabs button.active, .panel-primary, .panel-touch b, .enso-state strong) {
+  font-weight: 600 !important;
+}
+.interface-column :where(.work-heading h1, .work-heading p, .work-description, .description-view dd, .research-heading h2) {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  text-wrap: pretty;
+}
+.interface-column :where(.work-heading h1, .research-heading h2) { text-wrap: balance; }
 .enso-chart text {
   fill: var(--p-ink);
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   letter-spacing: 0;
   opacity: 1;
 }
@@ -971,26 +979,38 @@ a { color: inherit; }
 .enso-state.cool strong,
 .enso-state.cool output { color: var(--p-ink) !important; }
 .original-controls input[type="range"]::-webkit-slider-thumb { border: 0; }
-.panel-primary,
-.panel-segments button.active,
-.panel-touch.active,
-.food-calendar-days button.active {
-  background: var(--p-line) !important;
-  color: var(--p-ink) !important;
+.interface-column .panel-primary,
+.interface-column .panel-segments button.active,
+.interface-column .panel-touch.active,
+.interface-column .food-calendar-days button.active,
+.interface-column .tablet-interface .panel-tabs button.active {
+  background: var(--p-ink) !important;
+  color: var(--p-bg) !important;
 }
-.tablet-interface .panel-tabs button.active { background: rgb(255 255 255 / .08); }
-.prototype-shell[data-theme="light"] .tablet-interface .panel-tabs button.active { background: rgb(0 0 0 / .07); }
-.theme-toggle span { display: inline-flex; align-items: center; gap: 6px; }
-.theme-toggle span.active::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: currentColor;
+.interface-column .panel-primary *,
+.interface-column .panel-segments button.active *,
+.interface-column .panel-touch.active *,
+.interface-column .food-calendar-days button.active *,
+.interface-column .tablet-interface .panel-tabs button.active * { color: var(--p-bg) !important; }
+.theme-toggle span { display: inline; color: var(--p-ink) !important; }
+.theme-toggle span.active {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
 }
+.theme-toggle span.active::before { display: none; }
+.theme-toggle:focus,
+.theme-toggle:focus-visible { outline: 0; }
 .food-calendar-days button,
-.food-calendar-days > span { height: 28px; }
+.food-calendar-days > span { height: 25px; }
+.tablet-interface .original-controls:not(.enso-controls):not(.food-controls):not(.coral-controls) > label {
+  flex: 1 1 auto;
+  align-content: center;
+}
+.prototype-shell[data-theme="light"] .enso-band.warm { fill: #e4e4e4; }
+.prototype-shell[data-theme="light"] .enso-band.cool { fill: #f2f2f2; }
+.prototype-shell[data-theme="light"] .enso-chart.phase-warm .enso-band.warm { fill: #b8b8b8; }
+.prototype-shell[data-theme="light"] .enso-chart.phase-cool .enso-band.cool { fill: #cccccc; }
 
 @media (max-width: 900px) {
   .prototype-shell { height: auto; min-height: 100svh; grid-template-columns: 1fr; grid-template-rows: 56svh auto; overflow: visible; }
