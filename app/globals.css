@@ -824,7 +824,7 @@ a { color: inherit; }
 .work-description { margin: 0; padding: 0 18px 18px; border-bottom: 0; color: #c2c1bb; font: 14px/1.62 var(--font-pretendard), Pretendard, sans-serif; word-break: keep-all; }
 .description-view dl { display: grid; gap: 0; margin: 0; }
 .description-view dl { border-top: 1px solid var(--p-line); }
-.description-view dl div { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 28px; padding: 12px 18px; border-bottom: 0; }
+.description-view dl div { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 28px; padding: 12px 18px; border-bottom: 1px solid var(--p-line); }
 .description-view dt { color: #777771; font-size: 12px; letter-spacing: .05em; }
 .description-view dd { margin: 0; color: #a09f99; font-size: 12px; line-height: 1.55; }
 
@@ -927,7 +927,7 @@ a { color: inherit; }
   font-weight: 600;
 }
 
-/* Monochrome caption system: 24px display, 12px information. */
+/* Four-size caption system: 32px, 24px, 16px, and 12px only. */
 .interface-column,
 .interface-column * {
   color: var(--p-ink);
@@ -955,7 +955,7 @@ a { color: inherit; }
 }
 .interface-column .work-heading h1 {
   color: var(--p-ink) !important;
-  font-size: 24px !important;
+  font-size: 32px !important;
   font-weight: 600 !important;
 }
 .interface-column :where(.research-heading h2, .panel-tabs button.active, .panel-primary, .panel-touch b, .enso-state strong) {
@@ -1011,6 +1011,66 @@ a { color: inherit; }
 .prototype-shell[data-theme="light"] .enso-band.cool { fill: #f2f2f2; }
 .prototype-shell[data-theme="light"] .enso-chart.phase-warm .enso-band.warm { fill: #b8b8b8; }
 .prototype-shell[data-theme="light"] .enso-chart.phase-cool .enso-band.cool { fill: #cccccc; }
+
+/* Four-level hierarchy. */
+.interface-column .research-heading h2,
+.interface-column .work-description {
+  font-size: 16px !important;
+}
+.interface-column .panel-tabs button span,
+.interface-column .panel-primary,
+.interface-column .panel-touch b,
+.interface-column .coral-metrics strong,
+.interface-column .food-summary b {
+  font-size: 16px !important;
+}
+.interface-column .enso-state strong {
+  font-size: 24px !important;
+}
+.interface-column .enso-state output {
+  font-size: 16px !important;
+}
+
+/* ENSO alone retains categorical color as data; the surrounding UI stays monochrome. */
+.enso-band.warm { fill: #4a2520; }
+.enso-band.cool { fill: #1d2b45; }
+.enso-chart.phase-warm .enso-band.warm { fill: #b75442; }
+.enso-chart.phase-cool .enso-band.cool { fill: #416da9; }
+.enso-chart text.warm { fill: #f08a72; }
+.enso-chart text.cool { fill: #83aef0; }
+.interface-column .enso-state.warm strong,
+.interface-column .enso-state.warm output { color: #f08a72 !important; }
+.interface-column .enso-state.cool strong,
+.interface-column .enso-state.cool output { color: #83aef0 !important; }
+.prototype-shell[data-theme="light"] .enso-band.warm { fill: #f1d8d2; }
+.prototype-shell[data-theme="light"] .enso-band.cool { fill: #dbe6f5; }
+.prototype-shell[data-theme="light"] .enso-chart.phase-warm .enso-band.warm { fill: #d58a79; }
+.prototype-shell[data-theme="light"] .enso-chart.phase-cool .enso-band.cool { fill: #88a9d5; }
+.prototype-shell[data-theme="light"] .enso-chart text.warm,
+.prototype-shell[data-theme="light"] .enso-state.warm strong,
+.prototype-shell[data-theme="light"] .enso-state.warm output { color: #9e3e2f !important; fill: #9e3e2f; }
+.prototype-shell[data-theme="light"] .enso-chart text.cool,
+.prototype-shell[data-theme="light"] .enso-state.cool strong,
+.prototype-shell[data-theme="light"] .enso-state.cool output { color: #315f9e !important; fill: #315f9e; }
+
+/* Tablet separators are deliberately heavier than the 1px caption grid. */
+.tablet-interface { border-width: 2px; }
+.tablet-interface .panel-tabs { border-bottom-width: 2px; }
+.tablet-interface .panel-tabs button { border-right-width: 2px; }
+.tablet-interface .original-controls > label,
+.tablet-interface .enso-chart,
+.tablet-interface .enso-state,
+.tablet-interface .coral-metrics,
+.tablet-interface .coral-metrics span,
+.tablet-interface .food-fields,
+.tablet-interface .food-controls .panel-segments,
+.tablet-interface .food-summary { border-width: 2px; }
+.tablet-interface .food-date-control > button { border-right-width: 2px; }
+.tablet-interface .food-date-control > button:last-child { border-left-width: 2px; }
+.tablet-interface .food-cafeteria-trigger,
+.tablet-interface .food-summary span + span { border-left-width: 2px; }
+.food-calendar,
+.food-cafeteria-menu { top: 90px; }
 
 @media (max-width: 900px) {
   .prototype-shell { height: auto; min-height: 100svh; grid-template-columns: 1fr; grid-template-rows: 56svh auto; overflow: visible; }
