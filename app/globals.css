@@ -767,21 +767,27 @@ a { color: inherit; }
 .food-calendar-days > span { min-width: 0; height: 25px; display: grid; place-items: center; font-size: 12px; font-weight: 400; }
 .food-calendar-days button:hover { background: var(--p-line); }
 .food-calendar-days button.active { background: var(--p-ink); color: var(--p-bg); font-weight: 600; }
-.food-cafeteria-menu { right: 0; display: grid; padding: 5px; }
+.food-cafeteria-menu { right: 0; display: grid; padding: 0; }
 .food-cafeteria-menu button {
-  min-height: 34px;
+  min-height: 40px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 9px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--p-line);
   font-size: 12px;
   font-weight: 400;
   text-align: left;
 }
-.food-cafeteria-menu button:hover,
-.food-cafeteria-menu button.active { background: var(--p-line); }
-.food-cafeteria-menu button.active { font-weight: 600; }
-.selected-mark { width: 5px; height: 5px; flex: 0 0 auto; border-radius: 50%; background: var(--p-ink); }
+.food-cafeteria-menu button:last-child { border-bottom: 0; }
+.food-cafeteria-menu button:hover { background: var(--p-ink); color: var(--p-bg); }
+.food-cafeteria-menu button.active {
+  background: transparent;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
 .food-controls .panel-segments { border: 0; border-bottom: 1px solid var(--p-line); }
 .food-summary { display: grid; grid-template-columns: 1fr 1fr; border: 0; border-bottom: 1px solid var(--p-line); }
 .food-summary span { display: flex; justify-content: space-between; gap: 5px; padding: 6px 8px; color: #777771; font-size: 12px; letter-spacing: .02em; }
@@ -1079,8 +1085,12 @@ a { color: inherit; }
 .food-calendar-week span { height: 24px; }
 .food-calendar-days button,
 .food-calendar-days > span { height: 24px; }
-.food-cafeteria-menu { padding: 4px; }
-.food-cafeteria-menu button { min-height: 32px; padding: 0 8px; }
+.food-cafeteria-menu { padding: 0; }
+.food-cafeteria-menu button { min-height: 40px; padding: 0 16px; }
+.interface-column .food-cafeteria-menu button:hover,
+.interface-column .food-cafeteria-menu button:hover span {
+  color: var(--p-bg) !important;
+}
 .food-summary span { gap: 8px; padding: 8px; }
 .food-details { padding: 8px 16px; }
 .food-menu { gap: 8px; padding-bottom: 8px; margin-bottom: 8px; }

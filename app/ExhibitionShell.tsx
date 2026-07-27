@@ -407,7 +407,7 @@ export default function ExhibitionShell() {
                   postFrame({ type: "FOOD_CONTROL", cafeteria: id });
                 }}
               >
-                <span>{label}</span>{id === foodCafeteria && <i className="selected-mark" aria-hidden="true" />}
+                <span>{label}</span>
               </button>
             ))}
           </div>
