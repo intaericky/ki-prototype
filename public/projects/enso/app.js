@@ -359,6 +359,10 @@ function updateSummary() {
     };
     if (!state.episodesSent) {
       message.episodes = ensoEpisodes();
+      message.series = state.nino.map((point) => ({
+        date: point.date,
+        value: point.rolling,
+      }));
       state.episodesSent = true;
     }
     window.parent.postMessage(message, window.location.origin);

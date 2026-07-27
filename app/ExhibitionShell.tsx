@@ -6,6 +6,7 @@ type ProjectId = "enso" | "daisy" | "coral" | "food";
 type Theme = "dark" | "light";
 type EnsoEpisode = { phase: "El Niño" | "La Niña"; start: number; end: number };
 type EnsoStatus = { date: string; value: number; phase: "El Niño" | "La Niña" | "Neutral"; episodes: EnsoEpisode[] };
+type EnsoPoint = { date: string; value: number };
 type CoralStatus = { anomaly: number; dhw: number; coverage: number; alert: string; influence: number; recovery: string; active: boolean };
 type FoodLegendItem = { id: string; label: string; kg: number; color: string };
 type FoodStatus = { totalKg: number; budgetUse: number; legend: FoodLegendItem[]; menu: string[]; optionTitle: string };
@@ -57,6 +58,42 @@ function koreaDate() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
 
+function EnsoTimelineChart({ series, progress, onChange }: { series: EnsoPoint[]; progress: number; onChange: (value: number) => void }) {
+  const width = 420;
+  const height = 118;
+  const plotTop = 8;
+  const plotBottom = 101;
+  const min = -2.5;
+  const max = 2.5;
+  const xFor = (index: number) => index / Math.max(1, series.length - 1) * width;
+  const yFor = (value: number) => plotTop + (max - Math.max(min, Math.min(max, value))) / (max - min) * (plotBottom - plotTop);
+  const path = series.map((point, index) => `${index ? "L" : "M"}${xFor(index).toFixed(2)},${yFor(point.value).toFixed(2)}`).join(" ");
+  const cursorX = progress / 1000 * width;
+  const cursorIndex = Math.round(progress / 1000 * Math.max(0, series.length - 1));
+  const cursorValue = series[cursorIndex]?.value ?? 0;
+
+  return (
+    <div className="enso-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="1982년부터 2025년까지의 Niño 3.4 해수면 온도 편차">
+        <rect className="enso-band warm" x="0" y={plotTop} width={width} height={yFor(.5) - plotTop} />
+        <rect className="enso-band cool" x="0" y={yFor(-.5)} width={width} height={plotBottom - yFor(-.5)} />
+        <line className="enso-threshold warm" x1="0" x2={width} y1={yFor(.5)} y2={yFor(.5)} />
+        <line className="enso-zero" x1="0" x2={width} y1={yFor(0)} y2={yFor(0)} />
+        <line className="enso-threshold cool" x1="0" x2={width} y1={yFor(-.5)} y2={yFor(-.5)} />
+        <text className="warm" x="7" y={yFor(.5) - 5}>EL NIÑO +0.5°C</text>
+        <text className="cool" x="7" y={yFor(-.5) + 14}>LA NIÑA −0.5°C</text>
+        {path && <path className="enso-line" d={path} />}
+        <line className="enso-cursor" x1={cursorX} x2={cursorX} y1={plotTop} y2={plotBottom} />
+        <circle className="enso-point" cx={cursorX} cy={yFor(cursorValue)} r="3.5" />
+        <text className="enso-year start" x="7" y="114">1982</text>
+        <text className="enso-chart-title" x={width / 2} y="114">NIÑO 3.4 SST ANOMALY</text>
+        <text className="enso-year end" x={width - 7} y="114">2025</text>
+      </svg>
+      <input aria-label="ENSO timeline" type="range" min="0" max="1000" value={progress} onInput={(event) => onChange(Number(event.currentTarget.value))} />
+    </div>
+  );
+}
+
 export default function ExhibitionShell() {
   const stageRef = useRef<HTMLElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -70,6 +107,7 @@ export default function ExhibitionShell() {
   const [ensoTime, setEnsoTime] = useState(1000);
   const [ensoHeight, setEnsoHeight] = useState(0);
   const [ensoPlaying, setEnsoPlaying] = useState(false);
+  const [ensoSeries, setEnsoSeries] = useState<EnsoPoint[]>([]);
   const [ensoStatus, setEnsoStatus] = useState<EnsoStatus>({ date: "2025-12-01", value: 0, phase: "Neutral", episodes: [] });
   const [coralTouch, setCoralTouch] = useState(false);
   const [coralStatus, setCoralStatus] = useState<CoralStatus>({ anomaly: 0, dhw: 0, coverage: 0, alert: "No stress", influence: 0, recovery: "stable", active: false });
@@ -161,6 +199,11 @@ export default function ExhibitionShell() {
     const receive = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || !event.data) return;
       if (event.data.type === "ENSO_STATUS") {
+        if (Array.isArray(event.data.series)) {
+          setEnsoSeries(event.data.series
+            .map((point: EnsoPoint) => ({ date: String(point.date), value: Number(point.value) }))
+            .filter((point: EnsoPoint) => point.date && Number.isFinite(point.value)));
+        }
         setEnsoStatus((current) => ({
           date: event.data.date,
           value: Number(event.data.value) || 0,
@@ -204,6 +247,11 @@ export default function ExhibitionShell() {
   };
 
   const postFrame = (message: unknown) => frameRef.current?.contentWindow?.postMessage(message, window.location.origin);
+  const updateEnsoTime = (normalized: number) => {
+    setEnsoTime(normalized);
+    const slider = frameRef.current?.contentDocument?.getElementById("timeSlider") as HTMLInputElement | null;
+    if (slider) frameControl("timeSlider", String(Math.round(normalized / 1000 * Number(slider.max))));
+  };
   const fit = stageSize.height / 720;
   const visualScale = fit * active.reference.scale;
   const frameStyle = {
@@ -220,10 +268,8 @@ export default function ExhibitionShell() {
       const dateLabel = new Intl.DateTimeFormat("en", { month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${ensoStatus.date}T00:00:00Z`));
       return (
       <div className="original-controls enso-controls">
-        <label><span>ENSO TIMELINE <output>{ensoTime === 1000 ? "LATEST" : `${Math.round(1982 + ensoTime / 1000 * 43)}`}</output></span><input type="range" min="0" max="1000" value={ensoTime} onInput={(event) => { const normalized = Number(event.currentTarget.value); setEnsoTime(normalized); const slider = frameRef.current?.contentDocument?.getElementById("timeSlider") as HTMLInputElement | null; if (slider) frameControl("timeSlider", String(Math.round(normalized / 1000 * Number(slider.max)))); }} /></label>
-        <div className="enso-episodes" aria-label="ENSO episode timeline">{ensoStatus.episodes.map((episode, index) => <i key={`${episode.phase}-${index}`} className={episode.phase === "El Niño" ? "warm" : "cool"} style={{ left: `${episode.start * 100}%`, width: `${Math.max(.35, (episode.end - episode.start) * 100)}%` }} />)}</div>
+        <EnsoTimelineChart series={ensoSeries} progress={ensoTime} onChange={updateEnsoTime} />
         <div className={`enso-state ${phaseClass}`}><span><b>{dateLabel}</b><em>3-MONTH NIÑO 3.4</em></span><strong>{ensoStatus.phase}</strong><output>{ensoStatus.value >= 0 ? "+" : ""}{ensoStatus.value.toFixed(2)}°C</output></div>
-        <div className="enso-thresholds"><span className="warm"><b>EL NIÑO</b><i>+0.5°C</i></span><span><b>NEUTRAL</b><i>±0.5°C</i></span><span className="cool"><b>LA NIÑA</b><i>−0.5°C</i></span></div>
         <label><span>RELIEF HEIGHT <output>{Math.round(ensoHeight * 100)}% R</output></span><input type="range" min="0" max="0.5" step="0.01" value={ensoHeight} onInput={(event) => { setEnsoHeight(Number(event.currentTarget.value)); frameControl("heightScaleSlider", event.currentTarget.value); }} /></label>
         <button className="panel-primary" onClick={() => { frameControl("playButton"); setEnsoPlaying((value) => !value); }}>{ensoPlaying ? "PAUSE" : "PLAY"}</button>
       </div>
