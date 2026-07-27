@@ -157,7 +157,7 @@ export default function TokenGlobe({ tokens, resetKey, budgetKg, theme = "dark" 
     renderer.toneMappingExposure = 1.08;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.setClearColor(0x000000, 0);
+    renderer.setClearColor(theme === "light" ? 0xffffff : 0x000000, 1);
     mount.appendChild(renderer.domElement);
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
