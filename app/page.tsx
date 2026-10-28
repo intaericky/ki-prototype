@@ -9,6 +9,14 @@ const PAGES = [
     ],
   },
   {
+    group: "Visual tests",
+    note: "Data-free scenes for trying ideas on the sphere. Each has its own display mode (press F or add ?display).",
+    links: [
+      { href: "/sphere-test-ripples", title: "Ripples", text: "White sphere; click anywhere to send large waves across it." },
+      { href: "/sphere-test-shell", title: "Open shell", text: "Thick shell with an anamorphic front window that opens; small balls fall in and fill it." },
+    ],
+  },
+  {
     group: "Earlier presentation",
     note: "Climate data artworks for the spherical display: ENSO, Daisyworld, Coral Bleaching, KAIST cafeteria.",
     links: [{ href: "/exhibition", title: "Exhibition", text: "The previous presentation, unchanged." }],

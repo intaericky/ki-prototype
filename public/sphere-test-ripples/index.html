@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sampling Sphere · Ripples test</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/sphere-tests/tests.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+<header class="bar">
+  <nav class="seg" aria-label="Scene"><a href="/sphere-studio">Main studio</a><a href="/sphere-test-ripples" aria-current="page">Ripples test</a><a href="/sphere-test-shell">Shell test</a></nav>
+  <div class="seg" id="segView"><button data-v="preview">Sphere preview</button><button data-v="frame">360 frame</button></div>
+  <span class="spacer"></span>
+  <button class="btn" id="autoBtn">Auto drops</button>
+  <button class="btn" id="clearBtn">Clear</button>
+  <button class="btn" id="displayBtn">Display mode (F)</button>
+</header>
+<details class="panel" id="panel" open>
+  <summary>Waves</summary>
+  <div id="sliders"></div>
+  <div class="row"><button class="btn" id="defaults">Defaults</button></div>
+</details>
+<p class="note" id="note">Click the sphere (or the 360 frame) to drop a wave. Drag to turn the preview. Display mode shows only the 360 frame, stretched to fill the screen; move the mouse to bring the controls back.</p>
+<script type="module">
+import * as THREE from '/sphere-assets/vendor/three.module.min.js';
+const $ = id => document.getElementById(id), PI = Math.PI, D2R = PI/180;
+
+/* sphere-local convention for these tests: lon 0 = +z (centre of the 360 frame), lat up = +y */
+const P = {wave:28, speed:22, amp:0.05, decay:9, crests:2.5, relief:1, lightAz:-55, lightEl:28, every:3};
+const DEF = {...P};
+const SL = [
+  ['wave', 'Wavelength', 6, 90, 1, v => v + '°'],
+  ['speed', 'Speed', 2, 90, 1, v => v + '°/s'],
+  ['amp', 'Wave height', 0.005, 0.15, 0.001, v => (v*6371).toFixed(0) + ' km'],
+  ['decay', 'Fades over', 1, 40, 0.5, v => v + ' s'],
+  ['crests', 'Crests per wave', 0.5, 8, 0.1, v => v.toFixed(1)],
+  ['relief', 'Relief in preview', 0, 3, 0.05, v => v.toFixed(2) + '×'],
+  ['lightAz', 'Light direction', -180, 180, 1, v => v + '°'],
+  ['lightEl', 'Light height', 3, 85, 1, v => v + '°'],
+  ['every', 'Auto drop every', 0.5, 15, 0.5, v => v + ' s']];
+const inputs = {};
+for (const [k, name, mn, mx, st, fmt] of SL) {
+  const l = document.createElement('label');
+  l.innerHTML = `<span>${name}</span><output></output><input type="range" min="${mn}" max="${mx}" step="${st}">`;
+  const inp = l.querySelector('input'), out = l.querySelector('output');
+  inp.value = P[k]; out.textContent = fmt(P[k]);
+  inp.addEventListener('input', () => { P[k] = +inp.value; out.textContent = fmt(P[k]); });
+  inputs[k] = {inp, out, fmt}; $('sliders').append(l);
+}
+$('defaults').onclick = () => { for (const k in DEF) { P[k] = DEF[k]; inputs[k].inp.value = DEF[k]; inputs[k].out.textContent = inputs[k].fmt(DEF[k]); } };
+
+/* renderer */
+const canvas = $('gl');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 1);
+const half = renderer.capabilities.isWebGL2 ? THREE.HalfFloatType : THREE.UnsignedByteType;
+const rt = (w, h, type) => new THREE.WebGLRenderTarget(w, h, {type, minFilter:THREE.LinearFilter, magFilter:THREE.LinearFilter, depthBuffer:false, wrapS:THREE.RepeatWrapping});
+const heightRT = rt(1024, 512, half); heightRT.texture.wrapS = THREE.RepeatWrapping;
+const frameRT = rt(2048, 1024, THREE.UnsignedByteType); frameRT.texture.wrapS = THREE.RepeatWrapping;
+const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), quadScene = new THREE.Scene();
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)); quad.frustumCulled = false; quadScene.add(quad);
+const run = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(quadScene, quadCam); };
+const VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const DIR = `vec3 dirOf(vec2 uv){ float lon = (uv.x - 0.5)*6.2831853, lat = (uv.y - 0.5)*3.1415927; return vec3(sin(lon)*cos(lat), sin(lat), cos(lon)*cos(lat)); }`;
+
+/* the wave field: a sum of travelling wave packets on the sphere, analytic, so smooth at any size */
+const MAXS = 24;
+const srcs = [];   // {dir:Vector3, t0}
+const heightMat = new THREE.ShaderMaterial({vertexShader:VS, uniforms:{uS:{value:Array.from({length:MAXS}, () => new THREE.Vector4())}, uN:{value:0},
+    uT:{value:0}, uK:{value:1}, uC:{value:1}, uA:{value:0.05}, uTau:{value:9}, uCr:{value:2.5}},
+  fragmentShader:`#define MAXS ${MAXS}
+    uniform vec4 uS[MAXS]; uniform int uN; uniform float uT; uniform float uK; uniform float uC; uniform float uA; uniform float uTau; uniform float uCr; varying vec2 vUv;
+    ${DIR}
+    void main(){
+      vec3 p = dirOf(vUv); float h = 0.0;
+      for (int i = 0; i < MAXS; i++) { if (i >= uN) break;
+        float age = uT - uS[i].w; if (age < 0.0) continue;
+        float th = acos(clamp(dot(p, uS[i].xyz), -1.0, 1.0));
+        float front = uC*age, lambda = 6.2831853/uK;
+        float x = (th - front) / (uCr*lambda);              // packet: a few crests riding the front
+        float env = exp(-x*x*4.0) * exp(-age/uTau);
+        float spread = 1.0/sqrt(max(sin(max(th, 0.12)), 0.12)) * 0.5;   // rings thin out as they widen, focus at the far side
+        h += uA * env * spread * cos(uK*(th - front));
+      }
+      gl_FragColor = vec4(h, 0.0, 0.0, 1.0);
+    }`});
+/* shading straight into the 360 frame: every point lit from its own upper side, as on the main sphere */
+const shadeMat = new THREE.ShaderMaterial({vertexShader:VS, uniforms:{uH:{value:heightRT.texture}, uAz:{value:1}, uEl:{value:0.5}, uRel:{value:1}},
+  fragmentShader:`uniform sampler2D uH; uniform float uAz; uniform float uEl; uniform float uRel; varying vec2 vUv;
+    ${DIR}
+    void main(){
+      vec2 tx = vec2(1.0/1024.0, 1.0/512.0);
+      float lat = (vUv.y - 0.5)*3.1415927, cl = max(cos(lat), 0.05);
+      float dLon = (texture2D(uH, vUv + vec2(tx.x, 0.0)).r - texture2D(uH, vUv - vec2(tx.x, 0.0)).r) / (2.0*tx.x*6.2831853);
+      float dLat = (texture2D(uH, vUv + vec2(0.0, tx.y)).r - texture2D(uH, vUv - vec2(0.0, tx.y)).r) / (2.0*tx.y*3.1415927);
+      vec3 n = normalize(vec3(-max(uRel, 0.3)*dLon/cl, -max(uRel, 0.3)*dLat, 1.0));   // tangent space: x east, y north, z out
+      vec3 L = normalize(vec3(sin(uAz)*cos(uEl), cos(uAz)*cos(uEl), sin(uEl)));
+      float d = max(dot(n, L), 0.0), base = sin(uEl);
+      float g = 0.30 + 0.62*clamp(d/max(base, 0.2)*0.8, 0.0, 1.3);
+      vec3 H = normalize(L + vec3(0.0, 0.0, 1.0)); float sp = pow(max(dot(n, H), 0.0), 60.0)*0.12;
+      vec3 c = vec3(g + sp) * vec3(1.0, 0.995, 0.985);
+      gl_FragColor = vec4(pow(clamp(c, 0.0, 1.0), vec3(0.95)), 1.0);
+    }`});
+
+/* views: a displaced sphere wearing the frame, or the frame itself stretched to the screen */
+const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(32, 1, 0.05, 50);
+const sphereMat = new THREE.ShaderMaterial({uniforms:{uF:{value:frameRT.texture}, uH:{value:heightRT.texture}, uRel:{value:1}},
+  vertexShader:`uniform sampler2D uH; uniform float uRel; varying vec3 vD;
+    vec2 uvOf(vec3 d){ return vec2(atan(d.x, d.z)/6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0))/3.1415927 + 0.5); }
+    void main(){ vec3 d = normalize(position); vD = d; float h = texture2D(uH, uvOf(d)).r*uRel;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(d*(1.0 + h), 1.0); }`,
+  fragmentShader:`uniform sampler2D uF; varying vec3 vD;
+    vec2 uvOf(vec3 d){ return vec2(atan(d.x, d.z)/6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0))/3.1415927 + 0.5); }
+    void main(){ gl_FragColor = vec4(texture2D(uF, uvOf(normalize(vD))).rgb, 1.0); }`});
+const ball = new THREE.Mesh(new THREE.SphereGeometry(1, 512, 256), sphereMat); scene.add(ball);
+const copyMat = new THREE.ShaderMaterial({vertexShader:VS, uniforms:{uF:{value:frameRT.texture}},
+  fragmentShader:`uniform sampler2D uF; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(uF, vUv).rgb, 1.0); }`});
+
+let view = 'preview', yaw = 0.4, pitch = 0.25, auto = true, lastAuto = 0, display = false;
+const syncView = () => $('segView').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === view));
+$('segView').onclick = e => { const b = e.target.closest('button'); if (b) { view = b.dataset.v; syncView(); } }; syncView();
+const syncAuto = () => $('autoBtn').setAttribute('aria-pressed', auto); syncAuto();
+$('autoBtn').onclick = () => { auto = !auto; syncAuto(); };
+$('clearBtn').onclick = () => { srcs.length = 0; };
+
+function drop(dir){ srcs.push({dir:dir.clone().normalize(), t0:performance.now()/1000}); while (srcs.length > MAXS) srcs.shift(); }
+const randomDir = () => { const z = Math.random()*2 - 1, a = Math.random()*2*PI, r = Math.sqrt(1 - z*z); return new THREE.Vector3(r*Math.cos(a), z, r*Math.sin(a)); };
+// click (not drag) drops a wave where the pointer is
+let down = null;
+canvas.addEventListener('pointerdown', e => { down = {x:e.clientX, y:e.clientY, yaw, pitch, moved:false}; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e => { if (!down) return; const dx = e.clientX - down.x, dy = e.clientY - down.y;
+  if (Math.hypot(dx, dy) > 4) down.moved = true;
+  if (down.moved && view === 'preview') { yaw = down.yaw + dx*0.006; pitch = Math.max(-1.4, Math.min(1.4, down.pitch + dy*0.006)); } });
+canvas.addEventListener('pointerup', e => { if (down && !down.moved) {
+    if (view === 'frame' || display) { const u = e.clientX/innerWidth, v = 1 - e.clientY/innerHeight; const lon = (u - 0.5)*2*PI, lat = (v - 0.5)*PI;
+      drop(new THREE.Vector3(Math.sin(lon)*Math.cos(lat), Math.sin(lat), Math.cos(lon)*Math.cos(lat))); }
+    else { const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2(e.clientX/innerWidth*2 - 1, -(e.clientY/innerHeight)*2 + 1), cam);
+      const hit = ray.intersectObject(ball)[0]; if (hit) drop(ball.worldToLocal(hit.point.clone())); } }
+  down = null; });
+canvas.addEventListener('wheel', e => { cam.zoom = Math.max(0.5, Math.min(4, cam.zoom*Math.exp(-e.deltaY*0.001))); cam.updateProjectionMatrix(); e.preventDefault(); }, {passive:false});
+
+// display mode: only the frame, controls hidden until the mouse moves
+let hideT;
+const wake = () => { document.body.classList.add('ui-on'); clearTimeout(hideT); hideT = setTimeout(() => document.body.classList.remove('ui-on'), 2500); };
+const setDisplay = on => { display = on; document.body.classList.toggle('display', on); if (on) { document.documentElement.requestFullscreen?.().catch(() => {}); wake(); } else if (document.fullscreenElement) document.exitFullscreen(); };
+$('displayBtn').onclick = () => setDisplay(!display);
+addEventListener('keydown', e => { if (e.key === 'f' || e.key === 'F') setDisplay(!display); if (e.key === 'Escape' && display) setDisplay(false); });
+addEventListener('pointermove', () => display && wake());
+if (new URLSearchParams(location.search).has('display')) { display = true; document.body.classList.add('display'); }
+
+function resize(){ renderer.setSize(innerWidth, innerHeight, false); cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+drop(new THREE.Vector3(0.3, 0.4, 1));
+
+function frame(){
+  const t = performance.now()/1000;
+  if (auto && t - lastAuto > P.every) { lastAuto = t; drop(randomDir()); }
+  const U = heightMat.uniforms;
+  srcs.forEach((s, i) => U.uS.value[i].set(s.dir.x, s.dir.y, s.dir.z, s.t0));
+  U.uN.value = srcs.length; U.uT.value = t; U.uK.value = 2*PI/(P.wave*D2R); U.uC.value = P.speed*D2R; U.uA.value = P.amp; U.uTau.value = P.decay; U.uCr.value = P.crests;
+  run(heightMat, heightRT);
+  shadeMat.uniforms.uAz.value = P.lightAz*D2R; shadeMat.uniforms.uEl.value = P.lightEl*D2R; shadeMat.uniforms.uRel.value = 1;
+  run(shadeMat, frameRT);
+  renderer.setRenderTarget(null);
+  if (display || view === 'frame') run(copyMat, null);
+  else {
+    sphereMat.uniforms.uRel.value = P.relief;
+    ball.rotation.set(pitch, yaw, 0, 'XYZ');
+    cam.position.set(0, 0, 4.4*Math.max(1, 0.9/cam.aspect)); cam.lookAt(0, 0, 0);
+    renderer.render(scene, cam);
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sampling Sphere · Shell test</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/sphere-tests/tests.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+<header class="bar">
+  <nav class="seg" aria-label="Scene"><a href="/sphere-studio">Main studio</a><a href="/sphere-test-ripples">Ripples test</a><a href="/sphere-test-shell" aria-current="page">Shell test</a></nav>
+  <div class="seg" id="segView"><button data-v="preview">Viewer preview</button><button data-v="frame">360 frame</button><button data-v="inside">Virtual scene</button></div>
+  <div class="seg" id="segWin"><button data-v="0">Closed</button><button data-v="1">Open</button><button data-v="2">Cycle</button></div>
+  <span class="spacer"></span>
+  <button class="btn" id="resetBalls">Reset balls</button>
+  <button class="btn" id="displayBtn">Display mode (F)</button>
+</header>
+<details class="panel" id="panel" open>
+  <summary>Shell</summary>
+  <div id="sliders"></div>
+  <div class="row"><button class="btn" id="defaults">Defaults</button></div>
+</details>
+<p class="note" id="note">The front quarter of the sphere is drawn from the viewer's eye, so from there the shell looks open and deep; the rest of the sphere stays a plain white shell. Viewer preview looks from that eye: drag to step away and see the trick bend, double-click to return.</p>
+<script type="module">
+import * as THREE from '/sphere-assets/vendor/three.module.min.js';
+const $ = id => document.getElementById(id), PI = Math.PI, D2R = PI/180;
+
+/* sphere-local convention: lon 0 = +z (centre of the 360 frame), lat up = +y; the physical sphere has radius 1 */
+const P = {winW:90, winH:110, thick:0.12, eyeDist:3, eyeLat:8, eyeLon:0, size:0.045, count:350, rate:15, gravity:2.2, bounce:0.25, light:1.2};
+const DEF = {...P};
+const SL = [
+  ['winW', 'Window width', 20, 160, 1, v => v + '°'],
+  ['winH', 'Window height', 20, 140, 1, v => v + '°'],
+  ['thick', 'Shell thickness', 0.03, 0.3, 0.005, v => v.toFixed(3)],
+  ['eyeDist', 'Viewer distance', 1.6, 8, 0.05, v => v.toFixed(2) + ' × radius'],
+  ['eyeLat', 'Viewer height', -40, 60, 1, v => v + '°'],
+  ['eyeLon', 'Viewer direction', -180, 180, 1, v => v + '°'],
+  ['size', 'Ball size', 0.015, 0.09, 0.001, v => v.toFixed(3)],
+  ['count', 'Number of balls', 20, 800, 10, v => v],
+  ['rate', 'Pour rate', 1, 60, 1, v => v + ' /s'],
+  ['gravity', 'Gravity', 0.3, 6, 0.05, v => v.toFixed(2)],
+  ['bounce', 'Bounce', 0, 0.8, 0.01, v => v.toFixed(2)],
+  ['light', 'Interior light', 0.2, 3, 0.05, v => v.toFixed(2)]];
+const inputs = {};
+for (const [k, name, mn, mx, st, fmt] of SL) {
+  const l = document.createElement('label');
+  l.innerHTML = `<span>${name}</span><output></output><input type="range" min="${mn}" max="${mx}" step="${st}">`;
+  const inp = l.querySelector('input'), out = l.querySelector('output');
+  inp.value = P[k]; out.textContent = fmt(P[k]);
+  inp.addEventListener('input', () => { P[k] = +inp.value; out.textContent = fmt(P[k]); });
+  inputs[k] = {inp, out, fmt}; $('sliders').append(l);
+}
+$('defaults').onclick = () => { for (const k in DEF) { P[k] = DEF[k]; inputs[k].inp.value = DEF[k]; inputs[k].out.textContent = inputs[k].fmt(DEF[k]); } };
+
+/* renderer */
+const canvas = $('gl');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 1);
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
+const SHELL = new THREE.Color(0.86, 0.855, 0.845);   // the plain outer shell, the same everywhere (display colour, not lit)
+
+/* ---------- the virtual scene: shell with a sliding window, its inner wall and rims, and the balls ---------- */
+const world = new THREE.Scene();
+world.add(new THREE.HemisphereLight(0xffffff, 0x3a3a3a, 0.9));
+const sun = new THREE.DirectionalLight(0xfff6ea, 2.2);
+sun.position.set(-1.2, 2.4, 1.6); sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048); Object.assign(sun.shadow.camera, {left:-1.2, right:1.2, top:1.2, bottom:-1.2, near:0.5, far:6}); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.01;
+world.add(sun);
+const shellGroup = new THREE.Group(); world.add(shellGroup);   // turned so the window faces the viewer
+const winU = {uA:{value:0}, uH:{value:0.9}, uC:{value:SHELL}};
+const winGLSL = `uniform float uA; uniform float uH; varying vec3 vL;
+  bool inWindow(vec3 d){ float lon = atan(d.x, d.z), lat = asin(clamp(d.y, -1.0, 1.0)); return abs(lon) < uA && abs(lat) < uH; }`;
+const outerMat = new THREE.ShaderMaterial({uniforms:winU, side:THREE.FrontSide, toneMapped:false,
+  vertexShader:`varying vec3 vL; void main(){ vL = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader:`uniform vec3 uC; ${winGLSL} void main(){ if (inWindow(normalize(vL))) discard; gl_FragColor = vec4(uC, 1.0); }`});
+const outer = new THREE.Mesh(new THREE.SphereGeometry(1, 256, 128), outerMat); shellGroup.add(outer);
+const innerMat = new THREE.MeshStandardMaterial({color:0xf1efea, roughness:0.85, side:THREE.BackSide});
+const inner = new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), innerMat); inner.receiveShadow = true; shellGroup.add(inner);
+const rimMat = new THREE.MeshStandardMaterial({color:0xf4f2ee, roughness:0.7, side:THREE.DoubleSide});
+const RIM = 40;   // rims: the cut faces of the shell, rebuilt as the window slides
+const rimGeo = new THREE.BufferGeometry();
+rimGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(4*(RIM + 1)*2*3), 3));
+{ const idx = []; for (let s = 0; s < 4; s++) for (let i = 0; i < RIM; i++) { const a = s*(RIM + 1)*2 + i*2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } rimGeo.setIndex(idx); }
+const rims = new THREE.Mesh(rimGeo, rimMat); rims.receiveShadow = true; shellGroup.add(rims);
+const dirOf = (lon, lat) => [Math.sin(lon)*Math.cos(lat), Math.sin(lat), Math.cos(lon)*Math.cos(lat)];
+function buildRims(a, h, ri){
+  const pos = rimGeo.attributes.position.array; let o = 0;
+  const put = (d, r) => { pos[o++] = d[0]*r; pos[o++] = d[1]*r; pos[o++] = d[2]*r; };
+  for (const sgn of [-1, 1]) for (let i = 0; i <= RIM; i++) { const d = dirOf(sgn*a, -h + 2*h*i/RIM); put(d, ri); put(d, 1); }   // left and right faces
+  for (const sgn of [-1, 1]) for (let i = 0; i <= RIM; i++) { const d = dirOf(-a + 2*a*i/RIM, sgn*h); put(d, ri); put(d, 1); }   // top and bottom faces
+  rimGeo.attributes.position.needsUpdate = true; rimGeo.computeVertexNormals(); rimGeo.computeBoundingSphere();
+  rims.visible = a > 0.002;
+}
+// balls
+const MAXB = 800;
+const ballGeo = new THREE.SphereGeometry(1, 28, 18);
+const balls = new THREE.InstancedMesh(ballGeo, new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.42, metalness:0}), MAXB);
+balls.castShadow = true; balls.receiveShadow = true; balls.count = 0; balls.frustumCulled = false; world.add(balls);
+const B = {x:new Float32Array(MAXB*3), v:new Float32Array(MAXB*3), r:new Float32Array(MAXB), s:new Float32Array(MAXB), n:0};
+let pourAcc = 0, phase = 'fill', phaseT = 0;
+function resetBalls(){ B.n = 0; balls.count = 0; pourAcc = 0; phase = 'fill'; phaseT = 0; }
+$('resetBalls').onclick = resetBalls;
+function spawn(ri){
+  if (B.n >= Math.min(MAXB, P.count)) return;
+  const i = B.n++, r = P.size*(0.75 + 0.5*Math.random()), a = Math.random()*2*PI, q = Math.sqrt(Math.random())*0.18;
+  B.r[i] = r; B.s[i] = 1;
+  B.x[i*3] = Math.cos(a)*q; B.x[i*3 + 1] = ri - r - 0.03 - Math.random()*0.04; B.x[i*3 + 2] = Math.sin(a)*q;
+  B.v[i*3] = (Math.random() - 0.5)*0.2; B.v[i*3 + 1] = -0.2; B.v[i*3 + 2] = (Math.random() - 0.5)*0.2;
+}
+// physics: gravity, ball-ball contacts on a hash grid, and the inner wall as a closed bowl (nothing leaves through the window)
+const grid = new Map();
+function step(dt, ri){
+  const n = B.n, x = B.x, v = B.v, g = P.gravity, e = P.bounce;
+  for (let i = 0; i < n; i++) { v[i*3 + 1] -= g*dt; x[i*3] += v[i*3]*dt; x[i*3 + 1] += v[i*3 + 1]*dt; x[i*3 + 2] += v[i*3 + 2]*dt; }
+  const cs = 2.6*P.size; grid.clear();
+  const key = (a, b, c) => ((a + 64)*128 + (b + 64))*128 + (c + 64);
+  for (let i = 0; i < n; i++) { const k = key(Math.floor(x[i*3]/cs), Math.floor(x[i*3 + 1]/cs), Math.floor(x[i*3 + 2]/cs)); let l = grid.get(k); if (!l) grid.set(k, l = []); l.push(i); }
+  for (let it = 0; it < 2; it++) for (let i = 0; i < n; i++) {
+    const cx = Math.floor(x[i*3]/cs), cy = Math.floor(x[i*3 + 1]/cs), cz = Math.floor(x[i*3 + 2]/cs);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+      const l = grid.get(key(cx + a, cy + b, cz + c)); if (!l) continue;
+      for (const j of l) { if (j <= i) continue;
+        const dx = x[j*3] - x[i*3], dy = x[j*3 + 1] - x[i*3 + 1], dz = x[j*3 + 2] - x[i*3 + 2], R = (B.r[i] + B.r[j])*Math.min(B.s[i], B.s[j]) || 1e-6;
+        const d2 = dx*dx + dy*dy + dz*dz; if (d2 >= R*R || d2 < 1e-12) continue;
+        const d = Math.sqrt(d2), nx = dx/d, ny = dy/d, nz = dz/d, pen = (R - d)*0.5;
+        x[i*3] -= nx*pen; x[i*3 + 1] -= ny*pen; x[i*3 + 2] -= nz*pen; x[j*3] += nx*pen; x[j*3 + 1] += ny*pen; x[j*3 + 2] += nz*pen;
+        const vn = (v[j*3] - v[i*3])*nx + (v[j*3 + 1] - v[i*3 + 1])*ny + (v[j*3 + 2] - v[i*3 + 2])*nz;
+        if (vn < 0) { const jimp = -(1 + e)*vn*0.5; v[i*3] -= jimp*nx; v[i*3 + 1] -= jimp*ny; v[i*3 + 2] -= jimp*nz; v[j*3] += jimp*nx; v[j*3 + 1] += jimp*ny; v[j*3 + 2] += jimp*nz; }
+      } }
+  }
+  for (let i = 0; i < n; i++) {
+    const lim = ri - B.r[i]*B.s[i], px = x[i*3], py = x[i*3 + 1], pz = x[i*3 + 2], d = Math.hypot(px, py, pz);
+    if (d > lim) { const nx = px/d, ny = py/d, nz = pz/d; x[i*3] = nx*lim; x[i*3 + 1] = ny*lim; x[i*3 + 2] = nz*lim;
+      const vn = v[i*3]*nx + v[i*3 + 1]*ny + v[i*3 + 2]*nz;
+      if (vn > 0) { v[i*3] -= (1 + e)*vn*nx; v[i*3 + 1] -= (1 + e)*vn*ny; v[i*3 + 2] -= (1 + e)*vn*nz; }
+      v[i*3] *= 0.995; v[i*3 + 1] *= 0.995; v[i*3 + 2] *= 0.995; }
+    v[i*3] *= 0.999; v[i*3 + 1] *= 0.999; v[i*3 + 2] *= 0.999;
+  }
+}
+const m4 = new THREE.Matrix4(), q0 = new THREE.Quaternion(), sv = new THREE.Vector3(), pv = new THREE.Vector3();
+function syncBalls(){ for (let i = 0; i < B.n; i++) { const r = B.r[i]*B.s[i]; m4.compose(pv.set(B.x[i*3], B.x[i*3 + 1], B.x[i*3 + 2]), q0, sv.set(r, r, r)); balls.setMatrixAt(i, m4); }
+  balls.count = B.n; balls.instanceMatrix.needsUpdate = true; }
+
+/* ---------- the eye: renders what the viewer would see; the front quarter of the 360 frame is made from it ---------- */
+const eyeCam = new THREE.PerspectiveCamera(40, 1, 0.05, 30);
+const eyeRT = new THREE.WebGLRenderTarget(2048, 2048, {samples:renderer.capabilities.isWebGL2 ? 4 : 0, colorSpace:THREE.SRGBColorSpace});
+const frameRT = new THREE.WebGLRenderTarget(2048, 1024, {depthBuffer:false, colorSpace:THREE.SRGBColorSpace}); frameRT.texture.wrapS = THREE.RepeatWrapping;
+const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), quadScene = new THREE.Scene();
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)); quad.frustumCulled = false; quadScene.add(quad);
+const run = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(quadScene, quadCam); };
+const VS = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const compMat = new THREE.ShaderMaterial({vertexShader:VS, toneMapped:false, uniforms:{uEye:{value:eyeRT.texture}, uVP:{value:new THREE.Matrix4()}, uE:{value:new THREE.Vector3()},
+    uLon0:{value:0}, uW:{value:1}, uH:{value:1}, uInvD:{value:0.33}, uC:{value:SHELL}},
+  fragmentShader:`uniform sampler2D uEye; uniform mat4 uVP; uniform vec3 uE; uniform float uLon0; uniform float uW; uniform float uH; uniform float uInvD; uniform vec3 uC; varying vec2 vUv;
+    void main(){
+      float lon = (vUv.x - 0.5)*6.2831853, lat = (vUv.y - 0.5)*3.1415927;
+      vec3 d = vec3(sin(lon)*cos(lat), sin(lat), cos(lon)*cos(lat));
+      float dl = lon - uLon0; dl = atan(sin(dl), cos(dl));
+      float m = 0.07;                                                     // margin around the window, drawn from the eye as plain shell
+      float inside = (1.0 - smoothstep(uW + m*0.5, uW + m, abs(dl))) * (1.0 - smoothstep(uH + m*0.5, uH + m, abs(lat)));
+      inside *= smoothstep(uInvD + 0.01, uInvD + 0.06, dot(d, normalize(uE)));   // only where the eye can see the surface
+      vec3 col = uC;
+      if (inside > 0.0) { vec4 c = uVP * vec4(d, 1.0); vec2 s = c.xy/c.w*0.5 + 0.5;
+        if (c.w > 0.0 && all(greaterThan(s, vec2(0.0))) && all(lessThan(s, vec2(1.0)))) { vec4 t = texture2D(uEye, s); col = mix(uC, t.rgb/max(t.a, 0.001), inside*t.a); } }
+      gl_FragColor = vec4(col, 1.0);
+    }`});
+const copyMat = new THREE.ShaderMaterial({vertexShader:VS, toneMapped:false, uniforms:{uF:{value:frameRT.texture}},
+  fragmentShader:`uniform sampler2D uF; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(uF, vUv).rgb, 1.0); }`});
+// preview: a plain sphere wearing the 360 frame, seen from the eye (or from wherever you drag to)
+const prevScene = new THREE.Scene();
+const prevMat = new THREE.ShaderMaterial({toneMapped:false, uniforms:{uF:{value:frameRT.texture}},
+  vertexShader:`varying vec3 vD; void main(){ vD = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader:`uniform sampler2D uF; varying vec3 vD;
+    void main(){ vec3 d = normalize(vD); vec2 uv = vec2(atan(d.x, d.z)/6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0))/3.1415927 + 0.5);
+      gl_FragColor = vec4(texture2D(uF, uv).rgb, 1.0); }`});
+prevScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 256, 128), prevMat));
+const prevCam = new THREE.PerspectiveCamera(30, 1, 0.05, 50);
+
+/* ---------- controls ---------- */
+let view = 'preview', winMode = 2, open = 0, cycleT = 0, orbit = {yaw:0, pitch:0}, display = false;
+const segSync = (id, val) => $(id).querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === String(val)));
+$('segView').onclick = e => { const b = e.target.closest('button'); if (b) { view = b.dataset.v; segSync('segView', view); } };
+$('segWin').onclick = e => { const b = e.target.closest('button'); if (b) { winMode = +b.dataset.v; cycleT = 0; segSync('segWin', winMode); } };
+segSync('segView', view); segSync('segWin', winMode);
+let down = null;
+canvas.addEventListener('pointerdown', e => { down = {x:e.clientX, y:e.clientY, ...orbit}; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', e => { if (!down) return; orbit.yaw = down.yaw - (e.clientX - down.x)*0.006; orbit.pitch = Math.max(-1.3, Math.min(1.3, down.pitch + (e.clientY - down.y)*0.006)); });
+canvas.addEventListener('pointerup', () => down = null);
+canvas.addEventListener('dblclick', () => { orbit = {yaw:0, pitch:0}; });
+let hideT;
+const wake = () => { document.body.classList.add('ui-on'); clearTimeout(hideT); hideT = setTimeout(() => document.body.classList.remove('ui-on'), 2500); };
+const setDisplay = on => { display = on; document.body.classList.toggle('display', on); if (on) { document.documentElement.requestFullscreen?.().catch(() => {}); wake(); } else if (document.fullscreenElement) document.exitFullscreen(); };
+$('displayBtn').onclick = () => setDisplay(!display);
+addEventListener('keydown', e => { if (e.key === 'f' || e.key === 'F') setDisplay(!display); if (e.key === 'Escape' && display) setDisplay(false); });
+addEventListener('pointermove', () => display && wake());
+if (new URLSearchParams(location.search).has('display')) { display = true; document.body.classList.add('display'); }
+function resize(){ renderer.setSize(innerWidth, innerHeight, false); }
+addEventListener('resize', resize); resize();
+
+/* ---------- frame loop ---------- */
+let last = performance.now(), acc = 0;
+function frame(now){
+  const dt = Math.min(0.05, (now - last)/1000); last = now;
+  const ri = 1 - P.thick;
+  // window: slides open sideways from the middle
+  cycleT += dt;
+  const target = winMode === 0 ? 0 : winMode === 1 ? 1 : (cycleT % 16 < 11 ? 1 : 0);
+  open += (target - open)*Math.min(1, dt*1.6);
+  const a = open*P.winW*D2R/2, h = P.winH*D2R/2;
+  winU.uA.value = a; winU.uH.value = h;
+  shellGroup.rotation.y = P.eyeLon*D2R;
+  inner.scale.setScalar(ri);
+  buildRims(a, h, ri);
+  sun.intensity = 2.2*P.light;
+  // balls: pour, hold when full, shrink away, pour again
+  if (phase === 'fill') { pourAcc += dt*P.rate; while (pourAcc >= 1) { pourAcc -= 1; spawn(ri); } if (B.n >= Math.min(MAXB, P.count)) { phase = 'hold'; phaseT = 0; } }
+  else if (phase === 'hold') { phaseT += dt; if (phaseT > 10) { phase = 'shrink'; phaseT = 0; } }
+  else if (phase === 'shrink') { phaseT += dt; const s = Math.max(0, 1 - phaseT/2.5); for (let i = 0; i < B.n; i++) B.s[i] = s; if (s <= 0) resetBalls(); }
+  if (B.n > Math.min(MAXB, P.count)) B.n = Math.min(MAXB, P.count);
+  acc += dt; let k = 0; while (acc >= 1/240 && k < 8) { step(1/240, ri); acc -= 1/240; k++; } if (k >= 8) acc = 0;
+  syncBalls();
+  // eye
+  const eLon = P.eyeLon*D2R, eLat = P.eyeLat*D2R, D = P.eyeDist;
+  const E = new THREE.Vector3(...dirOf(eLon, eLat)).multiplyScalar(D);
+  eyeCam.position.copy(E); eyeCam.lookAt(0, 0, 0);
+  eyeCam.fov = 2*Math.asin(Math.min(0.999, 1/D))/D2R*1.06; eyeCam.aspect = 1; eyeCam.updateProjectionMatrix(); eyeCam.updateMatrixWorld();
+  renderer.setRenderTarget(eyeRT); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(world, eyeCam); renderer.setClearColor(0x000000, 1);
+  const U = compMat.uniforms;
+  U.uVP.value.multiplyMatrices(eyeCam.projectionMatrix, eyeCam.matrixWorldInverse); U.uE.value.copy(E);
+  U.uLon0.value = eLon; U.uW.value = P.winW*D2R/2; U.uH.value = h; U.uInvD.value = 1/D;
+  run(compMat, frameRT);
+  // screen
+  renderer.setRenderTarget(null);
+  const aspect = innerWidth/innerHeight;
+  if (display || view === 'frame') run(copyMat, null);
+  else if (view === 'preview' || view === 'inside') {
+    const cam = prevCam, tgt = new THREE.Vector3();
+    const r = E.length(), yaw = eLon + orbit.yaw, pitch = Math.max(-1.3, Math.min(1.3, eLat + orbit.pitch));
+    cam.position.set(Math.sin(yaw)*Math.cos(pitch), Math.sin(pitch), Math.cos(yaw)*Math.cos(pitch)).multiplyScalar(r);
+    cam.lookAt(tgt); cam.aspect = aspect;
+    cam.fov = Math.max(eyeCam.fov*1.08, aspect < 1 ? 2*Math.atan(Math.tan(eyeCam.fov*D2R/2)/aspect)/D2R*1.04 : 0); cam.updateProjectionMatrix();
+    renderer.render(view === 'inside' ? world : prevScene, cam);
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
