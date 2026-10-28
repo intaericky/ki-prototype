@@ -16,6 +16,9 @@ const eslintConfig = defineConfig([
     ".wrangler/**",
     // Embedded original prototypes are shipped as static assets.
     "public/projects/**",
+    // Sampling Sphere: static pages and vendored libraries.
+    "public/sphere-*/**",
+    "sampling-sphere/**",
     // Local duplicate drafts are not part of the application.
     "app/layout 2.tsx",
     "app/page 2.tsx",

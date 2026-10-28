@@ -1,0 +1,1464 @@
+<title>Sampling Sphere Studio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* layout: sphere stage on top (what the LED sphere shows), tablet below (the world map being forged) */
+:root{
+  --bg:#000; --ink:#f2f1ee; --mute:rgba(242,241,238,.55); --faint:rgba(242,241,238,.16); --panel:rgba(0,0,0,.55);
+  --ui:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark
+}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);overflow:hidden;font:12px/1.4 var(--ui)}
+#gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+.region{position:fixed;left:0;right:0;pointer-events:none}
+#stage{top:0;height:58%}
+#tablet{top:58%;bottom:0;border-top:1px solid var(--faint)}
+body.only-sphere #stage{height:100%} body.only-sphere #tablet{display:none}
+body.only-tablet #stage{display:none} body.only-tablet #tablet{top:0}
+.bar{position:absolute;display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;pointer-events:auto;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.bar.top{top:calc(12px + env(safe-area-inset-top,0px));left:0;right:0}
+#tablet .bar.top{top:10px}
+.group{display:flex;align-items:center;gap:6px}
+.label{font:10px/1 var(--ui);letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+.seg{display:flex;border:1px solid var(--faint)}
+.seg button,.btn{all:unset;cursor:pointer;font:12px/1 var(--ui);color:var(--mute);padding:6px 9px;white-space:nowrap}
+.seg button+button{border-left:1px solid var(--faint)}
+.btn{border:1px solid var(--faint)}
+.seg button:hover,.btn:hover{color:var(--ink)}
+.seg button:focus-visible,.btn:focus-visible,select:focus-visible{outline:1px solid var(--ink);outline-offset:1px}
+.seg button[aria-pressed="true"],.btn[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+select{font:12px/1 var(--ui);color:var(--ink);background:#000;border:1px solid var(--faint);padding:5px 6px}
+.spacer{flex:1}
+.clock{font:11px/1 var(--mono);color:var(--mute);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.note{position:absolute;bottom:10px;left:0;right:0;font:11px/1.45 var(--ui);color:var(--mute);pointer-events:none;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+#stage .note{bottom:12px;right:330px}
+#stage{z-index:2}
+#carvePanel{position:absolute;right:max(16px,env(safe-area-inset-right,0px));top:60px;width:280px;max-height:calc(100% - 72px);overflow:auto;box-sizing:border-box;pointer-events:auto;background:var(--panel);border:1px solid var(--faint);padding:10px 12px;backdrop-filter:blur(4px)}
+#carvePanel summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font:10px/1 var(--ui);letter-spacing:.12em;text-transform:uppercase;color:var(--ink);padding:2px 0 8px;min-height:24px}
+#carvePanel summary::-webkit-details-marker{display:none}
+#carvePanel summary{-webkit-tap-highlight-color:transparent;outline:none} #carvePanel summary:focus-visible{outline:1px solid var(--ink)}
+button,select{-webkit-tap-highlight-color:transparent}
+#carvePanel:not([open]){padding:4px 10px}
+#carvePanel:not([open]) summary{padding:2px 0}
+#carvePanel:not([open]) .when-open,#carvePanel[open] .when-closed{display:none}
+#carvePanel summary .x{margin-left:auto;font:20px/1 var(--ui);letter-spacing:0;color:var(--mute);padding:0 2px}
+#carvePanel summary:hover .x{color:var(--ink)}
+#sliders,#lookSliders{display:grid;gap:8px}
+#lookSliders label{display:grid;grid-template-columns:1fr auto;gap:2px 8px;font:11px/1.3 var(--ui);color:var(--ink)}
+#lookSliders output{font:11px/1.3 var(--mono);color:var(--mute);font-variant-numeric:tabular-nums}
+#lookSliders input[type=range]{grid-column:1/-1;width:100%;accent-color:#f2f1ee}
+#carvePanel input[type=color]{width:44px;height:22px;padding:0;border:1px solid var(--faint);background:none;justify-self:end}
+#carvePanel .tabs{margin-bottom:12px} #carvePanel .tabs button{flex:1;text-align:center}
+#carvePanel .choice{display:grid;gap:6px;margin-bottom:10px} #carvePanel .choice .small{font:11px/1.3 var(--ui);color:var(--ink)}
+#carvePanel .seg.wrap{flex-wrap:wrap} #carvePanel .row{flex-wrap:wrap}
+#linkOut{width:100%;box-sizing:border-box;margin-top:8px;font:10px/1.3 var(--mono);background:#000;color:var(--mute);border:1px solid var(--faint);padding:5px}
+#carvePanel[data-tab=carve] .grp-light,#carvePanel[data-tab=carve] .grp-material,
+#carvePanel[data-tab=light] .grp-carve,#carvePanel[data-tab=light] .grp-material,
+#carvePanel[data-tab=material] .grp-carve,#carvePanel[data-tab=material] .grp-light{display:none!important}
+#spacingRow{flex-wrap:wrap;gap:6px;margin-bottom:10px} #spacingRow .small{font:11px/1.3 var(--ui);color:var(--ink);width:100%}
+body.mode-tool .erode-only,body:not(.mode-tool) .tool-only{display:none!important}
+#sliders label{display:grid;grid-template-columns:1fr auto;gap:2px 8px;font:11px/1.3 var(--ui);color:var(--ink)}
+#sliders output{font:11px/1.3 var(--mono);color:var(--mute);font-variant-numeric:tabular-nums}
+#sliders input{grid-column:1/-1;width:100%;accent-color:#f2f1ee}
+#carvePanel .row{display:flex;gap:6px;margin-top:10px}
+/* phones: one swipeable row of controls per panel, short notes (tap to read all), carving sheet under the controls */
+@media (max-width:760px){
+  #stage{height:57%} #tablet{top:57%}
+  .bar{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:8px;-webkit-overflow-scrolling:touch;
+    -webkit-mask-image:linear-gradient(90deg,#000 85%,transparent);mask-image:linear-gradient(90deg,#000 85%,transparent);padding-right:40px}
+  .bar::-webkit-scrollbar{display:none}
+  .bar .spacer{display:none} .group{flex:none}
+  .seg button,.btn{padding:9px 10px} select{padding:8px 6px}
+  .bar.top{top:calc(8px + env(safe-area-inset-top,0px))} #tablet .bar.top{top:8px}
+  .note{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;pointer-events:auto;cursor:pointer;bottom:6px}
+  .note.open{display:block;background:var(--panel);padding-top:6px;padding-bottom:6px}
+  #stage .note{right:0;bottom:6px}
+  #carvePanel{top:calc(56px + env(safe-area-inset-top,0px));left:auto;right:max(16px,env(safe-area-inset-right,0px));width:auto;max-width:calc(100% - 32px);
+    max-height:calc(100% - 72px);overflow:auto;box-sizing:border-box;padding:8px 10px}
+  #carvePanel summary{padding:4px 0}
+  #carvePanel[open]{left:max(16px,env(safe-area-inset-left,0px))}
+  #carvePanel[open] summary{padding-bottom:8px}
+  #sliders{grid-template-columns:1fr 1fr;gap:10px 14px}
+  #sliders input{height:22px}
+  #satInfo{display:none}
+}
+#satInfo{font:11px/1.5 var(--mono);color:var(--ink)}
+#liveDlg{background:#0b0b0b;color:var(--ink);border:1px solid var(--faint);padding:14px 16px;width:min(520px,calc(100vw - 32px));box-sizing:border-box;font:12px/1.4 var(--ui)}
+#liveDlg::backdrop{background:rgba(0,0,0,.6)}
+#liveDlg .dlg-head{display:flex;align-items:center;margin-bottom:8px}
+#liveDlg .x{all:unset;cursor:pointer;margin-left:auto;font:20px/1 var(--ui);color:var(--mute);padding:0 4px}
+#liveDlg .steps{margin:0 0 10px;padding-left:18px;color:var(--mute);font:12px/1.5 var(--ui)} #liveDlg .steps b{color:var(--ink);font-weight:500}
+#liveDlg .field{display:grid;grid-template-columns:100px 1fr;align-items:center;gap:8px;margin:8px 0} #liveDlg .field>span{color:var(--mute)}
+#liveDlg .roomrow{display:flex;gap:6px} #liveDlg .roomrow input{flex:1;min-width:0}
+#liveDlg input,.room{font:12px/1 var(--mono);background:#000;color:var(--ink);border:1px solid var(--faint);padding:6px}
+#liveDlg #liveRoom,.room{letter-spacing:.12em;text-transform:uppercase}
+.room{width:96px}
+#liveDlg .sum{font:11px/1.5 var(--mono);margin:10px 0 0} #liveDlg .hint{font:11px/1.45 var(--ui);color:var(--mute);margin:6px 0 0}
+#liveDlg .row{display:flex;gap:8px;margin-top:12px} #liveDlg .btn.primary{background:var(--ink);color:var(--bg)}
+.label-ish{font:10px/1 var(--mono);color:var(--mute);letter-spacing:.04em}
+#joinBox{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:max(12px,env(safe-area-inset-bottom,0px));z-index:5;display:none;align-items:center;gap:8px;background:rgba(0,0,0,.6);padding:6px 8px;border:1px solid var(--faint)}
+body.page-tablet #joinBox{display:flex} body.page-tablet #tabNote{right:330px}
+body.page-sphere.ui-on #joinBox{display:flex}
+body:not(.page-studio) .studio-only{display:none}
+body.live-on #liveBtn{background:var(--ink);color:var(--bg)}
+@media (max-width:760px){#liveDlg .field{grid-template-columns:1fr}}
+#expDlg{background:#0b0b0b;color:var(--ink);border:1px solid var(--faint);padding:14px 16px;width:min(460px,calc(100vw - 32px));box-sizing:border-box;font:12px/1.4 var(--ui)}
+#expDlg::backdrop{background:rgba(0,0,0,.6)}
+#expDlg .dlg-head{display:flex;align-items:center;margin-bottom:12px}
+#expDlg .x{all:unset;cursor:pointer;margin-left:auto;font:20px/1 var(--ui);color:var(--mute);padding:0 4px}
+#expDlg .x:hover{color:var(--ink)}
+#expDlg .field{display:grid;grid-template-columns:110px 1fr;align-items:center;gap:8px;margin:8px 0}
+#expDlg .field>span{color:var(--mute)}
+#expDlg .field .seg{flex-wrap:wrap}
+#expDlg .check{grid-template-columns:auto 1fr;color:var(--mute)}
+#expDlg .check span{color:var(--mute)}
+#expDlg input[type=number]{font:12px/1 var(--mono);background:#000;color:var(--ink);border:1px solid var(--faint);padding:6px;width:90px}
+#expDlg .sum{font:11px/1.5 var(--mono);color:var(--ink);margin:10px 0 0;min-height:1em}
+#expDlg .hint{font:11px/1.45 var(--ui);color:var(--mute);margin:6px 0 0}
+#expDlg .prog{height:3px;background:var(--faint);margin-top:10px} #expDlg .bar-in{height:100%;width:0;background:var(--ink)}
+#expDlg .row{display:flex;gap:8px;margin-top:12px}
+#expDlg .btn.primary{background:var(--ink);color:var(--bg)}
+#expDlg.single .anim,#expDlg:not(.normalmap) .normal-opt,#expDlg.seqonly .playback{display:none}
+@media (max-width:760px){#expDlg .field{grid-template-columns:1fr}}
+#labels{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+#labels span{position:absolute;font:9px/1 var(--mono);color:var(--mute);transform:translate(6px,-4px);white-space:nowrap}
+#labels span.sel{color:var(--ink);font-weight:600}
+@media (max-width:640px){ .seg button,.btn{padding:6px 7px} .label{display:none} }
+a.btn{text-decoration:none}
+[hidden]{display:none!important}
+.sphere-only{display:none}
+body.page-sphere .sphere-only{display:inline-block}
+body.page-sphere #segView,body.page-sphere #segView+*,body.page-sphere .note,body.page-sphere #carvePanel{display:none}
+body.page-sphere .group:has(#segView){display:none}
+body.page-sphere #stage .bar{opacity:0;transition:opacity .3s;background:rgba(0,0,0,.55);padding-top:8px;padding-bottom:8px;top:0}
+body.page-sphere.ui-on #stage .bar{opacity:1}
+body.page-sphere:not(.ui-on){cursor:none}
+body.page-sphere.ui-on #carvePanel{display:block}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<canvas id="gl"></canvas>
+<section class="region" id="stage" aria-label="Sphere display">
+  <div class="bar top">
+    <div class="group"><span class="label">Surface</span>
+      <div class="seg" id="segStyle">
+        <button data-v="0">Cut</button><button data-v="1">Build</button><button data-v="2">Erosion (earlier)</button>
+      </div></div>
+    <div class="group"><span class="label">View</span>
+      <div class="seg" id="segView">
+        <button data-v="0">Mesh</button><button data-v="1">On LED sphere</button><button data-v="2">360 frame</button>
+      </div></div>
+    <div class="group"><span class="label">Frame</span>
+      <div class="seg" id="segFrame"><button data-v="0">Earth-fixed</button><button data-v="1">Sun-fixed</button><button data-v="2">Satellite</button></div></div>
+    <div class="spacer"></div>
+    <div class="group"><span class="clock" id="clock"></span>
+      <button class="btn" id="slower" aria-label="Slower">−</button><button class="btn" id="faster" aria-label="Faster">+</button>
+      <button class="btn studio-only" id="pause">Pause</button><button class="btn studio-only" id="liveBtn">Live control</button><button class="btn" id="exportBtn">Export</button><button class="btn sphere-only" id="fsBtn">Full screen (F)</button></div>
+    <div class="group" id="pageLinks" hidden><a class="btn" href="/sphere-display" target="_blank">Sphere display</a><a class="btn" href="/sphere-tablet" target="_blank">Tablet</a></div>
+  </div>
+  <div class="note" id="stageNote"></div>
+  <details id="carvePanel" open>
+    <summary><span class="when-closed">Settings</span><span class="when-open">Settings</span><span class="x when-open" aria-label="Close">×</span></summary>
+    <div class="seg tabs" id="segTab2"><button type="button" data-t="carve">Carving</button><button type="button" data-t="light">Light</button><button type="button" data-t="material">Material</button></div>
+    <div class="group tool-only grp-carve" id="spacingRow"><span class="small">Layer levels</span><div class="seg" id="segSpacing"><button data-v="0">Evenly stacked</button><button data-v="1">Orbit height</button></div></div>
+    <div id="sliders" class="grp-carve"></div>
+    <div class="grp-light choice"><span class="small">Light comes from</span><div class="seg" id="segLightMode"><button type="button" data-v="0">Each point's own upper left</button><button type="button" data-v="1">One direction</button></div></div>
+    <div class="grp-light choice"><span class="small">Tone mapping</span><div class="seg" id="segTone"><button type="button" data-v="1">Filmic</button><button type="button" data-v="0">None</button></div></div>
+    <div class="grp-material choice"><span class="small">Presets</span><div class="seg wrap" id="segPreset"></div></div>
+    <div id="lookSliders"></div>
+    <div class="row"><button class="btn grp-carve erode-only" id="resetSculpt">Reset sculpture</button><button class="btn" id="resetParams">Defaults</button><button class="btn" id="linkParams">Copy display link</button><button class="btn" id="closeParams">Close</button></div>
+    <input id="linkOut" readonly hidden aria-label="Display link">
+  </details>
+</section>
+<div id="joinBox"><span class="live-status label-ish">Not connected</span><input id="joinRoom" class="room" placeholder="Room code" aria-label="Room code" maxlength="12"><button class="btn" id="joinBtn">Join</button></div>
+<dialog id="liveDlg" aria-label="Live control">
+  <form method="dialog">
+    <div class="dlg-head"><span class="label">Live control</span><button class="x" value="close" aria-label="Close" formnovalidate>×</button></div>
+    <ol class="steps">
+      <li>On the computer that feeds the sphere, open the <b>display link</b>. On the tablet, open the <b>tablet link</b>. (Or open the pages and type the room code into their bar.)</li>
+      <li>Press <b>Start live control</b> here. From then on every change you make in this studio (surface, frame, satellite, speed, and everything under Settings) appears on them within a moment.</li>
+      <li>The displays keep the last settings even if they reload. Press Stop when you are done; they keep showing the last look.</li>
+    </ol>
+    <div class="field"><span>Room code</span><div class="roomrow"><input id="liveRoom" class="room" maxlength="12" aria-label="Room code"><button type="button" class="btn" id="liveNew">New code</button></div></div>
+    <div class="field"><span>Display link</span><div class="roomrow"><input id="liveLinkD" readonly aria-label="Display link"><button type="button" class="btn copy" data-for="liveLinkD">Copy</button></div></div>
+    <div class="field"><span>Tablet link</span><div class="roomrow"><input id="liveLinkT" readonly aria-label="Tablet link"><button type="button" class="btn copy" data-for="liveLinkT">Copy</button></div></div>
+    <p class="sum live-status" role="status">Not connected</p>
+    <p class="hint">Runs through a free public relay (EMQX). Only setting values travel, never images, but the room code is not a password: anyone who knows it could send settings too. Make a new code for each show.</p>
+    <div class="row"><button type="button" class="btn primary" id="liveStart">Start live control</button></div>
+  </form>
+</dialog>
+<dialog id="expDlg" aria-label="Export">
+  <form method="dialog" id="expForm">
+    <div class="dlg-head"><span class="label">Export flat maps</span><button class="x" value="close" aria-label="Close" formnovalidate>×</button></div>
+    <div class="field"><span>Map</span><div class="seg" id="expMap"><button type="button" data-v="shaded">Shaded 360</button><button type="button" data-v="height">Height</button><button type="button" data-v="normal">Normal</button><button type="button" data-v="all">All three</button></div></div>
+    <div class="field"><span>As</span><div class="seg" id="expFmt"><button type="button" data-v="png">Image</button><button type="button" data-v="seq">Image sequence</button><button type="button" data-v="video">Video</button><button type="button" data-v="gif">GIF</button></div></div>
+    <div class="field"><span>Size</span><select id="expSize"><option value="1024">1024 × 512</option><option value="2048">2048 × 1024</option><option value="4096">4096 × 2048</option></select></div>
+    <div class="field anim"><span>Frames</span><input id="expFrames" type="number" min="2" max="3600" step="1" value="120"></div>
+    <div class="field anim"><span>Each frame moves</span><select id="expStep"><option value="0.5">30 s</option><option value="1">1 min</option><option value="2">2 min</option><option value="5">5 min</option><option value="10">10 min</option><option value="30">30 min</option><option value="60">1 h</option></select></div>
+    <div class="field anim playback"><span>Playback</span><select id="expFps"><option>12</option><option>24</option><option>30</option><option>60</option></select></div>
+    <label class="field check normal-opt"><input type="checkbox" id="expFlip" checked> <span>Flip green for Unreal (DirectX normals)</span></label>
+    <p class="sum" id="expSum"></p>
+    <p class="hint" id="expHint"></p>
+    <div class="prog" hidden id="expProg"><div class="bar-in" id="expBar"></div></div>
+    <p class="sum" id="expStatus" role="status"></p>
+    <div class="row"><button type="button" class="btn primary" id="expGo">Export</button><button type="button" class="btn" id="expStop" hidden>Cancel</button></div>
+  </form>
+</dialog>
+<section class="region" id="tablet" aria-label="Tablet">
+  <div id="labels"></div>
+  <div class="bar top">
+    <div class="group"><span class="label">Tablet</span>
+      <div class="seg" id="segTab"><button data-v="0">World map</button><button data-v="1">Satellite view</button></div></div>
+    <div class="group"><span class="label">Satellite (sphere + tablet)</span><select id="satSel" aria-label="Satellite"></select></div>
+    <div class="group"><button class="btn" id="granBtn">MODIS granules</button><button class="btn" id="centerBtn">Center map on it</button></div>
+    <div class="spacer"></div>
+    <div id="satInfo"></div>
+  </div>
+  <div class="note" id="tabNote"></div>
+</section>
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
+<script>/*DATA*/</script>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js';
+
+const RE = 6371.0, D2R = Math.PI/180, PI = Math.PI;
+const T0 = Date.UTC(2026, 9, 25, 0, 0, 0);
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, preserveDrawingBuffer:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0, 1);
+renderer.autoClear = false;
+const floatOK = renderer.extensions.has('EXT_float_blend') && renderer.extensions.has('OES_texture_float_linear');
+const RTTYPE = floatOK ? THREE.FloatType : THREE.HalfFloatType;
+const HI = new URLSearchParams(location.search).get('quality') !== 'low' && renderer.capabilities.maxTextureSize >= 8192 && !matchMedia('(max-width:760px), (pointer:coarse)').matches;   // desktop: sharper tools
+const HW = HI ? 4096 : 2048;
+
+/* ================= satellites ================= */
+const sats = SATS.map(([name, inst, swath, kind, l1, l2]) => {
+  const rec = satellite.twoline2satrec(l1, l2);
+  const halfW = Math.max(swath/2/RE, 0.11*D2R);
+  return {name, inst, swath, optical:kind === 'O', rec, halfW, sinW:Math.sin(halfW), incl:+l2.slice(8,16), beadClock:0};
+});
+const N = sats.length;
+function sunECI(ms){
+  const jd = ms/86400000 + 2440587.5, n = jd - 2451545.0;
+  const L = (280.460 + 0.9856474*n)*D2R, g = (357.528 + 0.9856003*n)*D2R;
+  const lam = L + (1.915*Math.sin(g) + 0.020*Math.sin(2*g))*D2R, eps = (23.439 - 0.0000004*n)*D2R;
+  return [Math.cos(lam), Math.cos(eps)*Math.sin(lam), Math.sin(eps)*Math.sin(lam)];
+}
+const rotZ = (v, a) => { const c = Math.cos(a), s = Math.sin(a); return [c*v[0]-s*v[1], s*v[0]+c*v[1], v[2]]; };
+const norm = v => { const l = Math.hypot(v[0], v[1], v[2]); return [v[0]/l, v[1]/l, v[2]/l]; };
+const latlon = v => [Math.asin(Math.max(-1, Math.min(1, v[2])))/D2R, Math.atan2(v[1], v[0])/D2R];
+const e2t = (v, s = 1) => new THREE.Vector3(v[0]*s, v[2]*s, -v[1]*s);   // ECEF/ECI -> three axes
+const wrap180 = x => ((x + 540) % 360) - 180;
+
+/* ================= GPU helpers ================= */
+function makeRT(w, h, type = RTTYPE, repeat = false){
+  const rt = new THREE.WebGLRenderTarget(w, h, {type, format:THREE.RGBAFormat, minFilter:THREE.LinearFilter,
+    magFilter:THREE.LinearFilter, depthBuffer:false, stencilBuffer:false, generateMipmaps:false});
+  if (repeat) rt.texture.wrapS = THREE.RepeatWrapping;
+  return rt;
+}
+const passCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
+const passScene = new THREE.Scene();
+const passQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2)); passQuad.frustumCulled = false; passScene.add(passQuad);
+const FSV = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+function pass(mat, rt){ passQuad.material = mat; renderer.setRenderTarget(rt); renderer.render(passScene, passCam); }
+function clearRT(rt){ renderer.setRenderTarget(rt); renderer.setClearColor(0, 0); renderer.clear(); renderer.setClearColor(0, 1); }
+const scaleMat = new THREE.ShaderMaterial({uniforms:{uK:{value:new THREE.Vector4(1,1,1,1)}}, vertexShader:FSV,
+  fragmentShader:`uniform vec4 uK; void main(){ gl_FragColor = uK; }`,
+  blending:THREE.CustomBlending, blendEquation:THREE.AddEquation, blendSrc:THREE.ZeroFactor, blendDst:THREE.SrcColorFactor,
+  blendEquationAlpha:THREE.AddEquation, blendSrcAlpha:THREE.ZeroFactor, blendDstAlpha:THREE.SrcAlphaFactor,
+  depthTest:false, depthWrite:false, transparent:true});
+function scaleRT(rt, k){ scaleMat.uniforms.uK.value.set(...k); pass(scaleMat, rt); }
+
+/* instanced stamps in equirect space (exact on the sphere, poles and dateline included) */
+function makeStamper(fragBody, blendMax){
+  const MAXI = 16384, g = new THREE.InstancedBufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0,0,0, 1,0,0, 1,1,0, 0,1,0]), 3));
+  g.setIndex([0,1,2, 0,2,3]);
+  const A = {aN0:3, aN1:3, aB0:3, aB1:3, aBox:4, aP:4, aSun:3}, attrs = {};
+  for (const k in A) { attrs[k] = new THREE.InstancedBufferAttribute(new Float32Array(MAXI*A[k]), A[k]); attrs[k].setUsage(THREE.DynamicDrawUsage); g.setAttribute(k, attrs[k]); }
+  g.instanceCount = 0;
+  const mat = new THREE.ShaderMaterial({uniforms:{uLW:{value:0.002}, uRes:{value:new THREE.Vector2(2048, 1024)}},
+    vertexShader:`attribute vec3 aN0; attribute vec3 aN1; attribute vec3 aB0; attribute vec3 aB1; attribute vec4 aBox; attribute vec4 aP; attribute vec3 aSun;
+      varying vec2 vLL; varying vec3 vN0; varying vec3 vN1; varying vec3 vB0; varying vec3 vB1; varying vec4 vP; varying vec3 vSun;
+      void main(){ float lon = mix(aBox.x, aBox.y, position.x), lat = mix(aBox.z, aBox.w, position.y);
+        vLL = vec2(lon, lat); vB0 = aB0; vB1 = aB1; vN0 = aN0; vN1 = aN1; vP = aP; vSun = aSun; gl_Position = vec4(lon/180.0, lat/90.0, 0.0, 1.0); }`,
+    fragmentShader:`#define PI_ 3.141592653589793
+      uniform float uLW; uniform vec2 uRes; varying vec2 vLL; varying vec3 vN0; varying vec3 vN1; varying vec3 vB0; varying vec3 vB1; varying vec4 vP; varying vec3 vSun;
+      void main(){ vec2 ll = (gl_FragCoord.xy / uRes * 2.0 - 1.0) * vec2(PI_, 0.5*PI_);   // from the pixel itself, so every stamp agrees on it exactly
+        float lo = ll.x, la = ll.y;
+        vec3 p = vec3(cos(la)*cos(lo), cos(la)*sin(lo), sin(la)); ${fragBody} }`,
+    blending:THREE.CustomBlending,
+    blendEquation: blendMax ? THREE.MaxEquation : THREE.AddEquation, blendEquationAlpha:THREE.MaxEquation,
+    blendSrc:THREE.OneFactor, blendDst:THREE.OneFactor, blendSrcAlpha:THREE.OneFactor, blendDstAlpha:THREE.OneFactor,
+    depthTest:false, depthWrite:false, transparent:true});
+  const scene = new THREE.Scene(), mesh = new THREE.Mesh(g, mat); mesh.frustumCulled = false; scene.add(mesh);
+  let n = 0;
+  return {
+    push(n0, n1, wdeg, P, sun, b0 = [0,0,0], b1 = [0,0,0]){
+      const [la0, lo0] = latlon(n0), [la1, lo1r] = latlon(n1);
+      const lo1 = lo0 + wrap180(lo1r - lo0);
+      let laMin = Math.max(-90, Math.min(la0, la1) - wdeg), laMax = Math.min(90, Math.max(la0, la1) + wdeg);
+      const amax = Math.max(Math.abs(laMin), Math.abs(laMax));
+      let boxes;
+      if (amax > 88.5) { if (laMax > 88.5) laMax = 90; if (laMin < -88.5) laMin = -90; boxes = [[-180, 180]]; }
+      else {
+        const half = wdeg / Math.cos(amax*D2R) + 0.25;
+        if (half > 170) boxes = [[-180, 180]];
+        else { const a = Math.min(lo0, lo1) - half, b = Math.max(lo0, lo1) + half; boxes = [[a, b]];
+          if (a < -180) boxes.push([a + 360, b + 360]); if (b > 180) boxes.push([a - 360, b - 360]); }
+      }
+      for (const [a, b] of boxes) { if (n >= MAXI) return; const i = n++;
+        attrs.aN0.array.set(n0, i*3); attrs.aN1.array.set(n1, i*3); attrs.aB0.array.set(b0, i*3); attrs.aB1.array.set(b1, i*3); attrs.aSun.array.set(sun, i*3);
+        attrs.aBox.array.set([a, b, laMin, laMax], i*4); attrs.aP.array.set(P, i*4); }
+    },
+    flush(rt){
+      if (!n) return; g.instanceCount = n;
+      for (const k in attrs) attrs[k].needsUpdate = true;
+      mat.uniforms.uLW.value = 2.0 * 2*PI / rt.width; mat.uniforms.uRes.value.set(rt.width, rt.height);
+      renderer.setRenderTarget(rt); renderer.render(scene, passCam); n = 0;
+    }
+  };
+}
+// memory: R optical count, G active count, B swath edges + ground track (rolling), A last seen
+const swathStamp = makeStamper(`
+  vec3 h = normalize(cross(vN0, vN1)); float x = abs(dot(p, h));
+  if (x > vP.x + uLW) discard;
+  if (dot(p, vB0) < 0.0 || dot(p, vB1) >= 0.0) discard;   // consecutive segments share these planes exactly: no seams, no overlaps
+  if (dot(p, vN0 + vN1) <= 0.0) discard;
+  bool lit = dot(p, vSun) > 0.0872;
+  if (vP.y > 0.5 && !lit) discard;
+  float edge = 1.0 - smoothstep(0.0, uLW, abs(x - vP.x));
+  float nadir = 1.0 - smoothstep(0.0, uLW*0.7, x);
+  float inside = 1.0 - smoothstep(vP.x - 0.5*uLW, vP.x + 0.5*uLW, x);   // antialiased side walls
+  gl_FragColor = vec4(vP.y*inside, (1.0 - vP.y)*inside, inside, inside);   /* A: freshness, 1 = being cut now */`, false);
+// beads: hemispherical caps, max-blended
+const beadStamp = makeStamper(`
+  float d = acos(clamp(dot(p, vN0), -1.0, 1.0)); float r = vP.x;
+  if (d > r) discard;
+  gl_FragColor = vec4(sqrt(r*r - d*d), 0.0, 0.0, 0.0);`, true);
+
+const toolStamp = makeStamper(`
+  vec3 h = normalize(cross(vN0, vN1)); float x = abs(dot(p, h));
+  if (x > vP.x + uLW) discard;
+  if (dot(p, vN0 + vN1) <= 0.0) discard;
+  if (vP.y > 0.5 && dot(p, vSun) <= 0.0872) discard;          // optical tools only cut in daylight
+  float q = 0.25*uLW, f = mod(vP.w, 2.0), l = vP.w - f;
+  float s0 = dot(p, vB0), s1 = dot(p, vB1);
+  if (s0 < (f > 0.5 ? -q : 0.0) || s1 >= (l > 0.5 ? q : 0.0)) discard;   // inner joins are exact, outer ends antialiased
+  float a = 1.0 - smoothstep(vP.x - q, vP.x + q, x);
+  if (f > 0.5) a *= smoothstep(-q, q, s0);
+  if (l > 0.5) a *= 1.0 - smoothstep(-q, q, s1);
+  gl_FragColor = vec4(vP.z*a, vP.z*a, 0.0, 0.0);`, true);
+const acc = [makeRT(2048, 1024), makeRT(2048, 1024)];          // [earth-fixed, sun-fixed]
+const beadRT = makeRT(2048, 1024, RTTYPE, true);
+const waveRT = [makeRT(1024, 512, RTTYPE, true), makeRT(1024, 512, RTTYPE, true)];
+const heightRT = makeRT(HW, HW/2, RTTYPE, true);
+let waveI = 0;
+
+/* ripple field: wave equation on the sphere (longitude step widened with latitude to keep spacing even) */
+const NSRC = 24;
+const waveMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{
+    uW:{value:null}, uTexel:{value:new THREE.Vector2(1/1024, 1/512)}, uSrc:{value:Array.from({length:NSRC}, () => new THREE.Vector3())},
+    uR:{value:new Float32Array(NSRC)}, uF:{value:0.0016}, uC:{value:0.32}, uDamp:{value:0.009}, uPhase:{value:0}},
+  fragmentShader:`#define PI 3.141592653589793
+    uniform sampler2D uW; uniform vec2 uTexel; uniform vec3 uSrc[${NSRC}]; uniform float uR[${NSRC}];
+    uniform float uF; uniform float uC; uniform float uDamp; uniform float uPhase; varying vec2 vUv;
+    void main(){
+      float lat = (vUv.y - 0.5)*PI, lon = (vUv.x*2.0 - 1.0)*PI;
+      float cl = max(cos(lat), 0.03);
+      vec4 c = texture2D(uW, vUv);
+      float du = min(uTexel.x / cl, 0.25);
+      float l = texture2D(uW, vUv - vec2(du, 0.0)).r, r = texture2D(uW, vUv + vec2(du, 0.0)).r;
+      float u = texture2D(uW, vec2(vUv.x, min(vUv.y + uTexel.y, 1.0 - 0.5*uTexel.y))).r;
+      float d = texture2D(uW, vec2(vUv.x, max(vUv.y - uTexel.y, 0.5*uTexel.y))).r;
+      float lap = l + r + u + d - 4.0*c.r;
+      float v = (c.g + uC*lap) * (1.0 - uDamp);
+      float h = c.r + v;
+      vec3 p = vec3(cos(lat)*cos(lon), cos(lat)*sin(lon), sin(lat));
+      for (int i = 0; i < ${NSRC}; i++) {
+        if (uR[i] <= 0.0) continue;
+        float a = acos(clamp(dot(p, uSrc[i]), -1.0, 1.0));
+        float k = max(1.0 - a / uR[i], 0.0);
+        h -= uF * k * k * (0.35 + sin(uPhase));
+      }
+      gl_FragColor = vec4(h * 0.9995, v, 0.0, 1.0);
+    }`});
+
+/* height: one displacement field, in radians of radius */
+const heightMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{
+    uAcc:{value:null}, uWave:{value:null}, uBead:{value:beadRT.texture}, uStyle:{value:0}, uK:{value:40}, uNow:{value:1}, uDepth:{value:0.007}, uFresh:{value:0.012}, uFreshT:{value:15/1440}, uMaxL:{value:7}, uSoft:{value:1.5}},
+  fragmentShader:`uniform sampler2D uAcc; uniform sampler2D uWave; uniform sampler2D uBead; uniform int uStyle; uniform float uK; uniform float uNow; uniform float uDepth; uniform float uFresh; uniform float uFreshT; uniform float uMaxL; uniform float uSoft; varying vec2 vUv;
+    void main(){
+      vec4 a = texture2D(uAcc, vUv);
+      float ripple = texture2D(uWave, vUv).r * 6.0;
+      // every pass planes away one layer across the swath's full width; unobserved ground grows back
+      float bsum = 0.0, fsum = 0.0, wsum = 0.0;                          // soften the swath walls into bevels
+      for (int j = -2; j <= 2; j++) for (int i = -2; i <= 2; i++) {
+        float w = exp(-float(i*i + j*j) / 3.0);
+        vec2 o = vec2(float(i) * uSoft/2048.0 / max(cos((vUv.y-0.5)*3.14159), 0.15), float(j) * uSoft/1024.0);
+        vec4 s = texture2D(uAcc, vUv + o); bsum += w * s.b; fsum += w * s.a; wsum += w; }
+      float layers = uMaxL * tanh((bsum / wsum) / uMaxL);
+      float fresh = fsum / wsum;                             // the cut being made now (decays in the texture)
+      float carve = -(uDepth * layers + uFresh * fresh);
+      float h = uStyle == 0 ? carve : uStyle == 1 ? -carve : carve + ripple*0.7;
+      float depth = clamp(layers / uMaxL + 0.6*fresh, 0.0, 1.0);   // how much has been taken away: deeper reads darker
+      gl_FragColor = vec4(h, uStyle == 1 ? 1.0 - depth : depth, 0.0, 1.0); return;
+      gl_FragColor = vec4(h, 0.0, 0.0, 1.0);
+    }`});
+
+/* ================= the white mesh ================= */
+/* the white mesh: physically based shading (GGX specular, clearcoat, wrap 'subsurface'), shadows cast by the cut walls
+   (ray-marched through the height field), soft occlusion and filmic tone mapping. Every look setting lives in LOOK. */
+const LOOK_DEFAULTS = {lightMode:0, az:65, el:22, key:4.2, keyColor:'#fff8ee', env:0.4, envColor:'#dfe6f0', cast:0.85, soft:0.35, shadowLen:0.09,
+  ao:0.6, darken:0.34, exposure:1.0, tone:1, base:'#f2f0ea', rough:0.62, metal:0, spec:0.5, clear:0.15, clearRough:0.25, sss:0.25, sssColor:'#ffd9c2'};
+const LOOK = {...LOOK_DEFAULTS};
+const col = h => new THREE.Color(h).convertSRGBToLinear();
+const meshUniforms = {uH:{value:heightRT.texture}, uTexel:{value:new THREE.Vector2(1/HW, 2/HW)}, uRelief:{value:1}, uSign:{value:-1}, uDark:{value:1},
+  uVerts:{value:new THREE.Vector2(HI ? 1280 : 640, HI ? 640 : 320)}, uOccD:{value:0.02}, uShadow:{value:0.34}, uRot:{value:new THREE.Matrix3()}, uStage:{value:new THREE.Matrix3()},
+  uLMode:{value:0}, uLAz:{value:0}, uLEl:{value:0}, uKey:{value:3}, uKeyC:{value:new THREE.Color()}, uEnv:{value:0.7}, uEnvC:{value:new THREE.Color()},
+  uCast:{value:0.8}, uSoft:{value:0.3}, uSLen:{value:0.09}, uAO:{value:0.6}, uExpo:{value:1}, uTone:{value:1},
+  uBase:{value:new THREE.Color()}, uRough:{value:0.6}, uMetal:{value:0}, uSpec:{value:0.5}, uClear:{value:0.1}, uClearR:{value:0.3}, uSSS:{value:0.2}, uSSSC:{value:new THREE.Color()}, uDebug:{value:0}, uInside:{value:0}};
+meshUniforms.uRelief0 = meshUniforms.uRelief;
+function applyLook(){
+  const U = meshUniforms, L = LOOK;
+  U.uLMode.value = L.lightMode; U.uLAz.value = L.az*D2R; U.uLEl.value = L.el*D2R; U.uKey.value = L.key; U.uKeyC.value.copy(col(L.keyColor));
+  U.uEnv.value = L.env; U.uEnvC.value.copy(col(L.envColor)); U.uCast.value = L.cast; U.uSoft.value = L.soft; U.uSLen.value = L.shadowLen;
+  U.uAO.value = L.ao; U.uShadow.value = L.darken; U.uExpo.value = L.exposure; U.uTone.value = L.tone;
+  U.uBase.value.copy(col(L.base)); U.uRough.value = L.rough; U.uMetal.value = L.metal; U.uSpec.value = L.spec; U.uClear.value = L.clear; U.uClearR.value = L.clearRough;
+  U.uSSS.value = L.sss; U.uSSSC.value.copy(col(L.sssColor));
+}
+applyLook();
+const meshMat = new THREE.ShaderMaterial({uniforms:meshUniforms, side:THREE.DoubleSide,
+  vertexShader:`#define PI 3.141592653589793
+    uniform sampler2D uH; uniform float uRelief; uniform float uSign; uniform vec2 uVerts; varying vec3 vObj; varying vec3 vWorld;
+    void main(){ vec3 o = normalize(position); vec3 e = vec3(o.x, -o.z, o.y);
+      vec2 uv = vec2((atan(e.y, e.x) + PI)/(2.0*PI), (asin(clamp(e.z,-1.0,1.0)) + 0.5*PI)/PI);
+      // geometry follows a slightly softened copy of the height (walls lean by one vertex instead of zig-zagging); shading stays sharp
+      vec2 dv = vec2(1.0/uVerts.x / max(cos(asin(clamp(e.z,-1.0,1.0))), 0.05), 1.0/uVerts.y);
+      float hv = 0.0;
+      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) hv += texture2D(uH, uv + vec2(float(i), float(j))*dv).r * (i == 0 && j == 0 ? 0.25 : (i == 0 || j == 0 ? 0.125 : 0.0625));
+      float h = hv * uRelief * uSign; vObj = o;
+      vec4 wp = modelMatrix * vec4(o * (1.0 + h), 1.0); vWorld = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp; }`,
+  fragmentShader:`#define PI 3.141592653589793
+    uniform sampler2D uH; uniform vec2 uTexel; uniform float uRelief0; uniform float uSign; uniform float uDark; uniform float uOccD; uniform float uShadow;
+    uniform mat3 uRot; uniform mat3 uStage;
+    uniform int uLMode; uniform float uLAz; uniform float uLEl; uniform float uKey; uniform vec3 uKeyC; uniform float uEnv; uniform vec3 uEnvC;
+    uniform float uCast; uniform float uSoft; uniform float uSLen; uniform float uAO; uniform float uExpo; uniform int uTone;
+    uniform vec3 uBase; uniform float uRough; uniform float uMetal; uniform float uSpec; uniform float uClear; uniform float uClearR; uniform float uSSS; uniform vec3 uSSSC; uniform int uDebug; uniform float uInside;
+    varying vec3 vObj; varying vec3 vWorld;
+    vec3 toDisp(vec3 v){ return uRot * vec3(v.x, v.z, -v.y); }        // earth-frame vector -> display space
+    vec3 toEarth(vec3 d){ vec3 o = transpose(uRot) * d; return vec3(o.x, -o.z, o.y); }
+    float H(vec2 uv){ return uSign * texture2D(uH, uv).r * uRelief0; }   // actual height in sphere radii
+    float D_GGX(float nh, float a){ float a2 = a*a; float d = nh*nh*(a2 - 1.0) + 1.0; return a2 / (PI*d*d); }
+    float G_S(float nv, float nl, float a){ float k = (a + 1.0)*(a + 1.0)/8.0; return nv/(nv*(1.0-k)+k) * nl/(nl*(1.0-k)+k); }
+    vec3 aces(vec3 x){ return clamp((x*(2.51*x + 0.03)) / (x*(2.43*x + 0.59) + 0.14), 0.0, 1.0); }
+    void main(){
+      vec3 o = normalize(vObj); vec3 e = vec3(o.x, -o.z, o.y);
+      float lat = asin(clamp(e.z,-1.0,1.0)), lon = atan(e.y, e.x);
+      vec2 uv = vec2((lon + PI)/(2.0*PI), (lat + 0.5*PI)/PI);
+      float cl = max(cos(lat), 0.04);
+      float h0 = H(uv);
+      float hE = H(uv + vec2(uTexel.x, 0.0)), hW = H(uv - vec2(uTexel.x, 0.0)), hN = H(uv + vec2(0.0, uTexel.y)), hS = H(uv - vec2(0.0, uTexel.y));
+      float dLon = (hE - hW) / (2.0*uTexel.x*2.0*PI), dLat = (hN - hS) / (2.0*uTexel.y*PI);
+      vec3 eLon = vec3(-sin(lon), cos(lon), 0.0), eLat = vec3(-sin(lat)*cos(lon), -sin(lat)*sin(lon), cos(lat));
+      vec3 nD = normalize(toDisp(normalize(e - (dLat*eLat + dLon/cl*eLon))));
+      vec3 r = normalize(toDisp(e));
+      // light, in display space: 'local' = each point from its own direction relative to the display's up (reads the same all round the sphere)
+      vec3 L;
+      if (uLMode == 0) {
+        vec3 up = vec3(0.0, 1.0, 0.0) - r*r.y; float ul = length(up);
+        vec3 tUp = ul > 1e-3 ? up/ul : vec3(1.0, 0.0, 0.0), tSide = cross(r, tUp);
+        L = normalize(sin(uLEl)*r + cos(uLEl)*(cos(uLAz)*tUp + sin(uLAz)*tSide));
+      } else L = normalize(vec3(-sin(uLAz)*cos(uLEl), sin(uLEl), cos(uLAz)*cos(uLEl)));
+      // cast shadows: march from this point toward the light through the height field
+      vec3 Le = toEarth(L);
+      float lx = dot(Le, eLon), ly = dot(Le, eLat), lz = dot(Le, e), lxy = max(length(vec2(lx, ly)), 1e-4);
+      float sh = 1.0;
+      if (uCast > 0.0 && lz > -0.2) {
+        vec2 dir = vec2(lx, ly)/lxy; float slope = lz/lxy;
+        for (int k = 1; k <= 28; k++) {
+          float d = uSLen * float(k)/28.0;
+          float hk = H(uv + vec2(dir.x*d/(cl*2.0*PI), dir.y*d/PI));
+          float above = hk - (h0 + slope*d);
+          sh = min(sh, 1.0 - clamp(above / (d*max(uSoft, 0.02)*0.5 + 1e-5), 0.0, 1.0));
+        }
+        sh = mix(1.0, sh, uCast);
+      }
+      // soft occlusion: ground lying below its surroundings gathers shadow
+      float ring = 0.0;
+      for (int i = 0; i < 8; i++) { float a = float(i)*0.785398; vec2 d = vec2(cos(a)/cl/(2.0*PI), sin(a)/PI);
+        ring += H(uv + d*0.007) + H(uv + d*0.018); }
+      float occ = clamp((ring/16.0 - h0) / max(uOccD*uRelief0, 1e-5), 0.0, 1.0);
+      float lap = (hE + hW + hN + hS - 4.0*h0) / (uTexel.y*PI*uTexel.y*PI);
+      float ao = (1.0 - clamp(lap*0.0009, 0.0, 0.32)) * (1.0 - uAO*occ);
+      float deep = clamp(uDark * texture2D(uH, uv).g, 0.0, 1.0);
+      // shading in world space
+      vec3 N = normalize(uStage * nD), Lw = normalize(uStage * L), R0 = normalize(uStage * r);
+      // the 360 camera sits inside, but the LED sphere shows the outside: shade it as seen from straight out
+      vec3 V = uInside > 0.5 ? R0 : normalize(cameraPosition - vWorld);
+      vec3 Hh = normalize(Lw + V);
+      float nl = max(dot(N, Lw), 0.0), nv = max(dot(N, V), 1e-3), nh = max(dot(N, Hh), 0.0), vh = max(dot(V, Hh), 0.0);
+      vec3 base = uBase * (1.0 - uShadow*deep);
+      float a = max(uRough*uRough, 0.002);
+      vec3 F0 = mix(vec3(0.08*uSpec), base, uMetal);
+      vec3 F = F0 + (1.0 - F0)*pow(1.0 - vh, 5.0);
+      vec3 specK = D_GGX(nh, a) * G_S(nv, nl, a) * F / max(4.0*nv*max(nl, 1e-3), 1e-3);
+      float wrap = uSSS*0.6;
+      float nlw = max((dot(N, Lw) + wrap)/(1.0 + wrap), 0.0);
+      vec3 tint = mix(vec3(1.0), uSSSC, uSSS*clamp(1.0 - nl*1.5, 0.0, 1.0));   // light bleeding round the terminator takes the subsurface colour
+      vec3 diff = base*(1.0 - uMetal)*(1.0 - F) / PI * nlw * tint;
+      vec3 direct = (diff + specK*nl) * uKeyC * uKey * sh;
+      // clearcoat
+      float ac = max(uClearR*uClearR, 0.002), Fc = 0.04 + 0.96*pow(1.0 - vh, 5.0);
+      vec3 coat = vec3(D_GGX(nh, ac) * G_S(nv, nl, ac) * Fc / max(4.0*nv*max(nl, 1e-3), 1e-3) * nl) * uKeyC * uKey * sh * uClear;
+      direct = direct*(1.0 - Fc*uClear) + coat;
+      // environment: a soft sky above every point (outward), darker toward the walls; a broad reflection of the key
+      float sky = 0.55 + 0.45*dot(N, R0);
+      vec3 Fe = F0 + (max(vec3(1.0 - uRough), F0) - F0)*pow(1.0 - nv, 5.0);
+      vec3 envD = base*(1.0 - uMetal)*uEnvC*sky;
+      vec3 Rr = reflect(-V, N);
+      float lobe = pow(max(dot(Rr, Lw)*0.5 + 0.5, 0.0), 2.0/(a + 0.02));
+      vec3 envS = Fe*uEnvC*(0.25*sky + lobe*uKey*0.15);
+      vec3 col = direct + (envD + envS)*uEnv*ao;
+      col *= mix(1.0, ao, 0.6);
+      col *= uExpo;
+      col = uTone == 1 ? aces(col) : clamp(col, 0.0, 1.0);
+      gl_FragColor = vec4(pow(col, vec3(1.0/2.2)), 1.0);
+      if (uDebug == 1) gl_FragColor = vec4(vec3(sh), 1.0); else if (uDebug == 2) gl_FragColor = vec4(vec3(0.5 + h0*20.0), 1.0); else if (uDebug == 3) gl_FragColor = vec4(lxy, lz, length(Le), 1.0);
+    }`});
+const stageScene = new THREE.Scene();
+const stageView = new THREE.Group(); stageScene.add(stageView);           // user orbit (display space)
+const content = new THREE.Group(); stageView.add(content);                // earth/sun frame rotation
+const whiteMesh = new THREE.Mesh(new THREE.SphereGeometry(1, HI ? 1280 : 640, HI ? 640 : 320), meshMat); content.add(whiteMesh);
+const stageCam = new THREE.PerspectiveCamera(30, 1, 0.05, 100);
+
+/* 360 capture: a cube camera at the centre films the mesh, then the cube is unwrapped to an equirect frame */
+const captureScene = new THREE.Scene();
+const capContent = new THREE.Group(); captureScene.add(capContent);
+const capMesh = new THREE.Mesh(whiteMesh.geometry, meshMat); capContent.add(capMesh);
+// shading happens in world space: the orbit view turns the display, the 360 camera sees it unturned
+whiteMesh.onBeforeRender = () => { meshUniforms.uStage.value.setFromMatrix4(stageView.matrixWorld); meshUniforms.uInside.value = 0; };
+capMesh.onBeforeRender = () => { meshUniforms.uStage.value.identity(); meshUniforms.uInside.value = 1; };
+const cubeRT = new THREE.WebGLCubeRenderTarget(HI ? 2048 : 1024, {generateMipmaps:false, minFilter:THREE.LinearFilter});
+const cubeCam = new THREE.CubeCamera(0.01, 10, cubeRT); captureScene.add(cubeCam);
+const frameRT = makeRT(HW, HW/2, THREE.UnsignedByteType, true);
+const unwrapMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uCube:{value:cubeRT.texture}},
+  fragmentShader:`#define PI 3.141592653589793
+    uniform samplerCube uCube; varying vec2 vUv;
+    void main(){ float lon = (vUv.x*2.0-1.0)*PI, lat = (vUv.y-0.5)*PI;
+      vec3 e = vec3(cos(lat)*cos(lon), cos(lat)*sin(lon), sin(lat));
+      gl_FragColor = textureCube(uCube, vec3(e.x, e.z, -e.y)); }`});
+const ledMat = new THREE.ShaderMaterial({uniforms:{uF:{value:frameRT.texture}},
+  vertexShader:`varying vec3 vObj; void main(){ vObj = position; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader:`#define PI 3.141592653589793
+    uniform sampler2D uF; varying vec3 vObj;
+    void main(){ vec3 o = normalize(vObj); vec3 e = vec3(o.x, -o.z, o.y);
+      vec2 uv = vec2((atan(e.y, e.x) + PI)/(2.0*PI), (asin(clamp(e.z,-1.0,1.0)) + 0.5*PI)/PI);
+      gl_FragColor = texture2D(uF, uv); }`});
+const ledScene = new THREE.Scene();
+const ledView = new THREE.Group(); ledScene.add(ledView);
+ledView.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), ledMat));
+const frameScene = new THREE.Scene();
+const framePlane = new THREE.Mesh(new THREE.PlaneGeometry(4, 2), new THREE.ShaderMaterial({uniforms:{uF:{value:frameRT.texture}},
+  vertexShader:`varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader:`uniform sampler2D uF; varying vec2 vUv; void main(){ gl_FragColor = texture2D(uF, vUv); }`}));
+frameScene.add(framePlane);
+const frameCam = new THREE.OrthographicCamera(-2, 2, 1, -1, -1, 1);
+
+/* ================= tablet: the world map being forged ================= */
+const loader = new THREE.TextureLoader();
+const dayTex = loader.load(BLUE_MARBLE), nightTex = loader.load(BLACK_MARBLE);
+for (const t of [dayTex, nightTex]) { t.colorSpace = THREE.NoColorSpace; t.wrapS = THREE.RepeatWrapping; }
+const tabUniforms = {uAcc:{value:acc[0].texture}, uDay:{value:dayTex}, uNight:{value:nightTex}, uSun:{value:new THREE.Vector3(1,0,0)},
+  uNow:{value:1}, uLon0:{value:0}};
+const tabCore = `#define PI 3.141592653589793
+  uniform sampler2D uAcc; uniform sampler2D uDay; uniform sampler2D uNight; uniform vec3 uSun; uniform float uNow;
+  vec3 forge(float lon, float lat){
+    vec2 uv = vec2(fract((lon + PI)/(2.0*PI)), (lat + 0.5*PI)/PI);
+    vec4 a = texture2D(uAcc, uv);
+    vec3 day = texture2D(uDay, uv).rgb, night = vec3(texture2D(uNight, uv).r);
+    vec3 p = vec3(cos(lat)*cos(lon), cos(lat)*sin(lon), sin(lat));
+    float sunUp = smoothstep(-0.08, 0.08, dot(p, uSun));
+    float opt = 1.0 - exp(-a.r*0.9), act = 1.0 - exp(-a.g*0.9);
+    float mono = dot(day, vec3(0.3, 0.55, 0.15));
+    vec3 c = vec3(0.035) + 0.03*smoothstep(0.985, 1.0, max(cos(lat*6.0), cos(lon*6.0)));   // graticule, 30 deg
+    c = mix(c, vec3(mono*0.75 + 0.05), act);                 // radar / microwave / lidar: structure, no colour
+    c = mix(c, day, opt);                                    // optical, daylight only: the colour map
+    c *= mix(0.42, 1.0, sunUp);
+    c += night * vec3(1.0, 0.86, 0.6) * 0.55 * (1.0 - sunUp) * max(opt, act);
+    float rec = a.a;
+    c = mix(c, vec3(1.0), 0.45*rec);
+    return c;
+  }`;
+const tabFlatMat = new THREE.ShaderMaterial({uniforms:tabUniforms,
+  vertexShader:`varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader:`${tabCore} uniform float uLon0; varying vec2 vUv;
+    void main(){ gl_FragColor = vec4(forge((vUv.x*2.0-1.0)*PI + uLon0, (vUv.y-0.5)*PI), 1.0); }`});
+const tabGlobeMat = new THREE.ShaderMaterial({uniforms:tabUniforms,
+  vertexShader:`varying vec3 vObj; void main(){ vObj = position; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader:`${tabCore} varying vec3 vObj;
+    void main(){ vec3 o = normalize(vObj); vec3 e = vec3(o.x, -o.z, o.y);
+      gl_FragColor = vec4(forge(atan(e.y, e.x), asin(clamp(e.z,-1.0,1.0))), 1.0); }`});
+const flatScene = new THREE.Scene(), flatCam = new THREE.OrthographicCamera(-2, 2, 1, -1, -1, 1);
+flatScene.add(new THREE.Mesh(new THREE.PlaneGeometry(4, 2), tabFlatMat));
+const lineMat = (op) => new THREE.LineBasicMaterial({color:0xffffff, transparent:true, opacity:op, depthWrite:false});
+// granules (CMR MOD03, 25 Oct 2026): footprints of the archive, revealed as Terra passes
+const granUni = {uMin:{value:0}, uOn:{value:1}, uLon0:{value:0}};
+const granMat2 = new THREE.ShaderMaterial({uniforms:granUni, transparent:true, depthWrite:false,
+  vertexShader:`attribute float aT; attribute float aLon; uniform float uLon0; varying float vT; varying float vCut;
+    void main(){ vT = aT; float x = mod(aLon - uLon0 + 540.0, 360.0) - 180.0;
+      vCut = 0.0; gl_Position = projectionMatrix*modelViewMatrix*vec4(x/180.0*2.0, position.y, 0.0, 1.0); }`,
+  fragmentShader:`uniform float uMin; uniform float uOn; varying float vT;
+    void main(){ if (uOn < 0.5 || uMin < vT) discard; float cur = uMin < vT + 5.0 ? 1.0 : 0.0;
+      gl_FragColor = vec4(1.0, 1.0, 1.0, mix(0.22, 1.0, cur)); }`});
+const granLL = [];   // pairs of [lat, lon, t]
+function slerpLL(a, b, f){
+  const A = [Math.cos(a[0]*D2R)*Math.cos(a[1]*D2R), Math.cos(a[0]*D2R)*Math.sin(a[1]*D2R), Math.sin(a[0]*D2R)];
+  const B = [Math.cos(b[0]*D2R)*Math.cos(b[1]*D2R), Math.cos(b[0]*D2R)*Math.sin(b[1]*D2R), Math.sin(b[0]*D2R)];
+  return latlon(norm([A[0]+(B[0]-A[0])*f, A[1]+(B[1]-A[1])*f, A[2]+(B[2]-A[2])*f]));
+}
+for (const g of GRAN) { const P = [[g[1],g[2]],[g[3],g[4]],[g[5],g[6]],[g[7],g[8]]];
+  for (let e = 0; e < 4; e++) { let prev = P[e]; for (let k = 1; k <= 10; k++) { const cur = slerpLL(P[e], P[(e+1)%4], k/10);
+    granLL.push([prev, cur, g[0]]); prev = cur; } } }
+// flat granule segments: store raw lon per vertex, wrap in shader; drop the segment if it straddles the seam after wrap
+const gPos = [], gT = [], gLon = [];
+for (const [a, b, t] of granLL) { const lb = a[1] + wrap180(b[1] - a[1]);
+  gPos.push(0, a[0]/90, 0, 0, b[0]/90, 0); gLon.push(a[1], lb); gT.push(t, t); }
+const granGeo = new THREE.BufferGeometry();
+granGeo.setAttribute('position', new THREE.Float32BufferAttribute(gPos, 3));
+granGeo.setAttribute('aT', new THREE.Float32BufferAttribute(gT, 1));
+granGeo.setAttribute('aLon', new THREE.Float32BufferAttribute(gLon, 1));
+const granFlat = new THREE.LineSegments(granGeo, granMat2); granFlat.frustumCulled = false; flatScene.add(granFlat);
+// satellites on the flat map
+const satFlatGeo = new THREE.BufferGeometry(); satFlatGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N*3), 3));
+const satFlat = new THREE.Points(satFlatGeo, new THREE.PointsMaterial({color:0xffffff, size:4, sizeAttenuation:false})); flatScene.add(satFlat);
+const selPt = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3)),
+  new THREE.PointsMaterial({color:0xffffff, size:11, sizeAttenuation:false, transparent:true, opacity:0.35})); flatScene.add(selPt);
+const TRK = 400;
+const trackGeo = new THREE.BufferGeometry(); trackGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRK*2*3), 3));
+const track = new THREE.LineSegments(trackGeo, lineMat(0.7)); track.frustumCulled = false; flatScene.add(track);
+const scanGeo = new THREE.BufferGeometry(); scanGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(64*2*3), 3));
+const scanFlat = new THREE.LineSegments(scanGeo, lineMat(1)); scanFlat.frustumCulled = false; flatScene.add(scanFlat);
+
+// satellite view: globe in earth-fixed axes, camera rides the selected satellite
+const sv = new THREE.Scene();
+sv.add(new THREE.Mesh(new THREE.SphereGeometry(1, 256, 128), tabGlobeMat));
+const svCam = new THREE.PerspectiveCamera(62, 1, 0.001, 50);
+const svSatGeo = new THREE.BufferGeometry(); svSatGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N*3), 3));
+sv.add(new THREE.Points(svSatGeo, new THREE.PointsMaterial({color:0xffffff, size:4, sizeAttenuation:false})));
+const fanGeo = new THREE.BufferGeometry(); fanGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(4*3), 3));
+const fan = new THREE.LineSegments(fanGeo, lineMat(0.9)); fan.frustumCulled = false; sv.add(fan);
+const svScanGeo = new THREE.BufferGeometry(); svScanGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(64*2*3), 3));
+const svScan = new THREE.LineSegments(svScanGeo, lineMat(1)); svScan.frustumCulled = false; sv.add(svScan);
+const svTrackGeo = new THREE.BufferGeometry(); svTrackGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRK*2*3), 3));
+const svTrack = new THREE.LineSegments(svTrackGeo, lineMat(0.55)); svTrack.frustumCulled = false; sv.add(svTrack);
+
+/* ================= simulation ================= */
+const SPEEDS = [1, 10, 60, 120, 600, 3600, 21600];
+const st = {regrow:10, follow:false, ms:T0, speed:4, paused:false, style:0, view:0, frame:0, tab:0, sel:0, gran:true, center:false, sub:20000};
+/* pages: 'studio' (everything), 'sphere' (only the equirect frame, full screen), 'tablet' (only the map). Settings can come from the URL:
+   ?style=cut|build|erosion &frame=earth|sun|satellite &sat=TERRA &trail=6 &depth=223 &levels=even|orbit &speed=600 &loop=1 (days) &clock=1 */
+const PAGE = window.PAGE || 'studio';
+const Q = new URLSearchParams(location.search);
+{ const v = (k, list) => list.indexOf(Q.get(k)); let i;
+  if ((i = v('style', ['cut', 'build', 'erosion'])) >= 0) st.style = i;
+  if ((i = v('frame', ['earth', 'sun', 'satellite'])) >= 0) st.frame = i;
+  if (Q.get('sat')) { i = SATS.findIndex(x => x[0].toLowerCase().replace(/[^a-z0-9]/g, '') === Q.get('sat').toLowerCase().replace(/[^a-z0-9]/g, '')); if (i >= 0) st.sel = i; }
+  if (Q.get('speed')) { i = SPEEDS.indexOf(+Q.get('speed')); if (i >= 0) st.speed = i; } }
+// shared clock: every page computes the same satellite time from the wall clock, so a sphere and a tablet on different devices stay in step
+st.clock = Q.has('clock') ? Q.get('clock') !== '0' : PAGE !== 'studio';
+st.loopDays = Math.max(0.25, +(Q.get('loop') || 1));
+const clockMs = () => T0 + ((Date.now()*SPEEDS[st.speed]) % (st.loopDays*86400000));
+const chan = 'BroadcastChannel' in window ? new BroadcastChannel('sampling-sphere') : null;   // same computer: tablet picks drive the sphere
+const isOptLit = s => !s.optical || s.lit;
+
+// along-track boundary planes: a segment starts exactly where the previous one ended
+const cross3 = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+function seg(n0, n1, prev){ const h = norm(cross3(n0, n1)); return [prev ? prev[1] : norm(cross3(h, n0)), norm(cross3(h, n1))]; }
+/* tools: trail of each satellite over the last st.trail hours, sampled on a fixed time grid so the shape is stable */
+const MU = 398600.4418;
+sats.forEach(s => { const n = s.rec.no/60; s.alt = Math.cbrt(MU/(n*n)) - RE; });
+[...sats].sort((a, b) => a.alt - b.alt).forEach((s, r) => s.rank = r);
+const ALTMAX = Math.max(...sats.map(s => s.alt));
+const frameAt = new Map();
+function frameInfo(ms){ let f = frameAt.get(ms); if (f) return f;
+  const d = new Date(ms), gmst = satellite.gstime(d), sunGeo = rotZ(sunECI(ms), -gmst), ssl = Math.atan2(sunGeo[1], sunGeo[0]);
+  f = {gmst, sunGeo, ssl, sunSol:rotZ(sunGeo, -ssl)}; frameAt.set(ms, f); return f; }
+function groundAt(s, ms, cache){ let g = cache && s.trail.get(ms); if (g) return g;
+  const pv = satellite.propagate(s.rec, new Date(ms)); if (!pv.position) return null;
+  const F = frameInfo(ms), geo = norm(rotZ([pv.position.x, pv.position.y, pv.position.z], -F.gmst));
+  g = {geo, sol:rotZ(geo, -F.ssl), F}; if (cache) s.trail.set(ms, g); return g; }
+sats.forEach(s => s.trail = new Map());
+const toolDepth = s => toolP.depth * (toolP.spacing ? s.alt/ALTMAX : (s.rank + 1)/N);
+const toolP = {depth:0.05, spacing:0, trail:6};
+function stampTools(now, sol){
+  const W = toolP.trail*3600000, dt = Math.max(30000, Math.ceil(W/360/10000)*10000);
+  const t0 = now - W, k0 = Math.floor(t0/dt) + 1, k1 = Math.floor(now/dt);
+  for (const s of sats) {
+    const pts = [groundAt(s, t0, false)];
+    for (let k = k0; k <= k1; k++) if (k*dt > t0 && k*dt < now) pts.push(groundAt(s, k*dt, true));
+    pts.push(groundAt(s, now, false));
+    for (const key of s.trail.keys()) if (key < t0 - dt || key % dt) s.trail.delete(key);
+    const P = pts.filter(Boolean), d = toolDepth(s), wd = s.halfW/D2R + 0.3;
+    let b = null;
+    for (let i = 1; i < P.length; i++) {
+      const a0 = sol ? P[i-1].sol : P[i-1].geo, a1 = sol ? P[i].sol : P[i].geo;
+      if (a0[0]*a1[0] + a0[1]*a1[1] + a0[2]*a1[2] > 0.9999999) continue;
+      b = seg(a0, a1, b);
+      const flags = (i === 1 ? 1 : 0) + (i === P.length - 1 ? 2 : 0);
+      toolStamp.push(a0, a1, wd, [s.sinW, s.optical ? 1 : 0, d, flags], sol ? P[i].F.sunSol : P[i].F.sunGeo, b[0], b[1]);
+    }
+  }
+  if (frameAt.size > 4000) frameAt.clear();
+  clearRT(heightRT); toolStamp.flush(heightRT);
+}
+function stepSats(ms, record){
+  const date = new Date(ms), gmst = satellite.gstime(date), sun = sunECI(ms);
+  const sunGeo = rotZ(sun, -gmst), ssl = Math.atan2(sunGeo[1], sunGeo[0]), sunSol = rotZ(sunGeo, -ssl);
+  const t = (ms - T0)/86400000 + 1;
+  for (const s of sats) {
+    const pv = satellite.propagate(s.rec, date); if (!pv.position) continue;
+    s.r = [pv.position.x, pv.position.y, pv.position.z]; s.v = [pv.velocity.x, pv.velocity.y, pv.velocity.z];
+    s.nGeo = norm(rotZ(s.r, -gmst)); s.nSol = rotZ(s.nGeo, -ssl);
+    s.lit = s.nGeo[0]*sunGeo[0] + s.nGeo[1]*sunGeo[1] + s.nGeo[2]*sunGeo[2] > 0.0872;
+    if (record && s.pGeo) {
+      const P = [s.sinW, s.optical ? 1 : 0, t, 0], wd = s.halfW/D2R + 0.3;
+      s.bGeo = seg(s.pGeo, s.nGeo, s.bGeo);
+      swathStamp.push(s.pGeo, s.nGeo, wd, P, sunGeo, s.bGeo[0], s.bGeo[1]);
+    }
+  }
+  if (record) swathStamp.flush(acc[0]);
+  if (record) { for (const s of sats) if (s.pSol) { s.bSol = seg(s.pSol, s.nSol, s.bSol); swathStamp.push(s.pSol, s.nSol, s.halfW/D2R + 0.3, [s.sinW, s.optical ? 1 : 0, t, 0], sunSol, s.bSol[0], s.bSol[1]); } swathStamp.flush(acc[1]); }
+  if (record) for (const s of sats) { s.pGeo = s.nGeo; s.pSol = s.nSol; }
+  return {gmst, sun, sunGeo, ssl, t};
+}
+let info;
+function advance(dtSim, dtReal){
+  const n = Math.max(1, Math.ceil(dtSim / st.sub));
+  for (let i = 1; i <= n; i++) {
+    info = stepSats(st.ms + dtSim*i/n, true);
+  }
+  st.ms += dtSim;
+  const roll = st.regrow*3600000;                            // regrowth: e-folding time in hours of satellite time
+  const k = Math.exp(-dtSim/roll);
+  const kf = Math.exp(-dtSim/(heightMat.uniforms.uFreshT.value*86400000));
+  scaleRT(acc[0], [1, 1, k, kf]); scaleRT(acc[1], [1, 1, k, kf]);
+}
+function stepWaves(){
+  const src = waveMat.uniforms.uSrc.value, R = waveMat.uniforms.uR.value;
+  sats.forEach((s, i) => { const n = st.frame === 1 ? s.nSol : s.nGeo; if (!n) return;
+    src[i].set(n[0], n[1], n[2]); R[i] = isOptLit(s) ? Math.min(Math.max(s.halfW*0.12, 0.7*D2R), 1.6*D2R) : 0; });
+  for (let it = 0; it < 3; it++) {
+    waveMat.uniforms.uW.value = waveRT[waveI].texture; waveMat.uniforms.uPhase.value += 2*PI/14;
+    pass(waveMat, waveRT[1 - waveI]); waveI = 1 - waveI;
+  }
+}
+function resetTransient(){ clearRT(beadRT); clearRT(waveRT[0]); clearRT(waveRT[1]); }
+
+/* ================= layout + interaction ================= */
+const $ = id => document.getElementById(id);
+document.body.classList.add('page-' + PAGE);
+if (PAGE === 'tablet') document.body.classList.add('only-tablet');
+if (PAGE === 'sphere') {
+  document.body.classList.add('only-sphere');
+  let hideT; const wake = () => { document.body.classList.add('ui-on'); clearTimeout(hideT); hideT = setTimeout(() => document.body.classList.remove('ui-on'), 2500); };
+  addEventListener('pointermove', wake); addEventListener('pointerdown', wake);
+  const fsToggle = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+  $('fsBtn').onclick = fsToggle;
+  addEventListener('keydown', e => { if (e.key === 'f' || e.key === 'F') fsToggle(); });
+  $('exportBtn').style.display = 'none';
+}
+if (window.DEPLOYED && PAGE === 'studio') $('pageLinks').hidden = false;
+const route = () => { if (PAGE !== 'studio') return; document.body.classList.toggle('only-sphere', location.hash === '#sphere'); document.body.classList.toggle('only-tablet', location.hash === '#tablet'); };
+addEventListener('hashchange', route); route();
+function bindSeg(id, key, after){
+  const el = $(id);
+  const sync = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.v === st[key]));
+  el.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; st[key] = +b.dataset.v; sync(); after && after(); });
+  sync(); return sync;
+}
+const syncStyle = bindSeg('segStyle', 'style', notes);
+const fmtH = v => v < 1 ? Math.round(v*60) + ' min' : (+v.toFixed(2)) + ' h';
+// [key, label, min, max, step, default, format, set, shown-in]
+const SLIDERS = [
+  ['trail', 'Trail length (how long a tool stays)', 0.0833, 12, 0.0833, 6, fmtH, v => toolP.trail = v, 'tool'],
+  ['depth', 'Deepest layer', 0.005, 0.1, 0.001, 0.05, v => (v*RE).toFixed(0) + ' km', v => toolP.depth = v, 'tool'],
+  ['pass', 'Depth per pass', 0, 0.025, 0.0005, 0.007, v => (v*RE).toFixed(0) + ' km', v => heightMat.uniforms.uDepth.value = v, 'erode'],
+  ['fresh', 'Fresh cut depth', 0, 0.05, 0.001, 0.012, v => (v*RE).toFixed(0) + ' km', v => heightMat.uniforms.uFresh.value = v, 'erode'],
+  ['freshT', 'Fresh cut lasts', 1, 120, 1, 15, v => v + ' min', v => heightMat.uniforms.uFreshT.value = v/1440, 'erode'],
+  ['regrow', 'Regrowth time', 1, 72, 1, 10, v => v + ' h', v => st.regrow = v, 'erode'],
+  ['maxL', 'Passes before it bottoms out', 1, 30, 1, 7, v => v, v => heightMat.uniforms.uMaxL.value = v, 'erode'],
+  ['wall', 'Wall softness', 0.3, 8, 0.1, 1.5, v => v.toFixed(1), v => heightMat.uniforms.uSoft.value = v, 'erode'],
+  ['relief', 'Relief exaggeration', 0.2, 3, 0.05, 1, v => v.toFixed(2) + '×', v => meshUniforms.uRelief.value = v],
+  // light
+  ['az', 'Light direction', -180, 180, 1, LOOK_DEFAULTS.az, v => v + '°', null, 'light'],
+  ['el', 'Light height', 3, 88, 1, LOOK_DEFAULTS.el, v => v + '°', null, 'light'],
+  ['key', 'Key light strength', 0, 8, 0.05, LOOK_DEFAULTS.key, v => v.toFixed(2), null, 'light'],
+  ['keyColor', 'Key light colour', 0, 0, 0, LOOK_DEFAULTS.keyColor, null, null, 'light'],
+  ['env', 'Environment light', 0, 2, 0.01, LOOK_DEFAULTS.env, v => v.toFixed(2), null, 'light'],
+  ['envColor', 'Environment colour', 0, 0, 0, LOOK_DEFAULTS.envColor, null, null, 'light'],
+  ['cast', 'Cast shadows', 0, 1, 0.01, LOOK_DEFAULTS.cast, v => v.toFixed(2), null, 'light'],
+  ['soft', 'Shadow softness', 0.02, 1.5, 0.01, LOOK_DEFAULTS.soft, v => v.toFixed(2), null, 'light'],
+  ['shadowLen', 'Shadow reach', 0.02, 0.25, 0.005, LOOK_DEFAULTS.shadowLen, v => (v*RE).toFixed(0) + ' km', null, 'light'],
+  ['ao', 'Ambient occlusion', 0, 1, 0.01, LOOK_DEFAULTS.ao, v => v.toFixed(2), null, 'light'],
+  ['darken', 'Darken deep layers', 0, 0.8, 0.01, LOOK_DEFAULTS.darken, v => v.toFixed(2), null, 'light'],
+  ['exposure', 'Exposure', 0.3, 2.5, 0.01, LOOK_DEFAULTS.exposure, v => v.toFixed(2), null, 'light'],
+  // material
+  ['base', 'Base colour', 0, 0, 0, LOOK_DEFAULTS.base, null, null, 'material'],
+  ['rough', 'Roughness', 0.03, 1, 0.01, LOOK_DEFAULTS.rough, v => v.toFixed(2), null, 'material'],
+  ['metal', 'Metalness', 0, 1, 0.01, LOOK_DEFAULTS.metal, v => v.toFixed(2), null, 'material'],
+  ['spec', 'Specular', 0, 1, 0.01, LOOK_DEFAULTS.spec, v => v.toFixed(2), null, 'material'],
+  ['clear', 'Clearcoat', 0, 1, 0.01, LOOK_DEFAULTS.clear, v => v.toFixed(2), null, 'material'],
+  ['clearRough', 'Clearcoat roughness', 0.02, 1, 0.01, LOOK_DEFAULTS.clearRough, v => v.toFixed(2), null, 'material'],
+  ['sss', 'Subsurface glow', 0, 1, 0.01, LOOK_DEFAULTS.sss, v => v.toFixed(2), null, 'material'],
+  ['sssColor', 'Subsurface colour', 0, 0, 0, LOOK_DEFAULTS.sssColor, null, null, 'material']];
+const PRESETS = {
+  'Matte white':{base:'#f2f0ea', rough:0.62, metal:0, spec:0.5, clear:0.15, clearRough:0.25, sss:0.25, sssColor:'#ffd9c2'},
+  'Porcelain':{base:'#f7f6f2', rough:0.32, metal:0, spec:0.6, clear:0.8, clearRough:0.06, sss:0.45, sssColor:'#f3e3d6'},
+  'Plaster':{base:'#ecebe6', rough:0.95, metal:0, spec:0.2, clear:0, clearRough:0.5, sss:0.1, sssColor:'#ffe8d8'},
+  'Clay':{base:'#d6c3b0', rough:0.85, metal:0, spec:0.3, clear:0, clearRough:0.5, sss:0.35, sssColor:'#ffb08a'},
+  'Satin metal':{base:'#d9d9d6', rough:0.33, metal:1, spec:0.5, clear:0.2, clearRough:0.2, sss:0, sssColor:'#ffffff'}};
+const sliderEls = {};
+SLIDERS.forEach(([key, name, mn, mx, step, def, fmt, set, grp], i) => {
+  const isLook = key in LOOK_DEFAULTS, isColor = typeof def === 'string';
+  const l = document.createElement('label'); const id = 'sl' + i;
+  l.className = (grp === 'light' || grp === 'material') ? 'grp-' + grp : 'grp-carve' + (grp ? ' ' + grp + '-only' : '');
+  l.innerHTML = isColor ? `<span>${name}</span><input type="color" id="${id}" value="${def}">`
+    : `<span>${name}</span><output for="${id}"></output><input type="range" id="${id}" min="${mn}" max="${mx}" step="${step}" value="${def}">`;
+  const inp = l.querySelector('input'), out = l.querySelector('output');
+  const apply = () => { const v = isColor ? inp.value : +inp.value;
+    if (isLook) { LOOK[key] = v; applyLook(); saveLook(); } else set(v);
+    if (out) out.textContent = fmt(v); };
+  inp.addEventListener('input', apply);
+  $(grp === 'light' || grp === 'material' ? 'lookSliders' : 'sliders').append(l);
+  sliderEls[key] = {inp, def, apply, set:v => { inp.value = v; apply(); }};
+});
+// light mode and tone mapping are choices, not sliders
+const segLook = (id, key) => { const el = $(id), sync = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.v === LOOK[key]));
+  el.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { LOOK[key] = +b.dataset.v; applyLook(); saveLook(); sync(); } }); return sync; };
+const syncLightMode = segLook('segLightMode', 'lightMode'), syncTone = segLook('segTone', 'tone');
+Object.keys(PRESETS).forEach(n => { const b = document.createElement('button'); b.type = 'button'; b.textContent = n; b.dataset.p = n; $('segPreset').append(b); });
+$('segPreset').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return;
+  for (const [k, v] of Object.entries(PRESETS[b.dataset.p])) sliderEls[k].set(v); });
+function syncLookUI(){ for (const k in LOOK) if (sliderEls[k]) { sliderEls[k].inp.value = LOOK[k]; sliderEls[k].apply(); } syncLightMode(); syncTone(); }
+// the look is remembered on this device, and can travel in a link (?look=...)
+function saveLook(){ try { localStorage.setItem('sphere-look', JSON.stringify(LOOK)); } catch (e) {} }
+function loadLook(){
+  let o = null;
+  try { if (Q.get('look')) o = JSON.parse(atob(Q.get('look').replace(/-/g, '+').replace(/_/g, '/'))); } catch (e) {}
+  if (!o) try { o = JSON.parse(localStorage.getItem('sphere-look')); } catch (e) {}
+  if (o) for (const k in LOOK_DEFAULTS) if (k in o && typeof o[k] === typeof LOOK_DEFAULTS[k]) LOOK[k] = o[k];
+}
+loadLook();
+for (const k in sliderEls) if (!(k in LOOK)) sliderEls[k].apply();
+syncLookUI();
+// carving settings from the URL (trail in hours, depth in km, levels=even|orbit)
+if (Q.get('trail')) sliderEls.trail.set(+Q.get('trail'));
+if (Q.get('depth')) sliderEls.depth.set(+Q.get('depth')/RE);
+if (Q.get('relief')) sliderEls.relief.set(+Q.get('relief'));
+if (Q.get('levels')) toolP.spacing = Q.get('levels') === 'orbit' ? 1 : 0;
+$('closeParams').onclick = () => $('carvePanel').open = false;
+$('resetParams').onclick = () => {
+  const tab = $('carvePanel').dataset.tab;
+  if (tab === 'carve') { for (const k in sliderEls) if (!(k in LOOK)) sliderEls[k].set(sliderEls[k].def); toolP.spacing = 0; syncSpacing(); }
+  else { for (const k in LOOK_DEFAULTS) { const g = SLIDERS.find(x => x[0] === k); if (!g || g[8] === tab) LOOK[k] = LOOK_DEFAULTS[k]; }
+    if (tab === 'light') { LOOK.lightMode = 0; LOOK.tone = 1; } applyLook(); saveLook(); syncLookUI(); } };
+$('linkParams').onclick = async () => {
+  const p = new URLSearchParams();
+  p.set('style', ['cut', 'build', 'erosion'][st.style]); p.set('frame', ['earth', 'sun', 'satellite'][st.frame]);
+  if (st.frame === 2) p.set('sat', sats[st.sel].name);
+  p.set('trail', +toolP.trail.toFixed(3)); p.set('depth', Math.round(toolP.depth*RE)); p.set('levels', toolP.spacing ? 'orbit' : 'even');
+  p.set('relief', meshUniforms.uRelief.value); p.set('speed', SPEEDS[st.speed]);
+  p.set('look', btoa(JSON.stringify(LOOK)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''));
+  const url = (window.DEPLOYED ? location.origin + '/sphere-display' : 'sphere-display') + '?' + p.toString();
+  $('linkOut').hidden = false; $('linkOut').value = url; $('linkOut').select();
+  try { await navigator.clipboard.writeText(url); $('linkParams').textContent = 'Copied'; setTimeout(() => $('linkParams').textContent = 'Copy display link', 1500); } catch (e) {}
+};
+// tabs
+const setTab = t => { $('carvePanel').dataset.tab = t; $('segTab2').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.t === t)); };
+$('segTab2').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setTab(b.dataset.t); });
+setTab('carve');
+const syncSpacing = (() => { const el = $('segSpacing'), sync = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.v === toolP.spacing));
+  el.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { toolP.spacing = +b.dataset.v; sync(); } }); sync(); return sync; })();
+$('resetSculpt').onclick = () => { clearRT(acc[0]); clearRT(acc[1]); resetTransient(); }; bindSeg('segView', 'view', notes);
+const syncFrame = bindSeg('segFrame', 'frame', () => { resetTransient(); if (st.frame === 2) { yaw = -PI/2; pitch = 0; idle = -1e9; } else idle = 0; notes(); });
+bindSeg('segTab', 'tab', notes);
+const sel = $('satSel');
+sats.forEach((s, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${s.name} · ${s.inst}`; sel.append(o); });
+function selectSat(i, local = true){ st.sel = i; sel.value = i; trackStamp = -1e12; notes();
+  if (local && chan) chan.postMessage({sel:i});
+  if (local && LIVE.on && PAGE === 'tablet') LIVE.client.publish(liveTopic('sel'), JSON.stringify({sel:i, from:LIVE.id})); }
+sel.addEventListener('change', () => selectSat(+sel.value));
+if (chan) chan.onmessage = e => { if (e.data && Number.isInteger(e.data.sel)) selectSat(e.data.sel, false); };
+const syncBtns = () => { $('granBtn').setAttribute('aria-pressed', st.gran); $('centerBtn').setAttribute('aria-pressed', st.center);
+  $('pause').textContent = st.paused ? 'Play' : 'Pause'; };
+$('granBtn').onclick = () => { st.gran = !st.gran; syncBtns(); };
+$('centerBtn').onclick = () => { st.center = !st.center; syncBtns(); };
+$('pause').onclick = () => { st.paused = !st.paused; syncBtns(); };
+$('slower').onclick = () => { st.speed = Math.max(0, st.speed - 1); };
+$('faster').onclick = () => { st.speed = Math.min(SPEEDS.length - 1, st.speed + 1); };
+syncBtns();
+addEventListener('keydown', e => { if (e.target.tagName === 'SELECT') return;
+  if (e.key === ' ') { st.paused = !st.paused; syncBtns(); e.preventDefault(); } });
+
+const STYLE_NOTES = [
+  'Cut: each satellite is one hard-edged tool, the width of its swath, cutting to its own fixed level (set by its orbit). The shape is the path it swept in the last few hours, nothing accumulates: where tools overlap, the deepest wins. Optical tools only cut in daylight.',
+  'Build: the same tools, adding instead of cutting, so each satellite stands up as its own layer.',
+  'Erosion (earlier): every pass planes one more layer off and unseen ground grows back, so the surface remembers.'];
+const VIEW_NOTES = [
+  'Mesh: the white relief as it exists in 3D. Drag to orbit. Each point is lit from its own upper left, so the relief reads the same from every side of the physical sphere.',
+  'On LED sphere: the mesh filmed by a 360 camera at its centre, unwrapped to an equirectangular frame, and wrapped back onto a plain sphere. Drag around it: what survives is the shading, not parallax.',
+  '360 frame: the equirectangular frame exactly as it would be sent to the sphere display.'];
+function notes(){
+  $('stageNote').textContent = `${STYLE_NOTES[st.style]}  ${VIEW_NOTES[st.view]}${['', '  Sun-fixed: the sun stays at the front, so sun-synchronous orbits stand still.', '  Satellite: the selected satellite is held still at the centre of the frame, flying upward; the Earth turns beneath it.'][st.frame]}`;
+  $('tabNote').textContent = st.tab === 0
+    ? 'The colour map exists only where an optical instrument has passed in daylight. Radar, microwave and laser passes add structure without colour. White lines are recent swath edges; ladders are the 5-minute MODIS granules the archive stores.'
+    : 'Riding the selected satellite, looking straight down. Its swath is the bright cross line; the Earth moves underneath.';
+}
+notes();
+
+let yaw = 0.6, pitch = 0.28, zoom = 4.6, drag = null, idle = 0;
+const DRAGDIR = 1;
+if (PAGE === 'sphere') { yaw = 0; pitch = 0; try { const r = JSON.parse(localStorage.getItem('sphere-rot')); if (r) [yaw, pitch] = r; } catch (e) {}
+  canvas.addEventListener('dblclick', () => { yaw = 0; pitch = 0; try { localStorage.removeItem('sphere-rot'); } catch (e) {} }); }
+const stageEl = $('stage');
+const touches = new Map(); let pinch = null;   // one finger orbits, two fingers pinch to zoom
+const spread = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+canvas.addEventListener('pointerdown', e => { const r = stageEl.getBoundingClientRect();
+  if (e.clientY > r.bottom || getComputedStyle(stageEl).display === 'none') return;
+  touches.set(e.pointerId, {x:e.clientX, y:e.clientY}); canvas.setPointerCapture(e.pointerId);
+  if (touches.size === 2) { drag = null; pinch = {d:spread(), zoom}; }
+  else if (touches.size === 1) drag = {x:e.clientX, y:e.clientY, yaw, pitch}; });
+canvas.addEventListener('pointermove', e => { if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, {x:e.clientX, y:e.clientY}); idle = 0;
+  if (pinch && touches.size === 2) { zoom = Math.max(1.6, Math.min(12, pinch.zoom * pinch.d / Math.max(spread(), 1))); return; }
+  if (!drag) return;
+  // on the display page one drag across the full width turns the sculpture once around, so the surface follows the pointer
+  const kx = PAGE === 'sphere' ? DRAGDIR*2*PI/innerWidth : 0.005, ky = PAGE === 'sphere' ? PI/innerHeight : 0.005;
+  yaw = drag.yaw + (e.clientX - drag.x)*kx; pitch = Math.max(-1.4, Math.min(1.4, drag.pitch + (e.clientY - drag.y)*ky));
+  if (PAGE === 'sphere') try { localStorage.setItem('sphere-rot', JSON.stringify([yaw, pitch])); } catch (err) {} });
+const lift = e => { touches.delete(e.pointerId); pinch = null; drag = null;
+  if (touches.size === 1) { const [t] = touches.values(); drag = {x:t.x, y:t.y, yaw, pitch}; } };
+canvas.addEventListener('pointerup', lift); canvas.addEventListener('pointercancel', lift);
+document.querySelectorAll('.note').forEach(n => n.addEventListener('click', () => n.classList.toggle('open')));
+if (matchMedia('(max-width:760px)').matches) $('carvePanel').open = false;
+canvas.addEventListener('wheel', e => { const r = stageEl.getBoundingClientRect(); if (e.clientY > r.bottom) return;
+  zoom = Math.max(1.6, Math.min(12, zoom*Math.exp(e.deltaY*0.001))); e.preventDefault(); }, {passive:false});
+// tap a satellite on the map to select it
+$('tablet').addEventListener('click', e => {
+  if (e.target.closest('.bar') || st.tab !== 0) return;
+  let best = -1, bd = 22;
+  labels.forEach((l, i) => { const x = parseFloat(l.style.left), y = parseFloat(l.style.top); const r = $('tablet').getBoundingClientRect();
+    const d = Math.hypot(e.clientX - r.left - x, e.clientY - r.top - y); if (d < bd) { bd = d; best = i; } });
+  if (best >= 0) selectSat(best);
+});
+$('tablet').style.pointerEvents = 'auto';
+const labels = sats.map(s => { const el = document.createElement('span'); el.textContent = s.name; $('labels').append(el); return el; });
+
+/* ================= per-frame scene updates ================= */
+let trackStamp = -1e12;
+function flatXY(la, lo, lon0){ return [wrap180(lo - lon0)/180*2, la/90]; }
+function scanLine(s, out, map){   // current cross-track scan line on the ground
+  const n = s.nGeo, v = norm(rotZ(s.v, -info.gmst)), c = norm([n[1]*v[2]-n[2]*v[1], n[2]*v[0]-n[0]*v[2], n[0]*v[1]-n[1]*v[0]]);
+  let o = 0, prev = null;
+  for (let k = 0; k <= 32; k++) { const a = -s.halfW + 2*s.halfW*k/32, ca = Math.cos(a), sa = Math.sin(a);
+    const p = [ca*n[0]+sa*c[0], ca*n[1]+sa*c[1], ca*n[2]+sa*c[2]]; const q = map(p);
+    if (prev && q && Math.abs(q[0] - prev[0]) < 2) { out.set([...prev, ...q], o); o += 6; } prev = q; }
+  out.fill(0, o); return o;
+}
+function updateTracks(){
+  const s = sats[st.sel], per = 2*PI/s.rec.no*60000, a = trackGeo.attributes.position.array, b = svTrackGeo.attributes.position.array;
+  let prev = null, prev3 = null, o = 0;
+  for (let k = 0; k < TRK; k++) {
+    const ms = st.ms - per + 2*per*k/(TRK - 1), d = new Date(ms), pv = satellite.propagate(s.rec, d);
+    const n = norm(rotZ([pv.position.x, pv.position.y, pv.position.z], -satellite.gstime(d)));
+    const [la, lo] = latlon(n), v3 = e2t(n, 1.001);
+    if (prev) { a.set([...prev, la, lo, 0], o); b.set([prev3.x, prev3.y, prev3.z, v3.x, v3.y, v3.z], o); o += 6; }
+    prev = [la, lo, 0]; prev3 = v3;
+  }
+  s._trk = a.slice(0, o); trackStamp = st.ms;
+  svTrackGeo.attributes.position.needsUpdate = true;
+}
+function updateTablet(rect){
+  const s = sats[st.sel];
+  tabUniforms.uSun.value.set(...info.sunGeo); tabUniforms.uNow.value = info.t;
+  const lon0 = st.center && s.nGeo ? latlon(s.nGeo)[1] : 0;
+  tabUniforms.uLon0.value = lon0*D2R; granUni.uLon0.value = lon0;
+  granUni.uMin.value = (st.ms - T0)/60000; granUni.uOn.value = st.gran ? 1 : 0;
+  if (Math.abs(st.ms - trackStamp) > 120000) updateTracks();
+  // flat overlays
+  const sp = satFlatGeo.attributes.position.array, sv3 = svSatGeo.attributes.position.array;
+  const mapW = rect.w, mapH = rect.h, a = mapW/mapH;
+  const sx = a > 2 ? mapH*2 : mapW, sy = sx/2, ox = (mapW - sx)/2, oy = (mapH - sy)/2;
+  sats.forEach((q, i) => { if (!q.nGeo) return; const [la, lo] = latlon(q.nGeo); const [x, y] = flatXY(la, lo, lon0);
+    sp.set([x, y, 0.1], i*3);
+    const L = labels[i]; L.hidden = st.tab !== 0; L.className = i === st.sel ? 'sel' : '';
+    L.style.left = (ox + (x + 2)/4*sx) + 'px'; L.style.top = (rect.top + oy + (1 - (y + 1)/2)*sy) + 'px';
+    const p3 = e2t(norm(q.nGeo), 1 + (Math.hypot(...q.r) - RE)/RE); sv3.set([p3.x, p3.y, p3.z], i*3); });
+  satFlatGeo.attributes.position.needsUpdate = true; svSatGeo.attributes.position.needsUpdate = true;
+  if (s.nGeo) { const [la, lo] = latlon(s.nGeo); selPt.geometry.attributes.position.array.set([...flatXY(la, lo, lon0), 0.2]); selPt.geometry.attributes.position.needsUpdate = true; }
+  const ta = trackGeo.attributes.position.array, src = s._trk || [];
+  let o = 0;
+  for (let i = 0; i < src.length; i += 6) { const [x0, y0] = flatXY(src[i], src[i+1], lon0), [x1, y1] = flatXY(src[i+3], src[i+4], lon0);
+    if (Math.abs(x1 - x0) < 1) { ta.set([x0, y0, 0, x1, y1, 0], o); o += 6; } }
+  ta.fill(0, o); trackGeo.attributes.position.needsUpdate = true;
+  scanLine(s, scanGeo.attributes.position.array, p => { const [la, lo] = latlon(p); return [...flatXY(la, lo, lon0), 0.2]; });
+  scanGeo.attributes.position.needsUpdate = true;
+  scanLine(s, svScanGeo.attributes.position.array, p => { const v = e2t(p, 1.002); return [v.x, v.y, v.z]; });
+  svScanGeo.attributes.position.needsUpdate = true;
+  // camera on the satellite, looking at nadir, flight direction up
+  const alt = (Math.hypot(...s.r) - RE)/RE, n = s.nGeo, v = norm(rotZ(s.v, -info.gmst));
+  const satP = e2t(n, 1 + alt), camP = e2t(n, 1 + alt*2.6 + 0.04);
+  svCam.position.copy(camP); svCam.up.copy(e2t(v)); svCam.lookAt(0, 0, 0);
+  // fan from the satellite to both swath edges
+  const c = norm([n[1]*v[2]-n[2]*v[1], n[2]*v[0]-n[0]*v[2], n[0]*v[1]-n[1]*v[0]]), cw = Math.cos(s.halfW), sw = Math.sin(s.halfW);
+  const L = e2t([cw*n[0]+sw*c[0], cw*n[1]+sw*c[1], cw*n[2]+sw*c[2]], 1.002), R = e2t([cw*n[0]-sw*c[0], cw*n[1]-sw*c[1], cw*n[2]-sw*c[2]], 1.002);
+  fanGeo.attributes.position.array.set([satP.x, satP.y, satP.z, L.x, L.y, L.z, satP.x, satP.y, satP.z, R.x, R.y, R.z]);
+  fanGeo.attributes.position.needsUpdate = true;
+  fan.material.opacity = isOptLit(s) ? 0.9 : 0.15; svScan.material.opacity = scanFlat.material.opacity = isOptLit(s) ? 1 : 0.2;
+  const per = 2*PI/s.rec.no;
+  $('satInfo').textContent = `${s.name} · ${s.inst} · swath ${s.swath} km · ${Math.round(alt*RE)} km up · ${s.incl.toFixed(1)}° · ${per.toFixed(0)} min orbit · ${s.optical ? (s.lit ? 'imaging (daylight)' : 'idle (night)') : 'day and night'}`;
+}
+
+function regionRect(el){ const r = el.getBoundingClientRect(); return {x:r.left, y:innerHeight - r.bottom, w:r.width, h:r.height, vis:getComputedStyle(el).display !== 'none' && r.height > 0}; }
+function fitOrtho(cam, w, h){ const a = w/h; if (a > 2) { cam.left = -a; cam.right = a; cam.top = 1; cam.bottom = -1; } else { cam.left = -2; cam.right = 2; cam.top = 2/a; cam.bottom = -2/a; } cam.updateProjectionMatrix(); }
+function resize(){ renderer.setSize(innerWidth, innerHeight, false); }
+addEventListener('resize', resize); resize();
+
+function renderFrame(dtReal){
+  if (exporting) return;
+  if (st.clock) {
+    const target = clockMs(), d = target - st.ms;
+    if (d < 0 || d > 6*3600000) jumpTo(target); else if (d > 0) advance(d, dtReal);
+  } else if (!st.paused) advance(dtReal*SPEEDS[st.speed]*1000, dtReal);
+  prepareSurface();
+  drawScreen(dtReal);
+}
+function jumpTo(ms){                       // a new day of the loop: the forged map and the erosion start over
+  for (const s of sats) s.pGeo = s.pSol = s.bGeo = s.bSol = null;
+  clearRT(acc[0]); clearRT(acc[1]); resetTransient();
+  st.ms = Math.max(T0, ms - 2*3600000); info = stepSats(st.ms, true); advance(ms - st.ms, 0);
+}
+const copyMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uF:{value:frameRT.texture}},
+  fragmentShader:`uniform sampler2D uF; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(uF, vUv).rgb, 1.0); }`});
+function captureFrame(){
+  renderer.setScissorTest(false);
+  renderer.autoClear = true; cubeCam.update(renderer, captureScene); renderer.autoClear = false;
+  pass(unwrapMat, frameRT);
+}
+function prepareSurface(){
+  // frame rotation for the display
+  const sunRA = Math.atan2(info.sun[1], info.sun[0]);
+  const rot = st.frame ? -(info.ssl) : 0;            // earth-fixed: content shows the earth frame; sun-fixed: memory already in sun frame
+  const fs = sats[st.sel];
+  if (st.frame === 2 && fs.nGeo) {              // satellite frame: nadir held at the front of the frame, flight direction up
+    const n3 = e2t(fs.nGeo), v0 = e2t(norm(rotZ(fs.v, -info.gmst)));
+    const v3 = v0.sub(n3.clone().multiplyScalar(v0.dot(n3))).normalize(), z3 = new THREE.Vector3().crossVectors(n3, v3);
+    const M = new THREE.Matrix4().makeBasis(n3, v3, z3).transpose();
+    content.quaternion.setFromRotationMatrix(M);
+  } else content.quaternion.identity();
+  capContent.quaternion.copy(content.quaternion);
+  if (PAGE === 'sphere') capContent.quaternion.premultiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ')));   // dragged on the display
+  meshUniforms.uRot.value.setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(PAGE === 'sphere' ? capContent.quaternion : content.quaternion));
+  heightMat.uniforms.uAcc.value = acc[st.frame === 1 ? 1 : 0].texture;
+  heightMat.uniforms.uWave.value = waveRT[waveI].texture;
+  heightMat.uniforms.uStyle.value = 0;
+  heightMat.uniforms.uK.value = 40 + 300*Math.max((st.ms - T0)/86400000, 0.05);
+  heightMat.uniforms.uNow.value = info.t;
+  if (st.style === 2) { meshUniforms.uSign.value = 1; meshUniforms.uDark.value = 1; meshUniforms.uOccD.value = 0.02; pass(heightMat, heightRT); }      // erosion writes signed heights
+  else if (PAGE !== 'tablet') { meshUniforms.uSign.value = st.style === 1 ? 1 : -1; meshUniforms.uDark.value = st.style === 1 ? 0 : 0.6/toolP.depth; meshUniforms.uOccD.value = toolP.depth*0.6; stampTools(st.ms, st.frame === 1); }
+  document.body.classList.toggle('mode-tool', st.style !== 2);
+}
+function drawScreen(dtReal){
+  const fs = sats[st.sel];
+  if (PAGE === 'sphere') {
+    captureFrame(); renderer.setRenderTarget(null); renderer.setViewport(0, 0, innerWidth, innerHeight); pass(copyMat, null);
+    $('clock').textContent = `${new Date(st.ms).toISOString().slice(0, 16).replace('T', ' ')} UTC  ×${SPEEDS[st.speed]}`; return; }
+  const t = new Date(st.ms).toISOString().slice(0, 16).replace('T', ' ');
+  $('clock').textContent = `${t} UTC  ×${SPEEDS[st.speed]}`;
+
+  renderer.setRenderTarget(null);
+  renderer.setScissorTest(true);
+  renderer.setViewport(0, 0, innerWidth, innerHeight); renderer.setScissor(0, 0, innerWidth, innerHeight); renderer.clear();
+  idle += dtReal;
+  if (st.follow && !drag && fs.nGeo) {          // turn the sphere so the selected satellite's ground point faces the viewer
+    const d = e2t(st.frame ? fs.nSol : fs.nGeo);
+    const ty = Math.atan2(-d.x, d.z), tp = Math.atan2(d.y, Math.hypot(d.x, d.z));
+    yaw += wrap180((ty - yaw)/D2R)*D2R*Math.min(1, dtReal*3); pitch += (tp - pitch)*Math.min(1, dtReal*3);
+  } else if (!drag && idle > 5 && st.frame !== 2) yaw += dtReal*0.03;
+  const S = regionRect(stageEl);
+  if (S.vis) {
+    renderer.setViewport(S.x, S.y, S.w, S.h); renderer.setScissor(S.x, S.y, S.w, S.h);
+    if (st.view >= 1) {
+      captureFrame();
+      renderer.setRenderTarget(null); renderer.setScissorTest(true);
+      renderer.setViewport(S.x, S.y, S.w, S.h); renderer.setScissor(S.x, S.y, S.w, S.h);
+    }
+    const aspect = S.w/S.h;
+    stageCam.aspect = aspect; stageCam.updateProjectionMatrix();
+    stageCam.position.set(0, 0, zoom * Math.max(1, 0.9/aspect));
+    if (st.view === 0) { stageView.rotation.set(pitch, yaw, 0, 'XYZ'); renderer.render(stageScene, stageCam); }
+    else if (st.view === 1) { ledView.rotation.set(pitch, yaw, 0, 'XYZ'); renderer.render(ledScene, stageCam); }
+    else { const top = stageEl.querySelector('.bar').getBoundingClientRect().height + 24, bot = $('stageNote').getBoundingClientRect().height + 24;
+      renderer.setViewport(S.x, S.y + bot, S.w, S.h - top - bot); fitOrtho(frameCam, S.w, S.h - top - bot); renderer.render(frameScene, frameCam); }
+  }
+  const T = regionRect($('tablet'));
+  if (T.vis) {
+    const top = $('tablet').querySelector('.bar').getBoundingClientRect().height + 16, bot = $('tabNote').getBoundingClientRect().height + 14;
+    T.y += bot; T.h -= top + bot; T.top = top;
+    updateTablet(T);
+    renderer.setViewport(T.x, T.y, T.w, T.h); renderer.setScissor(T.x, T.y, T.w, T.h);
+    if (st.tab === 0) { fitOrtho(flatCam, T.w, T.h); renderer.render(flatScene, flatCam); }
+    else { svCam.aspect = T.w/T.h; svCam.updateProjectionMatrix(); renderer.render(sv, svCam); }
+  }
+  renderer.setScissorTest(false);
+}
+
+/* ================= export: flat equirectangular maps for Unreal (images, sequences, video, GIF) ================= */
+let exporting = false;
+const expMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uH:{value:heightRT.texture}, uF:{value:frameRT.texture}, uMode:{value:0},
+    uTexel:{value:new THREE.Vector2(1/HW, 2/HW)}, uSign:{value:-1}, uRange:{value:0.035}, uTool:{value:1}, uRelief:{value:1}, uFlipG:{value:1}},
+  fragmentShader:`#define PI 3.141592653589793
+    uniform sampler2D uH; uniform sampler2D uF; uniform int uMode; uniform vec2 uTexel; uniform float uSign; uniform float uRange; uniform float uTool; uniform float uRelief; uniform float uFlipG; varying vec2 vUv;
+    float height(vec2 uv){ float r = texture2D(uH, uv).r; return uTool > 0.5 ? uSign * r : r; }   // signed, in sphere radii
+    void main(){
+      if (uMode == 0) { gl_FragColor = vec4(texture2D(uF, vUv).rgb, 1.0); return; }             // shaded 360 frame
+      if (uMode == 1) {                                                                         // height, 16 bit split over two bytes
+        float v = clamp(uSign < 0.0 ? 1.0 + height(vUv)/uRange : height(vUv)/uRange, 0.0, 1.0);
+        float q = floor(v*65535.0 + 0.5), hi = floor(q/256.0);
+        gl_FragColor = vec4(hi/255.0, (q - hi*256.0)/255.0, 0.0, 1.0); return; }
+      float lat = (vUv.y - 0.5)*PI, cl = max(cos(lat), 0.04);                                   // tangent-space normal (x east, y north)
+      float dLon = (height(vUv + vec2(uTexel.x, 0.0)) - height(vUv - vec2(uTexel.x, 0.0))) / (2.0*uTexel.x*2.0*PI);
+      float dLat = (height(vUv + vec2(0.0, uTexel.y)) - height(vUv - vec2(0.0, uTexel.y))) / (2.0*uTexel.y*PI);
+      vec3 n = normalize(vec3(-uRelief*dLon/cl, -uRelief*dLat, 1.0));
+      n.y *= uFlipG;
+      gl_FragColor = vec4(n*0.5 + 0.5, 1.0);
+    }`});
+const expRTs = {};
+const expRT = w => expRTs[w] || (expRTs[w] = makeRT(w, w/2, THREE.UnsignedByteType, true));
+function heightRange(){ return st.style === 2 ? heightMat.uniforms.uDepth.value*heightMat.uniforms.uMaxL.value + heightMat.uniforms.uFresh.value : toolP.depth; }
+// read one map; returns top-down rows: {w, h, ch, bits, data}
+function readMap(kind, w){
+  const h = w/2, rt = expRT(w), U = expMat.uniforms;
+  U.uMode.value = kind === 'shaded' ? 0 : kind === 'height' ? 1 : 2;
+  U.uSign.value = st.style === 1 ? 1 : -1; U.uTool.value = st.style === 2 ? 0 : 1;
+  U.uRange.value = heightRange(); U.uRelief.value = meshUniforms.uRelief.value; U.uFlipG.value = EXP.flipG ? -1 : 1;
+  if (kind === 'shaded') captureFrame();
+  pass(expMat, rt);
+  const px = new Uint8Array(w*h*4); renderer.readRenderTargetPixels(rt, 0, 0, w, h, px);
+  if (kind === 'height') { const out = new Uint8Array(w*h*2);
+    for (let y = 0; y < h; y++) { const src = (h - 1 - y)*w*4, dst = y*w*2;
+      for (let x = 0; x < w; x++) { out[dst + 2*x] = px[src + 4*x]; out[dst + 2*x + 1] = px[src + 4*x + 1]; } }
+    return {w, h, ch:1, bits:16, data:out}; }
+  const out = new Uint8Array(w*h*3);
+  for (let y = 0; y < h; y++) { const src = (h - 1 - y)*w*4, dst = y*w*3;
+    for (let x = 0; x < w; x++) { out[dst + 3*x] = px[src + 4*x]; out[dst + 3*x + 1] = px[src + 4*x + 1]; out[dst + 3*x + 2] = px[src + 4*x + 2]; } }
+  return {w, h, ch:3, bits:8, data:out};
+}
+/* --- encoders --- */
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(buf, c = 0xffffffff){ for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 255] ^ (c >>> 8); return c; }
+async function deflate(bytes){ const cs = new CompressionStream('deflate'); const w = cs.writable.getWriter(); w.write(bytes); w.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer()); }
+async function encodePNG(m){
+  const bpp = m.ch*m.bits/8, row = m.w*bpp, raw = new Uint8Array((row + 1)*m.h);
+  for (let y = 0; y < m.h; y++) raw.set(m.data.subarray(y*row, (y + 1)*row), y*(row + 1) + 1);
+  const chunks = [], u32 = (a, o, v) => { a[o] = v >>> 24; a[o+1] = v >>> 16 & 255; a[o+2] = v >>> 8 & 255; a[o+3] = v & 255; };
+  const chunk = (type, data) => { const c = new Uint8Array(12 + data.length); u32(c, 0, data.length);
+    for (let i = 0; i < 4; i++) c[4 + i] = type.charCodeAt(i); c.set(data, 8); u32(c, 8 + data.length, (crc32(c.subarray(4, 8 + data.length)) ^ 0xffffffff) >>> 0); chunks.push(c); };
+  const ih = new Uint8Array(13); u32(ih, 0, m.w); u32(ih, 4, m.h); ih[8] = m.bits; ih[9] = m.ch === 1 ? 0 : 2;
+  chunk('IHDR', ih); chunk('IDAT', await deflate(raw)); chunk('IEND', new Uint8Array(0));
+  return new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), ...chunks], {type:'image/png'});
+}
+function zipWriter(){
+  const parts = [], central = []; let off = 0;
+  const le = (n, b) => { const a = new Uint8Array(b); for (let i = 0; i < b; i++) a[i] = n >>> (8*i) & 255; return a; };
+  return {
+    async add(name, blob){ const data = new Uint8Array(await blob.arrayBuffer()), nm = new TextEncoder().encode(name), crc = (crc32(data) ^ 0xffffffff) >>> 0;
+      const common = [le(20, 2), le(0, 2), le(0, 2), le(0, 2), le(0x21, 2), le(crc, 4), le(data.length, 4), le(data.length, 4), le(nm.length, 2), le(0, 2)];
+      const head = new Blob([le(0x04034b50, 4), ...common, nm]);
+      central.push(new Blob([le(0x02014b50, 4), le(20, 2), ...common, le(0, 2), le(0, 2), le(0, 2), le(0, 4), le(off, 4), nm]));
+      parts.push(head, data); off += 30 + nm.length + data.length; },
+    async blob(){ const cd = new Blob(central), n = central.length;
+      return new Blob([...parts, cd, le(0x06054b50, 4), le(0, 2), le(0, 2), le(n, 2), le(n, 2), le(cd.size, 4), le(off, 4), le(0, 2)], {type:'application/zip'}); }
+  };
+}
+// GIF: 256 greys (shaded, height) or a 3-3-2 colour palette (normal); LZW per frame
+function gifWriter(w, h, delayCs, colour){
+  const out = []; const b = a => out.push(new Uint8Array(a)); const w16 = v => [v & 255, v >> 8];
+  const pal = new Uint8Array(768);
+  for (let i = 0; i < 256; i++) { if (colour) { pal[3*i] = (i >> 5)*255/7; pal[3*i+1] = (i >> 2 & 7)*255/7; pal[3*i+2] = (i & 3)*255/3; } else pal[3*i] = pal[3*i+1] = pal[3*i+2] = i; }
+  b([71, 73, 70, 56, 57, 97, ...w16(w), ...w16(h), 0xf7, 0, 0]); out.push(pal);
+  b([0x21, 0xff, 11, ...'NETSCAPE2.0'.split('').map(c => c.charCodeAt(0)), 3, 1, 0, 0, 0]);
+  function lzw(idx){
+    const bytes = []; let cur = 0, nbits = 0, size = 9, next = 258; const dict = new Map();
+    const emit = (code, clear) => { cur |= code << nbits; nbits += size; while (nbits >= 8) { bytes.push(cur & 255); cur >>>= 8; nbits -= 8; }
+      if (clear) size = 9; else if (next > (1 << size) - 1 && size < 12) size++; };
+    emit(256, true); let prefix = idx[0];
+    for (let i = 1; i < idx.length; i++) { const k = idx[i], key = prefix*256 + k, hit = dict.get(key);
+      if (hit !== undefined) { prefix = hit; continue; }
+      emit(prefix);
+      if (next < 4096) dict.set(key, next++); else { emit(256, true); dict.clear(); next = 258; }
+      prefix = k; }
+    emit(prefix); emit(257); if (nbits > 0) bytes.push(cur & 255);
+    const sub = []; for (let i = 0; i < bytes.length; i += 255) { const n = Math.min(255, bytes.length - i); sub.push(n, ...bytes.slice(i, i + n)); }
+    sub.push(0); return new Uint8Array(sub);
+  }
+  return {
+    frame(m){ const n = m.w*m.h, idx = new Uint8Array(n);
+      if (m.bits === 16) for (let i = 0; i < n; i++) idx[i] = m.data[2*i];
+      else if (colour) for (let i = 0; i < n; i++) idx[i] = (m.data[3*i] >> 5) << 5 | (m.data[3*i+1] >> 5) << 2 | m.data[3*i+2] >> 6;
+      else for (let i = 0; i < n; i++) idx[i] = m.data[3*i + 1];
+      b([0x21, 0xf9, 4, 0, ...w16(delayCs), 0, 0]); b([0x2c, 0, 0, 0, 0, ...w16(w), ...w16(h), 0, 8]); out.push(lzw(idx)); },
+    blob(){ b([0x3b]); return new Blob(out, {type:'image/gif'}); }
+  };
+}
+async function videoWriter(w, h, fps){
+  const canvas2 = document.createElement('canvas'); canvas2.width = w; canvas2.height = h; const ctx = canvas2.getContext('2d');
+  const toCanvas = m => { const img = ctx.createImageData(w, h);
+    for (let i = 0, n = w*h; i < n; i++) { const v = m.bits === 16 ? m.data[2*i] : -1;
+      img.data[4*i] = v >= 0 ? v : m.data[3*i]; img.data[4*i+1] = v >= 0 ? v : m.data[3*i+1]; img.data[4*i+2] = v >= 0 ? v : m.data[3*i+2]; img.data[4*i+3] = 255; }
+    ctx.putImageData(img, 0, 0); };
+  if ('VideoEncoder' in window) {
+    const {Muxer, ArrayBufferTarget} = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.5/build/mp4-muxer.mjs');
+    let codec = null;
+    for (const c of ['avc1.640034', 'avc1.640033', 'avc1.640032', 'avc1.640028', 'avc1.4d0034', 'avc1.42003e']) {
+      const sup = await VideoEncoder.isConfigSupported({codec:c, width:w, height:h, bitrate:8e6, framerate:fps}).catch(() => null);
+      if (sup && sup.supported) { codec = c; break; } }
+    if (codec) {
+      const muxer = new Muxer({target:new ArrayBufferTarget(), video:{codec:'avc', width:w, height:h, frameRate:fps}, fastStart:'in-memory'});
+      let err = null;
+      const enc = new VideoEncoder({output:(chunk, meta) => muxer.addVideoChunk(chunk, meta), error:e => err = e});
+      enc.configure({codec, width:w, height:h, bitrate:Math.min(60e6, Math.round(w*h*fps*0.2)), framerate:fps});
+      let i = 0;
+      return {ext:'mp4',
+        async frame(m){ if (err) throw err; toCanvas(m);
+          const vf = new VideoFrame(canvas2, {timestamp:Math.round(i*1e6/fps), duration:Math.round(1e6/fps)});
+          enc.encode(vf, {keyFrame:i % (fps*2) === 0}); vf.close(); i++;
+          while (enc.encodeQueueSize > 4) await new Promise(r => setTimeout(r, 5)); },
+        async blob(){ await enc.flush(); if (err) throw err; muxer.finalize(); return new Blob([muxer.target.buffer], {type:'video/mp4'}); } };
+    }
+  }
+  // fallback: record the canvas in real time, one frame per 1/fps
+  const mime = ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+  if (!mime) throw new Error('This browser cannot encode video here. Try a PNG sequence instead.');
+  const stream = canvas2.captureStream(0), track = stream.getVideoTracks()[0], chunks = [];
+  const rec = new MediaRecorder(stream, {mimeType:mime, videoBitsPerSecond:Math.min(40e6, w*h*fps*0.15)});
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data); rec.start();
+  return {ext:mime.includes('mp4') ? 'mp4' : 'webm',
+    async frame(m){ toCanvas(m); track.requestFrame(); await new Promise(r => setTimeout(r, 1000/fps)); },
+    async blob(){ await new Promise(r => { rec.onstop = r; rec.stop(); }); return new Blob(chunks, {type:mime.split(';')[0]}); } };
+}
+/* --- saving: through the viewer's download prompt when the page runs inside Claude, a plain download otherwise --- */
+let downloadsNS;
+const downloadsReady = (window.claude && window.claude.use) ? window.claude.use('downloads').then(d => downloadsNS = d).catch(() => downloadsNS = null) : Promise.resolve(downloadsNS = null);
+async function saveFile(filename, blob){
+  await downloadsReady;
+  if (downloadsNS) { try { await downloadsNS.save({filename, data:blob}); return 'saved'; }
+    catch (e) { if (e && e.code === 'declined') return 'declined'; if (e && e.code === 'too_large') throw new Error('The file is too large to hand over. Try a smaller size or fewer frames.');
+      if (!['unavailable', 'not_granted', 'capability_disabled', 'capability_removed'].includes(e && e.code)) throw new Error(e && e.message || 'Save failed'); } }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000); return 'saved';
+}
+/* --- the export run --- */
+const EXP = {map:'height', size:2048, fmt:'png', frames:120, step:2, fps:30, flipG:true};
+let expCancel = false;
+const stamp = ms => new Date(ms).toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+function metaJSON(startMs, n){
+  const frameName = ['Earth-fixed', 'Sun-fixed', 'Satellite (maps stay Earth-fixed)'][st.frame];
+  return JSON.stringify({
+    project:'Sampling Sphere Studio', surface:['Cut', 'Build', 'Erosion'][st.style], frame:frameName,
+    start_utc:new Date(startMs).toISOString(), frames:n, minutes_per_frame:n > 1 ? EXP.step : 0,
+    projection:'equirectangular, 2:1, north up, left edge 180°W, centre 0°; u=(lon+180)/360, v=(90-lat)/180',
+    height:{format:'16-bit greyscale PNG', meaning:st.style === 1 ? '0 = original surface, 1 = top of the highest layer' : '1 = original surface, 0 = bottom of the deepest layer',
+      range_sphere_radii:heightRange(), range_km_at_earth_scale:+(heightRange()*RE).toFixed(1)},
+    normal:{space:'tangent (x east, y north, z out)', green:EXP.flipG ? 'flipped (DirectX / Unreal)' : 'OpenGL', relief_exaggeration:meshUniforms.uRelief.value},
+    shaded:'the lit white relief exactly as the 360 camera films it for the LED sphere (display frame)',
+    trail_hours:toolP.trail, layer_levels:toolP.spacing ? 'orbit height' : 'evenly stacked',
+    satellites:sats.map(s => ({name:s.name, instrument:s.inst, swath_km:s.swath, orbit_km:Math.round(s.alt), level_sphere_radii:+toolDepth(s).toFixed(5)}))
+  }, null, 2);
+}
+async function runExport(progress){
+  const w = Math.min(EXP.size, HI ? 4096 : 2048), kinds = EXP.map === 'all' ? ['shaded', 'height', 'normal'] : [EXP.map];
+  const single = EXP.fmt === 'png', n = single ? 1 : Math.max(1, Math.min(3600, EXP.frames|0)), startMs = st.ms;
+  exporting = true; expCancel = false;
+  const base = `sphere-${['cut', 'build', 'erosion'][st.style]}-${stamp(startMs)}-${w}`;
+  try {
+    let zip, gif, vid;
+    if (EXP.fmt === 'seq' || (single && kinds.length > 1)) zip = zipWriter();
+    if (EXP.fmt === 'gif') gif = gifWriter(w, w/2, Math.max(2, Math.round(100/EXP.fps)), kinds[0] === 'normal');
+    if (EXP.fmt === 'video') vid = await videoWriter(w, w/2, EXP.fps);
+    for (let i = 0; i < n; i++) {
+      if (expCancel) return 'cancelled';
+      if (i > 0) advance(EXP.step*60000, 0);
+      prepareSurface();
+      for (const k of kinds) {
+        const m = readMap(k, w);
+        if (zip) await zip.add(kinds.length > 1 ? `${k}/${k}_${String(i).padStart(4, '0')}.png` : `${k}_${String(i).padStart(4, '0')}.png`, await encodePNG(m));
+        else if (gif) gif.frame(m);
+        else if (vid) await vid.frame(m);
+        else { progress(1, 1, 'Saving…'); return await saveFile(`${base}-${k}.png`, await encodePNG(m)); }
+      }
+      progress(i + 1, n);
+      drawScreen(0); await new Promise(r => setTimeout(r, 0));
+    }
+    progress(n, n, 'Packing…');
+    if (zip) { await zip.add('meta.json', new Blob([metaJSON(startMs, n)])); return await saveFile(`${base}-${single ? 'maps' : EXP.map + '-' + n + 'f'}.zip`, await zip.blob()); }
+    if (gif) return await saveFile(`${base}-${kinds[0]}-${n}f.gif`, gif.blob());
+    if (vid) { const b = await vid.blob(); return await saveFile(`${base}-${kinds[0]}-${n}f.${vid.ext}`, b); }
+  } finally { exporting = false; }
+}
+window.__export = o => { Object.assign(EXP, o); return runExport(() => {}); };
+
+/* ================= live control: the studio sends its settings, the display and tablet pages follow =================
+   Through a free public MQTT relay (no server of our own). A room code keeps rooms apart; it is not a password.
+   The last state is kept by the relay (retained), so a display that reloads picks the settings up again at once. */
+const LIVE = {broker:Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', room:'', client:null, on:false, peers:new Map(), applying:false};
+const liveTopic = k => `sampling-sphere/v1/${LIVE.room}/${k}`;
+const newRoom = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
+function liveState(){
+  const carve = {}; for (const k in sliderEls) if (!(k in LOOK)) carve[k] = +sliderEls[k].inp.value;
+  return {v:1, style:st.style, frame:st.frame, sel:st.sel, speed:st.speed, spacing:toolP.spacing, carve, look:{...LOOK}};
+}
+function applyLiveState(o){
+  if (!o || o.v !== 1) return;
+  LIVE.applying = true;
+  try {
+    if (Number.isInteger(o.style)) { st.style = o.style; syncStyle(); }
+    if (Number.isInteger(o.frame) && o.frame !== st.frame) { st.frame = o.frame; syncFrame(); resetTransient(); if (st.frame === 2) { yaw = -PI/2; pitch = 0; idle = -1e9; } }
+    if (Number.isInteger(o.sel) && o.sel !== st.sel && sats[o.sel]) selectSat(o.sel, false);
+    if (Number.isInteger(o.speed) && SPEEDS[o.speed]) st.speed = o.speed;
+    if (o.spacing === 0 || o.spacing === 1) { toolP.spacing = o.spacing; syncSpacing(); }
+    if (o.carve) for (const k in o.carve) if (sliderEls[k] && !(k in LOOK) && +sliderEls[k].inp.value !== o.carve[k]) sliderEls[k].set(o.carve[k]);
+    if (o.look) { for (const k in LOOK_DEFAULTS) if (k in o.look && typeof o.look[k] === typeof LOOK_DEFAULTS[k]) LOOK[k] = o.look[k]; applyLook(); syncLookUI(); }
+    notes();
+  } finally { LIVE.applying = false; }
+}
+let liveT = 0, livePending = false;
+function liveSend(){                                     // at most ~12 updates a second while a slider moves
+  if (!LIVE.on || PAGE !== 'studio' || LIVE.applying) return;
+  if (liveT) { livePending = true; return; }
+  LIVE.client.publish(liveTopic('state'), JSON.stringify(liveState()), {retain:true, qos:0});
+  liveT = setTimeout(() => { liveT = 0; if (livePending) { livePending = false; liveSend(); } }, 80);
+}
+async function liveConnect(room){
+  LIVE.room = room.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+  if (!LIVE.room) return;
+  try { localStorage.setItem('sphere-room', LIVE.room); } catch (e) {}
+  liveDisconnect();
+  setLiveStatus('Connecting…');
+  const mqtt = (await import('https://cdn.jsdelivr.net/npm/mqtt@5.10.4/dist/mqtt.esm.js')).default;
+  const id = PAGE + '-' + Math.random().toString(36).slice(2, 8);
+  const c = mqtt.connect(LIVE.broker, {clientId:'ss-' + id, clean:true, reconnectPeriod:3000, connectTimeout:30000, keepalive:30});
+  LIVE.client = c;
+  c.on('connect', () => {
+    LIVE.on = true; st.clock = true;                 // everyone on the shared clock, so the studio shows what the display shows
+    if (PAGE === 'studio') { c.subscribe(liveTopic('presence')); c.subscribe(liveTopic('sel')); liveSend(); }
+    else { c.subscribe(liveTopic('state')); c.subscribe(liveTopic('sel')); }
+    setLiveStatus();
+    if (PAGE !== 'studio') { const beat = () => c.connected && c.publish(liveTopic('presence'), JSON.stringify({id, page:PAGE, t:Date.now()})); beat(); LIVE.beat = setInterval(beat, 8000); }
+  });
+  c.on('message', (topic, buf) => {
+    let o; try { o = JSON.parse(new TextDecoder().decode(buf)); } catch (e) { return; }
+    if (topic.endsWith('/state')) applyLiveState(o);
+    else if (topic.endsWith('/sel') && Number.isInteger(o.sel) && sats[o.sel] && o.from !== id) selectSat(o.sel, false);
+    else if (topic.endsWith('/presence') && o.id) { LIVE.peers.set(o.id, {page:o.page, t:Date.now()}); setLiveStatus(); }
+  });
+  c.on('reconnect', () => setLiveStatus('Reconnecting…'));
+  c.on('error', e => setLiveStatus('Relay error: ' + (e && e.message || e)));
+  c.on('offline', () => setLiveStatus('Offline. Retrying…'));
+  LIVE.id = id;
+}
+function liveDisconnect(){ if (LIVE.client) { LIVE.client.end(true); LIVE.client = null; } LIVE.on = false; clearInterval(LIVE.beat); LIVE.peers.clear(); setLiveStatus(); }
+function setLiveStatus(msg){
+  const now = Date.now(); for (const [k, v] of LIVE.peers) if (now - v.t > 25000) LIVE.peers.delete(k);
+  const n = {sphere:0, tablet:0}; for (const v of LIVE.peers.values()) n[v.page] = (n[v.page] || 0) + 1;
+  const text = msg || (LIVE.on ? (PAGE === 'studio' ? `Live in room ${LIVE.room} · listening: ${n.sphere} display${n.sphere === 1 ? '' : 's'}, ${n.tablet} tablet${n.tablet === 1 ? '' : 's'}` : `Following room ${LIVE.room}`) : 'Not connected');
+  document.querySelectorAll('.live-status').forEach(el => el.textContent = text);
+  document.body.classList.toggle('live-on', LIVE.on);
+  if ($('liveBtn')) $('liveBtn').setAttribute('aria-pressed', LIVE.on);
+}
+setInterval(() => LIVE.on && setLiveStatus(), 5000);
+// studio: any change in the controls is sent
+if (PAGE === 'studio') {
+  ['input', 'click', 'change'].forEach(ev => document.addEventListener(ev, e => { if (!e.target.closest('#liveDlg') && !e.target.closest('#expDlg')) setTimeout(liveSend, 0); }, true));
+  const linkFor = page => (window.DEPLOYED ? location.origin : 'https://<your-site>') + '/sphere-' + page + '?room=' + LIVE.room;
+  const syncLinks = () => { $('liveRoom').value = LIVE.room; $('liveLinkD').value = linkFor('display'); $('liveLinkT').value = linkFor('tablet'); };
+  LIVE.room = (() => { try { return localStorage.getItem('sphere-room'); } catch (e) { return null; } })() || newRoom(); syncLinks();
+  $('liveBtn').onclick = () => { syncLinks(); setLiveStatus(); $('liveDlg').showModal(); };
+  $('liveNew').onclick = () => { LIVE.room = newRoom(); syncLinks(); if (LIVE.on) liveConnect(LIVE.room); };
+  $('liveRoom').addEventListener('change', () => { LIVE.room = $('liveRoom').value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || newRoom(); syncLinks(); if (LIVE.on) liveConnect(LIVE.room); });
+  $('liveStart').onclick = () => LIVE.on ? liveDisconnect() : liveConnect(LIVE.room).catch(e => setLiveStatus('Could not load the relay: ' + e.message));
+  document.querySelectorAll('#liveDlg .copy').forEach(b => b.onclick = async () => { const inp = $(b.dataset.for); inp.select(); try { await navigator.clipboard.writeText(inp.value); b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1200); } catch (e) {} });
+  const obs = new MutationObserver(() => { $('liveStart').textContent = LIVE.on ? 'Stop live control' : 'Start live control'; });
+  obs.observe(document.body, {attributes:true, attributeFilter:['class']});
+} else {
+  // display and tablet: join from ?room=, or type the code in the bar
+  const saved = (() => { try { return localStorage.getItem('sphere-room'); } catch (e) { return null; } })();
+  const room = Q.get('room') || saved;
+  $('joinRoom').value = room || '';
+  $('joinBtn').onclick = () => liveConnect($('joinRoom').value).catch(e => setLiveStatus('Could not load the relay: ' + e.message));
+  if (room) setTimeout(() => liveConnect(room).catch(e => setLiveStatus('Could not load the relay: ' + e.message)), 1500);
+}
+
+/* --- export dialog --- */
+{
+  const dlg = $('expDlg'), segs = {expMap:'map', expFmt:'fmt'};
+  const sync = () => {
+    if (EXP.map === 'all' && (EXP.fmt === 'video' || EXP.fmt === 'gif')) EXP.map = 'shaded';
+    for (const id in segs) $(id).querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === EXP[segs[id]]));
+    $('expMap').querySelector('[data-v=all]').disabled = EXP.fmt === 'video' || EXP.fmt === 'gif';
+    $('expMap').querySelector('[data-v=all]').style.opacity = $('expMap').querySelector('[data-v=all]').disabled ? .35 : 1;
+    dlg.classList.toggle('single', EXP.fmt === 'png'); dlg.classList.toggle('seqonly', EXP.fmt === 'seq');
+    dlg.classList.toggle('normalmap', EXP.map === 'normal' || EXP.map === 'all');
+    EXP.size = +$('expSize').value; EXP.frames = Math.max(2, Math.min(3600, +$('expFrames').value || 2)); EXP.step = +$('expStep').value; EXP.fps = +$('expFps').value; EXP.flipG = $('expFlip').checked;
+    const simH = (EXP.frames - 1)*EXP.step/60, len = EXP.frames/EXP.fps;
+    $('expSum').textContent = EXP.fmt === 'png' ? `One ${EXP.map === 'all' ? 'zip with three PNGs' : 'PNG'} of this moment, ${new Date(st.ms).toISOString().slice(0, 16).replace('T', ' ')} UTC.`
+      : `${EXP.frames} frames covering ${simH < 1 ? Math.round(simH*60) + ' min' : simH.toFixed(1) + ' h'} of satellite time` + (EXP.fmt === 'seq' ? ', as numbered PNGs in a zip with meta.json.' : `, ${len.toFixed(1)} s at ${EXP.fps} fps.`);
+    $('expHint').textContent = (EXP.map === 'height' || EXP.map === 'all' ? 'Height: 16-bit PNG, ' + (st.style === 1 ? 'black = surface, white = top layer' : 'white = surface, black = deepest layer') + ` (${(heightRange()*RE).toFixed(0)} km at Earth scale). ` : '')
+      + 'All maps are 2:1 equirectangular, north up, 180°W at the left edge, ready for a UV sphere. Shaded is the frame exactly as sent to the LED sphere.'
+      + (EXP.fmt === 'gif' || EXP.fmt === 'video' ? ' Video and GIF are 8-bit; use an image sequence for 16-bit height.' : '')
+      + (!HI && EXP.size > 2048 ? ' This device exports up to 2048 × 1024.' : '');
+  };
+  for (const id in segs) $(id).addEventListener('click', e => { const b = e.target.closest('button'); if (b && !b.disabled) { EXP[segs[id]] = b.dataset.v; sync(); } });
+  ['expSize', 'expFrames', 'expStep', 'expFps', 'expFlip'].forEach(id => $(id).addEventListener('input', sync));
+  if (!HI) $('expSize').querySelector('[value="4096"]').disabled = true;
+  $('expSize').value = String(Math.min(HW, 2048)); $('expStep').value = '2'; $('expFps').value = '30';
+  $('exportBtn').onclick = () => { sync(); $('expStatus').textContent = ''; dlg.showModal(); };
+  $('expStop').onclick = () => { expCancel = true; };
+  $('expGo').onclick = async () => {
+    sync(); const wasPaused = st.paused; st.paused = true; syncBtns();
+    $('expGo').disabled = true; $('expStop').hidden = false; $('expProg').hidden = false; $('expBar').style.width = '0';
+    const t0 = performance.now();
+    try {
+      const r = await runExport((i, n, msg) => { $('expBar').style.width = (100*i/n) + '%';
+        const eta = i ? (performance.now() - t0)/i*(n - i)/1000 : 0;
+        $('expStatus').textContent = msg || `Frame ${i} of ${n}` + (i < n && i > 2 ? ` · about ${eta < 60 ? Math.ceil(eta) + ' s' : Math.ceil(eta/60) + ' min'} left` : ''); });
+      $('expStatus').textContent = r === 'cancelled' ? 'Cancelled.' : r === 'declined' ? 'Not saved.' : 'Done. The file is in your downloads.';
+    } catch (e) { $('expStatus').textContent = 'Export failed: ' + (e && e.message || e); }
+    finally { $('expGo').disabled = false; $('expStop').hidden = true; st.paused = wasPaused; syncBtns(); last = performance.now(); }
+  };
+  sync();
+}
+
+/* ================= start ================= */
+for (const rt of [...acc, beadRT, waveRT[0], waveRT[1]]) clearRT(rt);
+info = stepSats(st.ms, true);
+if (st.clock) jumpTo(clockMs());
+else { const s0 = st.speed; st.speed = 5; advance(6*3600000, 0.5); st.speed = s0; }   // six hours already in memory
+let last = performance.now();
+const TEST = location.hash.includes('test');
+function loop(now){ const dt = Math.min(0.1, (now - last)/1000); last = now; renderFrame(dt); requestAnimationFrame(loop); }
+if (!TEST) requestAnimationFrame(loop);
+window.__st = st; window.__frame = (dt, n = 1) => { for (let i = 0; i < n; i++) renderFrame(dt); };
+window.__view = (y, p, z) => { yaw = y; pitch = p; zoom = z; idle = 0; };
+window.__adv = (ms) => advance(ms, 0);
+window.__mu = meshUniforms;
+window.__look = o => { Object.assign(LOOK, o); applyLook(); };
+window.__dbg = () => { const b = new Float32Array(1024*512*4); renderer.readRenderTargetPixels(waveRT[waveI], 0, 0, 1024, 512, b); let mn = 1e9, mx = -1e9; for (let i = 0; i < b.length; i += 4) { mn = Math.min(mn, b[i]); mx = Math.max(mx, b[i]); } return [mn, mx, waveMat.uniforms.uR.value.slice(0,4).join(','), JSON.stringify(waveMat.uniforms.uSrc.value[0])]; };
+</script>
