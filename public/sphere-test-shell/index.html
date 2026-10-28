@@ -28,17 +28,17 @@ import * as THREE from '/sphere-assets/vendor/three.module.min.js';
 const $ = id => document.getElementById(id), PI = Math.PI, D2R = PI/180;
 
 /* sphere-local convention: lon 0 = +z (centre of the 360 frame), lat up = +y; the physical sphere has radius 1 */
-const P = {winW:90, winH:110, thick:0.12, eyeDist:3, eyeLat:8, eyeLon:0, size:0.045, count:350, rate:15, gravity:2.2, bounce:0.25, light:1.2};
+const P = {winW:90, winH:180, thick:0.04, eyeDist:3, eyeLat:8, eyeLon:0, size:0.1, count:560, rate:30, gravity:2.2, bounce:0.25, light:1.2};
 const DEF = {...P};
 const SL = [
   ['winW', 'Window width', 20, 160, 1, v => v + '°'],
-  ['winH', 'Window height', 20, 140, 1, v => v + '°'],
-  ['thick', 'Shell thickness', 0.03, 0.3, 0.005, v => v.toFixed(3)],
+  ['winH', 'Window height', 20, 180, 1, v => v + '°'],
+  ['thick', 'Shell thickness', 0.01, 0.3, 0.005, v => v.toFixed(3)],
   ['eyeDist', 'Viewer distance', 1.6, 8, 0.05, v => v.toFixed(2) + ' × radius'],
   ['eyeLat', 'Viewer height', -40, 60, 1, v => v + '°'],
   ['eyeLon', 'Viewer direction', -180, 180, 1, v => v + '°'],
-  ['size', 'Ball size', 0.015, 0.09, 0.001, v => v.toFixed(3)],
-  ['count', 'Number of balls', 20, 800, 10, v => v],
+  ['size', 'Ball size', 0.02, 0.16, 0.001, v => v.toFixed(3)],
+  ['count', 'Number of balls', 20, 1200, 10, v => v],
   ['rate', 'Pour rate', 1, 60, 1, v => v + ' /s'],
   ['gravity', 'Gravity', 0.3, 6, 0.05, v => v.toFixed(2)],
   ['bounce', 'Bounce', 0, 0.8, 0.01, v => v.toFixed(2)],
@@ -61,12 +61,12 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setClearColor(0x000000, 1);
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.0;
-const SHELL = new THREE.Color(0.86, 0.855, 0.845);   // the plain outer shell, the same everywhere (display colour, not lit)
+const SHELL = new THREE.Color(0.86, 0.86, 0.86);   // the plain outer shell, the same everywhere (display colour, not lit)
 
 /* ---------- the virtual scene: shell with a sliding window, its inner wall and rims, and the balls ---------- */
 const world = new THREE.Scene();
 world.add(new THREE.HemisphereLight(0xffffff, 0x3a3a3a, 0.9));
-const sun = new THREE.DirectionalLight(0xfff6ea, 2.2);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
 sun.position.set(-1.2, 2.4, 1.6); sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048); Object.assign(sun.shadow.camera, {left:-1.2, right:1.2, top:1.2, bottom:-1.2, near:0.5, far:6}); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.01;
 world.add(sun);
@@ -78,9 +78,9 @@ const outerMat = new THREE.ShaderMaterial({uniforms:winU, side:THREE.FrontSide, 
   vertexShader:`varying vec3 vL; void main(){ vL = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader:`uniform vec3 uC; ${winGLSL} void main(){ if (inWindow(normalize(vL))) discard; gl_FragColor = vec4(uC, 1.0); }`});
 const outer = new THREE.Mesh(new THREE.SphereGeometry(1, 256, 128), outerMat); shellGroup.add(outer);
-const innerMat = new THREE.MeshStandardMaterial({color:0xf1efea, roughness:0.85, side:THREE.BackSide});
+const innerMat = new THREE.MeshStandardMaterial({color:0xf0f0f0, roughness:0.85, side:THREE.BackSide});
 const inner = new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), innerMat); inner.receiveShadow = true; shellGroup.add(inner);
-const rimMat = new THREE.MeshStandardMaterial({color:0xf4f2ee, roughness:0.7, side:THREE.DoubleSide});
+const rimMat = new THREE.MeshStandardMaterial({color:0xf4f4f4, roughness:0.7, side:THREE.DoubleSide});
 const RIM = 40;   // rims: the cut faces of the shell, rebuilt as the window slides
 const rimGeo = new THREE.BufferGeometry();
 rimGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(4*(RIM + 1)*2*3), 3));
@@ -96,7 +96,7 @@ function buildRims(a, h, ri){
   rims.visible = a > 0.002;
 }
 // balls
-const MAXB = 800;
+const MAXB = 1200;
 const ballGeo = new THREE.SphereGeometry(1, 28, 18);
 const balls = new THREE.InstancedMesh(ballGeo, new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.42, metalness:0}), MAXB);
 balls.castShadow = true; balls.receiveShadow = true; balls.count = 0; balls.frustumCulled = false; world.add(balls);
@@ -104,6 +104,7 @@ const B = {x:new Float32Array(MAXB*3), v:new Float32Array(MAXB*3), r:new Float32
 let pourAcc = 0, phase = 'fill', phaseT = 0;
 function resetBalls(){ B.n = 0; balls.count = 0; pourAcc = 0; phase = 'fill'; phaseT = 0; }
 $('resetBalls').onclick = resetBalls;
+window.__shell = {B, P, phase: () => phase};   // test hook
 function spawn(ri){
   if (B.n >= Math.min(MAXB, P.count)) return;
   const i = B.n++, r = P.size*(0.75 + 0.5*Math.random()), a = Math.random()*2*PI, q = Math.sqrt(Math.random())*0.18;
@@ -162,10 +163,15 @@ const compMat = new THREE.ShaderMaterial({vertexShader:VS, toneMapped:false, uni
       float dl = lon - uLon0; dl = atan(sin(dl), cos(dl));
       float m = 0.07;                                                     // margin around the window, drawn from the eye as plain shell
       float inside = (1.0 - smoothstep(uW + m*0.5, uW + m, abs(dl))) * (1.0 - smoothstep(uH + m*0.5, uH + m, abs(lat)));
-      inside *= smoothstep(uInvD + 0.01, uInvD + 0.06, dot(d, normalize(uE)));   // only where the eye can see the surface
-      vec3 col = uC;
-      if (inside > 0.0) { vec4 c = uVP * vec4(d, 1.0); vec2 s = c.xy/c.w*0.5 + 0.5;
-        if (c.w > 0.0 && all(greaterThan(s, vec2(0.0))) && all(lessThan(s, vec2(1.0)))) { vec4 t = texture2D(uEye, s); col = mix(uC, t.rgb/max(t.a, 0.001), inside*t.a); } }
+      // past the viewer's horizon (near the poles) the eye cannot see the surface: each column keeps the last row the eye sees, so the cut runs cleanly to the pole
+      vec3 Eh = normalize(uE), dp = d; float cmin = uInvD + 0.15, beyond = 0.0;
+      if (dot(d, Eh) < cmin) { beyond = 1.0; float eLat = asin(clamp(Eh.y, -1.0, 1.0)), A = cos(eLat)*cos(dl), Bs = sin(eLat), R = length(vec2(A, Bs));
+        if (R > cmin) { float al = atan(Bs, A), w = acos(cmin/R); float la = clamp(lat, al - w, al + w);
+          dp = vec3(sin(uLon0 + dl)*cos(la), sin(la), cos(uLon0 + dl)*cos(la)); } }
+      // where the borrowed view looks out through the opening into empty space, show the dark inside of the shell
+      vec3 bg = mix(uC, vec3(0.16), beyond*step(abs(dl), uW)*step(abs(lat), uH)), col = bg;
+      if (inside > 0.0) { vec4 c = uVP * vec4(dp, 1.0); vec2 s = c.xy/c.w*0.5 + 0.5;
+        if (c.w > 0.0 && all(greaterThan(s, vec2(0.0))) && all(lessThan(s, vec2(1.0)))) { vec4 t = texture2D(uEye, s); col = mix(bg, t.rgb/max(t.a, 0.001), inside*t.a); } }
       gl_FragColor = vec4(col, 1.0);
     }`});
 const copyMat = new THREE.ShaderMaterial({vertexShader:VS, toneMapped:false, uniforms:{uF:{value:frameRT.texture}},
