@@ -68,5 +68,5 @@ It goes through a free public MQTT relay (`wss://broker.emqx.io:8084/mqtt`); onl
 values travel. The room code is not a password, so make a new one for each show. Another
 relay can be used with `?broker=wss://...`.
 
-**URL settings** for the display and tablet: `?room=CODE&style=afterglow|cut|build|erosion&ink=dark&frame=earth|sun|satellite&sat=TERRA&trail=6&depth=320&levels=even|orbit&speed=600&loop=1&quality=low`. Afterglow (light that fades with the age of each observation) is the default surface; `ink=dark` draws it dark on light.
+**URL settings** for the display and tablet: `?room=CODE&style=afterglow|pixels|cut|build|erosion&ink=dark&frame=earth|sun|satellite&sat=TERRA&trail=6&depth=320&levels=even|orbit&speed=600&loop=1&quality=low`. Afterglow (light that fades with the age of each observation) is the default surface; `ink=dark` draws it dark on light.
 All pages share a clock (`loop` = days per loop), so separate devices show the same moment.

@@ -59,7 +59,7 @@ button,select{-webkit-tap-highlight-color:transparent}
 #carvePanel[data-tab=material] .grp-carve,#carvePanel[data-tab=material] .grp-light{display:none!important}
 #spacingRow{flex-wrap:wrap;gap:6px;margin-bottom:10px} #spacingRow .small{font:11px/1.3 var(--ui);color:var(--ink);width:100%}
 body.mode-tool .erode-only,body:not(.mode-tool) .tool-only{display:none!important}
-body.mode-glow .noglow-only,body:not(.mode-glow) .glow-only{display:none!important}
+body.mode-glow .noglow-only,body:not(.mode-glow) .glow-only,body:not(.mode-pix) .pix-only{display:none!important}
 #sliders label{display:grid;grid-template-columns:1fr auto;gap:2px 8px;font:11px/1.3 var(--ui);color:var(--ink)}
 #sliders output{font:11px/1.3 var(--mono);color:var(--mute);font-variant-numeric:tabular-nums}
 #sliders input{grid-column:1/-1;width:100%;accent-color:#f2f1ee}
@@ -144,7 +144,7 @@ body.page-sphere.ui-on #carvePanel{display:block}
   <div class="bar top">
     <div class="group"><span class="label">Surface</span>
       <div class="seg" id="segStyle">
-        <button data-v="3">Afterglow</button><button data-v="0">Cut</button><button data-v="1">Build</button><button data-v="2">Erosion (earlier)</button>
+        <button data-v="3">Afterglow</button><button data-v="4">Pixels</button><button data-v="0">Cut</button><button data-v="1">Build</button><button data-v="2">Erosion (earlier)</button>
       </div></div>
     <div class="group"><span class="label">View</span>
       <div class="seg" id="segView">
@@ -425,7 +425,7 @@ const meshUniforms = {uH:{value:heightRT.texture}, uTexel:{value:new THREE.Vecto
   uLMode:{value:0}, uLAz:{value:0}, uLEl:{value:0}, uKey:{value:3}, uKeyC:{value:new THREE.Color()}, uEnv:{value:0.7}, uEnvC:{value:new THREE.Color()},
   uCast:{value:0.8}, uSoft:{value:0.3}, uSLen:{value:0.09}, uAO:{value:0.6}, uExpo:{value:1}, uTone:{value:1},
   uBase:{value:new THREE.Color()}, uRough:{value:0.6}, uMetal:{value:0}, uSpec:{value:0.5}, uClear:{value:0.1}, uClearR:{value:0.3}, uSSS:{value:0.2}, uSSSC:{value:new THREE.Color()}, uDebug:{value:0}, uInside:{value:0},
-  uGlow:{value:0}, uInk:{value:0}, uGGamma:{value:1.15}, uSheenG:{value:0.7}};
+  uGlow:{value:0}, uGlowBase:{value:1}, uInk:{value:0}, uGGamma:{value:1.15}, uSheenG:{value:0.7}};
 meshUniforms.uRelief0 = meshUniforms.uRelief;
 function applyLook(){
   const U = meshUniforms, L = LOOK;
@@ -438,7 +438,7 @@ function applyLook(){
 applyLook();
 // afterglow shading: the brightness is the picture; the low relief only catches a sheen where it turns toward the light
 const GLOW_LIGHT = `
-  uniform float uGlow; uniform float uInk; uniform float uGGamma; uniform float uSheenG;
+  uniform float uGlow; uniform float uGlowBase; uniform float uInk; uniform float uGGamma; uniform float uSheenG;
   vec3 glowLight(float g, vec3 N, vec3 L, vec3 V, vec3 R, float expo){
     float t = pow(clamp(g, 0.0, 1.0), uGGamma);
     vec3 Hh = normalize(L + V); float nh = max(dot(N, Hh), 0.0);
@@ -494,7 +494,7 @@ const meshMat = new THREE.ShaderMaterial({uniforms:meshUniforms, side:THREE.Doub
         L = normalize(sin(uLEl)*r + cos(uLEl)*(cos(uLAz)*tUp + sin(uLAz)*tSide));
       } else L = normalize(vec3(-sin(uLAz)*cos(uLEl), sin(uLEl), cos(uLAz)*cos(uLEl)));
       if (uGlow > 0.5) { vec3 Rg = normalize(uStage * r), Vg = uInside > 0.5 ? Rg : normalize(cameraPosition - vWorld);
-        gl_FragColor = vec4(glowLight(texture2D(uH, uv).g, normalize(uStage * nD), normalize(uStage * L), Vg, Rg, uExpo), 1.0); return; }
+        gl_FragColor = vec4(glowLight(texture2D(uH, uv).g*uGlowBase, normalize(uStage * nD), normalize(uStage * L), Vg, Rg, uExpo), 1.0); return; }
       // cast shadows: march from this point toward the light through the height field
       vec3 Le = toEarth(L);
       float lx = dot(Le, eLon), ly = dot(Le, eLat), lz = dot(Le, e), lxy = max(length(vec2(lx, ly)), 1e-4);
@@ -708,11 +708,11 @@ const svTrack = new THREE.LineSegments(svTrackGeo, lineMat(0.55)); svTrack.frust
 const SPEEDS = [1, 10, 60, 120, 600, 3600, 21600];
 const st = {regrow:10, follow:false, ms:T0, speed:4, paused:false, style:3, view:0, frame:0, tab:0, sel:0, gran:true, center:false, sub:20000};
 /* pages: 'studio' (everything), 'sphere' (only the equirect frame, full screen), 'tablet' (only the map). Settings can come from the URL:
-   ?style=afterglow|cut|build|erosion &frame=earth|sun|satellite &sat=TERRA &trail=6 &depth=223 &levels=even|orbit &speed=600 &loop=1 (days) &clock=1 */
+   ?style=afterglow|pixels|cut|build|erosion &frame=earth|sun|satellite &sat=TERRA &trail=6 &depth=223 &levels=even|orbit &speed=600 &loop=1 (days) &clock=1 */
 const PAGE = window.PAGE || 'studio';
 const Q = new URLSearchParams(location.search);
 { const v = (k, list) => list.indexOf(Q.get(k)); let i;
-  if ((i = v('style', ['cut', 'build', 'erosion', 'afterglow'])) >= 0) st.style = i;
+  if ((i = v('style', ['cut', 'build', 'erosion', 'afterglow', 'pixels'])) >= 0) st.style = i;
   if ((i = v('frame', ['earth', 'sun', 'satellite'])) >= 0) st.frame = i;
   if (Q.get('sat')) { i = SATS.findIndex(x => x[0].toLowerCase().replace(/[^a-z0-9]/g, '') === Q.get('sat').toLowerCase().replace(/[^a-z0-9]/g, '')); if (i >= 0) st.sel = i; }
   if (Q.get('speed')) { i = SPEEDS.indexOf(+Q.get('speed')); if (i >= 0) st.speed = i; } }
@@ -882,6 +882,112 @@ const glowMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uG:{value:
       gl_FragColor = vec4(h, g, a.b, 1.0);
     }`});
 
+/* ================= pixels: every sample a flat tile, laid down in scan rows at its satellite's own level ================= */
+/* As a satellite passes, it lays down rows of square tiles across its swath (one row every 'spacing' km along track): the data
+   arriving as pixels, enlarged so they can be seen. Each satellite's tiles float at its own level (its orbit's rank), brightest
+   when fresh, then dim and settle toward the surface as the observation ages, and vanish when they leave the trail window.
+   Tile shape follows the instrument: a scanner's pixels stretch toward the swath edges (far more across the scan than along it,
+   as MODIS and VIIRS footprints do); conical radiometers see in big footprints; a laser's are small. */
+const PIXN = 1 << 18;
+const pixP = {spacing:90, size:1, level:0.04, settle:0.6, drift:0.15, stretch:1, base:0.35, sheen:0.8};
+const PIX_SIZE = [0.8, 0.8, 0.85, 0.85, 1.25, 0.5];      // by cross-track profile (see INSTRUMENT), as a share of the row spacing
+const pixGeo = new THREE.InstancedBufferGeometry();
+pixGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1,-1,0, 1,-1,0, 1,1,0, -1,1,0]), 3));
+pixGeo.setIndex([0,1,2, 0,2,3]);
+const pixA = new THREE.InstancedBufferAttribute(new Float32Array(PIXN*4).fill(0), 4);   // x y z (earth-fixed), time laid down (min)
+const pixB = new THREE.InstancedBufferAttribute(new Float32Array(PIXN*4), 4);            // subsolar longitude then, level, brightness from the profile, size
+const pixC = new THREE.InstancedBufferAttribute(new Float32Array(PIXN*4), 4);            // satellite index, cross-track direction (earth-fixed)
+for (let i = 0; i < PIXN; i++) pixA.array[i*4 + 3] = -1e9;
+[pixA, pixB, pixC].forEach(a => a.setUsage(THREE.DynamicDrawUsage));
+pixGeo.setAttribute('aA', pixA); pixGeo.setAttribute('aB', pixB); pixGeo.setAttribute('aC', pixC); pixGeo.instanceCount = PIXN;
+const pixU = {uNow:{value:0}, uTrail:{value:360}, uDecay:{value:3}, uSize:{value:0.006}, uStretch:{value:1}, uLevel:{value:0.04}, uSettle:{value:0.6}, uDrift:{value:0.15},
+  uSun:{value:0}, uSel:{value:0}, uFocus:{value:0.35}, uGain:{value:1.1}, uGamma:{value:1.15}, uSheen:{value:0.8}, uInk:meshUniforms.uInk, uExpo:meshUniforms.uExpo,
+  uLAz:meshUniforms.uLAz, uLEl:meshUniforms.uLEl, uInside:{value:0}};
+const pixMat = new THREE.ShaderMaterial({uniforms:pixU, side:THREE.DoubleSide,
+  vertexShader:`uniform float uNow; uniform float uTrail; uniform float uDecay; uniform float uSize; uniform float uLevel; uniform float uSettle; uniform float uDrift;
+    uniform float uSun; uniform float uSel; uniform float uFocus; uniform float uGain;
+    uniform float uStretch; uniform float uInside;
+    attribute vec4 aA; attribute vec4 aB; attribute vec4 aC;
+    varying vec2 vQ; varying float vB; varying vec3 vN; varying vec3 vT1; varying vec3 vT2;
+    void main(){
+      float ageMin = uNow - aA.w, age = ageMin/uTrail;
+      if (age < 0.0 || age > 1.0 || aB.z <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+      float fade = exp(-age*uDecay)*(1.0 - smoothstep(0.82, 1.0, age)), head = 1.2*exp(-ageMin/4.0);
+      vec3 g = aA.xyz, hx = aC.yzw;
+      if (uSun > 0.5) { float c = cos(-aB.x), s = sin(-aB.x); g = vec3(c*g.x - s*g.y, s*g.x + c*g.y, g.z); hx = vec3(c*hx.x - s*hx.y, s*hx.x + c*hx.y, hx.z); }
+      // a slow drift that grows with age: the older a sample, the further it has wandered from where it was taken
+      vec3 w = vec3(sin(g.y*9.0 + aA.w*0.013), sin(g.z*9.0 + aA.w*0.011), sin(g.x*9.0 + aA.w*0.017));
+      g = normalize(g + uDrift*0.02*age*(w - g*dot(w, g)));
+      // seen from outside the layers stand off the surface; the 360 camera sits inside, so for it they are mirrored inward (same order of overlap)
+      float r = 1.0 + (uInside > 0.5 ? -1.0 : 1.0)*uLevel*aB.y*(1.0 - uSettle*age);
+      float sz = uSize*(0.2 + 0.8*sqrt(fade));                       // older pixels shrink away
+      vec2 sxy = vec2(fract(aB.w)*10.0, floor(aB.w)/10.0);            // footprint across, along track (packed)
+      sxy = mix(vec2(length(sxy)*0.7071), sxy, uStretch);
+      vec3 n = vec3(g.x, g.z, -g.y), h3 = vec3(hx.x, hx.z, -hx.y);    // earth -> three axes
+      vec3 t1 = normalize(h3 - n*dot(h3, n)), t2 = cross(n, t1);       // across the swath, along the track
+      vec3 pos = n*r + (t1*position.x*sxy.x + t2*position.y*sxy.y)*sz*r;
+      mat3 M = mat3(modelMatrix);
+      vN = normalize(M*n); vT1 = normalize(M*t1); vT2 = normalize(M*t2); vQ = position.xy;
+      float gain = abs(aC.x - uSel) < 0.5 ? 1.0 : 1.0 - uFocus;
+      vB = (1.0 - exp(-1.8*uGain*fade*aB.z*(1.0 + head)))*gain;
+      gl_Position = projectionMatrix*modelViewMatrix*vec4(pos, 1.0);
+    }`,
+  fragmentShader:`uniform float uGamma; uniform float uSheen; uniform float uInk; uniform float uExpo; uniform float uLAz; uniform float uLEl;
+    varying vec2 vQ; varying float vB; varying vec3 vN; varying vec3 vT1; varying vec3 vT2;
+    void main(){
+      if (vB < 0.05) discard;
+      // a flat tile with a narrow bevel: the face reads as the value, the bevel catches the light
+      vec2 a = abs(vQ); float e = max(a.x, a.y), bev = smoothstep(0.78, 1.0, e);
+      vec2 dir = a.x > a.y ? vec2(sign(vQ.x), 0.0) : vec2(0.0, sign(vQ.y));
+      vec3 N = normalize(vN + 0.9*bev*(vT1*dir.x + vT2*dir.y));
+      // light from each tile's own upper left, like the surface (reads the same all round the sphere)
+      vec3 up = vec3(0.0, 1.0, 0.0) - vN*vN.y; float ul = length(up);
+      vec3 tUp = ul > 1e-3 ? up/ul : vec3(1.0, 0.0, 0.0), tSide = cross(vN, tUp);
+      vec3 L = normalize(sin(uLEl)*vN + cos(uLEl)*(cos(uLAz)*tUp + sin(uLAz)*tSide));
+      float t = pow(clamp(vB, 0.0, 1.0), uGamma), dif = max(dot(N, L), 0.0), flat0 = max(dot(vN, L), 0.0);
+      float shade = 1.0 + 0.9*(dif - flat0);                                         // bevels toward the light lighter, away darker
+      float spec = pow(max(dot(N, normalize(L + vN)), 0.0), 40.0)*bev;
+      float v = uInk > 0.5 ? 1.0 - 0.9*t*(2.0 - shade) : t*shade;
+      v += uSheen*spec*(uInk > 0.5 ? 0.3 : 0.1 + 0.9*t);
+      gl_FragColor = vec4(vec3(clamp(v*uExpo, 0.0, 1.0)), 1.0);
+    }`});
+const pixMesh = new THREE.Mesh(pixGeo, pixMat), pixCap = new THREE.Mesh(pixGeo, pixMat);
+pixMesh.frustumCulled = pixCap.frustumCulled = false; pixMesh.visible = pixCap.visible = false;
+pixMesh.onBeforeRender = () => { pixU.uInside.value = 0; }; pixCap.onBeforeRender = () => { pixU.uInside.value = 1; };
+content.add(pixMesh); capContent.add(pixCap);
+let pixHead = 0, pixLo = PIXN, pixHi = 0;
+sats.forEach((s, i) => { s.rowAcc = 0; s.idx = i; });
+function pixReset(){ for (let i = 0; i < PIXN; i++) pixA.array[i*4 + 3] = -1e9; pixLo = 0; pixHi = PIXN; pixHead = 0; sats.forEach(s => s.rowAcc = 0); }
+function pixRows(s, a, b, ms, ssl, sunGeo){                 // lay down rows of beads between ground points a and b
+  const d = Math.acos(Math.min(1, a[0]*b[0] + a[1]*b[1] + a[2]*b[2]))*RE; if (!(d > 0) || d > 2000) return;
+  const h = norm(cross3(a, b)), sp = pixP.spacing, wkm = 2*s.halfW*RE;
+  s.rowAcc += d;
+  const lvl = (s.rank + 1)/N, tMin = (ms - T0)/60000;
+  while (s.rowAcc >= sp) {
+    s.rowAcc -= sp; const f = 1 - s.rowAcc/d;
+    const c0 = [a[0] + (b[0] - a[0])*f, a[1] + (b[1] - a[1])*f, a[2] + (b[2] - a[2])*f], c = norm(c0);
+    const n = Math.max(1, Math.round(wkm/sp));
+    for (let i = 0; i < n; i++) {
+      const u = n === 1 ? 0 : -1 + (i + 0.5)*2/n, au = Math.abs(u);
+      if (s.profile === 3 && au < 0.17) continue;                      // SWOT: nothing straight below
+      const ang = u*s.halfW, p = norm([c[0]*Math.cos(ang) + h[0]*Math.sin(ang), c[1]*Math.cos(ang) + h[1]*Math.sin(ang), c[2]*Math.cos(ang) + h[2]*Math.sin(ang)]);
+      let lit = 1;
+      if (s.optical) { const sd = p[0]*sunGeo[0] + p[1]*sunGeo[1] + p[2]*sunGeo[2]; lit = Math.min(1, Math.max(0, (sd + 0.03)/0.15)); if (lit <= 0) continue; }
+      const pr = s.profile, prof = pr === 0 ? 1 - 0.72*au*au : pr === 1 ? 0.82 + 0.18*(1 - au**4) : pr === 2 ? 0.35 + 0.65*(1 - (u*0.5 + 0.5)) : pr === 3 ? 0.9 : pr === 4 ? 0.45 + 0.55*au**6 : 1;
+      // footprint: a scanner's pixel grows toward the edge, ~5x across the scan and ~2x along track at the edge (MODIS, VIIRS)
+      const sx = Math.min(0.99, PIX_SIZE[pr]*(pr === 0 ? 1 + 4*au*au : 1)/10), sy = Math.round(PIX_SIZE[pr]*(pr === 0 ? 1 + 1.2*au*au : 1)*10);
+      const j = pixHead; pixHead = (pixHead + 1) % PIXN;
+      pixA.array.set([p[0], p[1], p[2], tMin], j*4); pixB.array.set([ssl, lvl*(0.985 + 0.03*Math.random()), prof*lit, sy + sx], j*4); pixC.array.set([s.idx, h[0], h[1], h[2]], j*4);
+      pixLo = Math.min(pixLo, j); pixHi = Math.max(pixHi, j + 1);
+    }
+  }
+}
+function pixUpload(){
+  if (pixHi <= pixLo) return;
+  for (const [a, k] of [[pixA, 4], [pixB, 4], [pixC, 4]]) { a.clearUpdateRanges(); a.addUpdateRange(pixLo*k, (pixHi - pixLo)*k); a.needsUpdate = true; }
+  pixLo = PIXN; pixHi = 0;
+}
+
 function stepSats(ms, record){
   const date = new Date(ms), gmst = satellite.gstime(date), sun = sunECI(ms);
   const sunGeo = rotZ(sun, -gmst), ssl = Math.atan2(sunGeo[1], sunGeo[0]), sunSol = rotZ(sunGeo, -ssl);
@@ -899,6 +1005,7 @@ function stepSats(ms, record){
   }
   if (record) swathStamp.flush(acc[0]);
   if (record) { for (const s of sats) if (s.pSol) { s.bSol = seg(s.pSol, s.nSol, s.bSol); swathStamp.push(s.pSol, s.nSol, s.halfW/D2R + 0.3, [s.sinW, s.optical ? 1 : 0, t, 0], sunSol, s.bSol[0], s.bSol[1]); } swathStamp.flush(acc[1]); }
+  if (record && PAGE !== 'tablet') for (const s of sats) if (s.pGeo && s.nGeo) pixRows(s, s.pGeo, s.nGeo, ms, ssl, sunGeo);
   if (record) for (const s of sats) { s.pGeo = s.nGeo; s.pSol = s.nSol; }
   return {gmst, sun, sunGeo, ssl, t};
 }
@@ -956,6 +1063,14 @@ const SLIDERS = [
   ['fade', 'Afterglow: how fast a pass fades', 0.3, 6, 0.05, glowP.fade, v => v.toFixed(2), v => glowP.fade = v, 'glow'],
   ['gain', 'Brightness of the light', 0.2, 4, 0.05, glowP.gain, v => v.toFixed(2), v => glowMat.uniforms.uGain.value = glowP.gain = v, 'glow'],
   ['overlap', 'Overlaps add up', 0, 1, 0.01, glowP.overlap, v => Math.round(v*100) + '%', v => glowMat.uniforms.uOverlap.value = glowP.overlap = v, 'glow'],
+  ['spacing', 'Pixels: a row every', 30, 250, 5, pixP.spacing, v => v + ' km', v => pixP.spacing = v, 'pix'],
+  ['psize', 'Pixel size', 0.3, 1.4, 0.01, pixP.size, v => v.toFixed(2) + '×', v => pixP.size = v, 'pix'],
+  ['stretch', 'True footprint shape', 0, 1, 0.01, pixP.stretch, v => Math.round(v*100) + '%', v => pixP.stretch = v, 'pix'],
+  ['plevel', 'Layer height (lowest to highest orbit)', 0, 0.12, 0.001, pixP.level, v => (v*RE).toFixed(0) + ' km', v => pixP.level = v, 'pix'],
+  ['settle', 'Settle toward the surface as they age', 0, 1, 0.01, pixP.settle, v => Math.round(v*100) + '%', v => pixP.settle = v, 'pix'],
+  ['drift', 'Drift as they age', 0, 1, 0.01, pixP.drift, v => v.toFixed(2), v => pixP.drift = v, 'pix'],
+  ['base', 'Afterglow underneath', 0, 1, 0.01, pixP.base, v => Math.round(v*100) + '%', v => pixP.base = v, 'pix'],
+  ['psheen', 'Pixel sheen', 0, 2, 0.01, pixP.sheen, v => v.toFixed(2), v => pixP.sheen = v, 'pix'],
   ['gamma', 'Contrast', 0.5, 2.5, 0.01, glowP.gamma, v => v.toFixed(2), v => meshUniforms.uGGamma.value = glowP.gamma = v, 'glow'],
   ['lines', 'Granule lines (archive time slices)', 0, 1.5, 0.01, glowP.lines, v => v.toFixed(2), v => glowP.lines = v, 'glow'],
   ['edges', 'Swath edges', 0, 1.5, 0.01, glowP.edges, v => v.toFixed(2), v => glowP.edges = v, 'glow'],
@@ -1047,7 +1162,7 @@ $('resetParams').onclick = () => {
     if (tab === 'light') { LOOK.lightMode = 0; LOOK.tone = 1; } applyLook(); saveLook(); syncLookUI(); } };
 $('linkParams').onclick = async () => {
   const p = new URLSearchParams();
-  p.set('style', ['cut', 'build', 'erosion', 'afterglow'][st.style]); p.set('frame', ['earth', 'sun', 'satellite'][st.frame]);
+  p.set('style', ['cut', 'build', 'erosion', 'afterglow', 'pixels'][st.style]); p.set('frame', ['earth', 'sun', 'satellite'][st.frame]);
   if (st.frame === 2) p.set('sat', sats[st.sel].name);
   p.set('trail', +toolP.trail.toFixed(3)); p.set('depth', Math.round(toolP.depth*RE)); p.set('levels', toolP.spacing ? 'orbit' : 'even');
   p.set('relief', meshUniforms.uRelief.value); p.set('speed', SPEEDS[st.speed]); if (st.style === 3 && glowP.ink) p.set('ink', 'dark');
@@ -1090,7 +1205,8 @@ const STYLE_NOTES = [
   'Cut: each satellite is one hard-edged tool, the width of its swath, cutting to its own fixed level (set by its orbit). The shape is the path it swept in the last few hours, nothing accumulates: where tools overlap, the deepest wins. Optical tools only cut in daylight.',
   'Build: the same tools, adding instead of cutting, so each satellite stands up as its own layer.',
   'Erosion (earlier): every pass planes one more layer off and unseen ground grows back, so the surface remembers.',
-  'Afterglow: the Earth exists here only as light from being looked at. Each satellite\'s last hours of swath glow brightest where it is looking now and fade with the age of the observation; across the swath the light follows how its instrument sees (a scanner sharpest straight down, a pushbroom even, radar to one side, a conical radiometer at its edges, SWOT with a gap beneath, a laser as a thread). Thin cross lines are the time slices the archive cuts the data into. Where satellites overlap, the light adds up; black is where no one is looking, and the faint drifting grain is what models fill in. Pick a satellite on the tablet to bring its layer forward.'];
+  'Afterglow: the Earth exists here only as light from being looked at. Each satellite\'s last hours of swath glow brightest where it is looking now and fade with the age of the observation; across the swath the light follows how its instrument sees (a scanner sharpest straight down, a pushbroom even, radar to one side, a conical radiometer at its edges, SWOT with a gap beneath, a laser as a thread). Thin cross lines are the time slices the archive cuts the data into. Where satellites overlap, the light adds up; black is where no one is looking, and the faint drifting grain is what models fill in. Pick a satellite on the tablet to bring its layer forward.',
+  'Pixels: the same light, laid down as data actually arrives, in rows of pixels across each swath, enlarged so they can be seen. Each satellite\'s pixels float at its own level (lowest orbit nearest the surface); fresh ones are bright, older ones dim and settle. A scanner\'s pixels stretch toward its swath edges, as real MODIS and VIIRS footprints do; conical radiometers see in big footprints, lasers in small ones. Underneath, the afterglow.'];
 const VIEW_NOTES = [
   'Mesh: the white relief as it exists in 3D. Drag to orbit. Each point is lit from its own upper left, so the relief reads the same from every side of the physical sphere.',
   'On LED sphere: the mesh filmed by a 360 camera at its centre, unwrapped to an equirectangular frame, and wrapped back onto a plain sphere. Drag around it: what survives is the shading, not parallax.',
@@ -1223,13 +1339,13 @@ function renderFrame(dtReal){
 function jumpTo(ms){                       // a new day of the loop: the forged map and the erosion start over
   for (const s of sats) s.pGeo = s.pSol = s.bGeo = s.bSol = null;
   clearRT(acc[0]); clearRT(acc[1]); resetTransient();
-  st.ms = Math.max(T0, ms - 2*3600000); info = stepSats(st.ms, true); advance(ms - st.ms, 0);
+  pixReset(); st.ms = Math.max(T0, ms - Math.max(2, st.style === 4 ? toolP.trail : 0)*3600000); info = stepSats(st.ms, true); advance(ms - st.ms, 0);
 }
 const copyMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uF:{value:frameRT.texture}},
   fragmentShader:`uniform sampler2D uF; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(uF, vUv).rgb, 1.0); }`});
 function captureFrame(){
   renderer.setScissorTest(false);
-  if (st.style === 3 && !window.__glowCube) { pass(glowFrameMat, frameRT); return; }
+  if (st.style === 3 && !window.__glowCube) { pass(glowFrameMat, frameRT); return; }   // pixels stand off the surface, so they are filmed
   renderer.autoClear = true; cubeCam.update(renderer, captureScene); renderer.autoClear = false;
   pass(unwrapMat, frameRT);
 }
@@ -1253,12 +1369,16 @@ function prepareSurface(){
   heightMat.uniforms.uK.value = 40 + 300*Math.max((st.ms - T0)/86400000, 0.05);
   heightMat.uniforms.uNow.value = info.t;
   if (st.style === 2) { meshUniforms.uSign.value = 1; meshUniforms.uDark.value = 1; meshUniforms.uOccD.value = 0.02; pass(heightMat, heightRT); }      // erosion writes signed heights
-  else if (st.style === 3 && PAGE !== 'tablet') { meshUniforms.uSign.value = 1; meshUniforms.uDark.value = 0; meshUniforms.uOccD.value = 0.01;
+  else if (st.style >= 3 && PAGE !== 'tablet') { meshUniforms.uSign.value = 1; meshUniforms.uDark.value = 0; meshUniforms.uOccD.value = 0.01;
     stampGlow(st.ms, st.frame === 1); const G = glowMat.uniforms; G.uMem.value = acc[st.frame === 1 ? 1 : 0].texture; G.uTime.value = performance.now()/1000;
-    pass(glowMat, heightRT); }
+    pass(glowMat, heightRT);
+    const pix = st.style === 4; pixMesh.visible = pixCap.visible = pix; meshUniforms.uGlowBase.value = pix ? pixP.base : 1;
+    if (pix) { const P = pixU; P.uNow.value = (st.ms - T0)/60000; P.uTrail.value = toolP.trail*60; P.uDecay.value = glowP.fade; P.uSize.value = pixP.spacing/RE*0.5*pixP.size;
+      P.uLevel.value = pixP.level; P.uSettle.value = pixP.settle; P.uDrift.value = pixP.drift; P.uStretch.value = pixP.stretch; P.uSun.value = st.frame === 1 ? 1 : 0; P.uSel.value = st.sel;
+      P.uFocus.value = glowP.focus; P.uGain.value = glowP.gain; P.uGamma.value = glowP.gamma; P.uSheen.value = pixP.sheen; pixUpload(); } }
   else if (PAGE !== 'tablet') { meshUniforms.uSign.value = st.style === 1 ? 1 : -1; meshUniforms.uDark.value = st.style === 1 ? 0 : 0.6/toolP.depth; meshUniforms.uOccD.value = toolP.depth*0.6; stampTools(st.ms, st.frame === 1); }
-  document.body.classList.toggle('mode-tool', st.style !== 2); document.body.classList.toggle('mode-glow', st.style === 3);
-  meshUniforms.uGlow.value = st.style === 3 ? 1 : 0;
+  document.body.classList.toggle('mode-tool', st.style !== 2); document.body.classList.toggle('mode-glow', st.style >= 3); document.body.classList.toggle('mode-pix', st.style === 4);
+  meshUniforms.uGlow.value = st.style >= 3 ? 1 : 0; if (st.style !== 4) pixMesh.visible = pixCap.visible = false;
 }
 function drawScreen(dtReal){
   const fs = sats[st.sel];
@@ -1327,12 +1447,12 @@ const expMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uH:{value:h
     }`});
 const expRTs = {};
 const expRT = w => expRTs[w] || (expRTs[w] = makeRT(w, w/2, THREE.UnsignedByteType, true));
-function heightRange(){ return st.style === 3 ? glowP.relief : st.style === 2 ? heightMat.uniforms.uDepth.value*heightMat.uniforms.uMaxL.value + heightMat.uniforms.uFresh.value : toolP.depth; }
+function heightRange(){ return st.style >= 3 ? glowP.relief : st.style === 2 ? heightMat.uniforms.uDepth.value*heightMat.uniforms.uMaxL.value + heightMat.uniforms.uFresh.value : toolP.depth; }
 // read one map; returns top-down rows: {w, h, ch, bits, data}
 function readMap(kind, w){
   const h = w/2, rt = expRT(w), U = expMat.uniforms;
   U.uMode.value = kind === 'shaded' ? 0 : kind === 'height' ? 1 : 2;
-  U.uSign.value = st.style === 1 || st.style === 3 ? 1 : -1; U.uTool.value = st.style === 2 ? 0 : 1;
+  U.uSign.value = st.style === 1 || st.style >= 3 ? 1 : -1; U.uTool.value = st.style === 2 ? 0 : 1;
   U.uRange.value = heightRange(); U.uRelief.value = meshUniforms.uRelief.value; U.uFlipG.value = EXP.flipG ? -1 : 1;
   if (kind === 'shaded') captureFrame();
   pass(expMat, rt);
@@ -1458,10 +1578,10 @@ const stamp = ms => new Date(ms).toISOString().slice(0, 16).replace(/[-:]/g, '')
 function metaJSON(startMs, n){
   const frameName = ['Earth-fixed', 'Sun-fixed', 'Satellite (maps stay Earth-fixed)'][st.frame];
   return JSON.stringify({
-    project:'Sampling Sphere Studio', surface:['Cut', 'Build', 'Erosion', 'Afterglow'][st.style], frame:frameName,
+    project:'Sampling Sphere Studio', surface:['Cut', 'Build', 'Erosion', 'Afterglow', 'Pixels'][st.style], frame:frameName,
     start_utc:new Date(startMs).toISOString(), frames:n, minutes_per_frame:n > 1 ? EXP.step : 0,
     projection:'equirectangular, 2:1, north up, left edge 180°W, centre 0°; u=(lon+180)/360, v=(90-lat)/180',
-    height:{format:'16-bit greyscale PNG', meaning:st.style === 1 || st.style === 3 ? '0 = original surface, 1 = top of the highest layer' : '1 = original surface, 0 = bottom of the deepest layer',
+    height:{format:'16-bit greyscale PNG', meaning:st.style === 1 || st.style >= 3 ? '0 = original surface, 1 = top of the highest layer' : '1 = original surface, 0 = bottom of the deepest layer',
       range_sphere_radii:heightRange(), range_km_at_earth_scale:+(heightRange()*RE).toFixed(1)},
     normal:{space:'tangent (x east, y north, z out)', green:EXP.flipG ? 'flipped (DirectX / Unreal)' : 'OpenGL', relief_exaggeration:meshUniforms.uRelief.value},
     shaded:'the lit white relief exactly as the 360 camera films it for the LED sphere (display frame)',
@@ -1473,7 +1593,7 @@ async function runExport(progress){
   const w = Math.min(EXP.size, HI ? 4096 : 2048), kinds = EXP.map === 'all' ? ['shaded', 'height', 'normal'] : [EXP.map];
   const single = EXP.fmt === 'png', n = single ? 1 : Math.max(1, Math.min(3600, EXP.frames|0)), startMs = st.ms;
   exporting = true; expCancel = false;
-  const base = `sphere-${['cut', 'build', 'erosion', 'afterglow'][st.style]}-${stamp(startMs)}-${w}`;
+  const base = `sphere-${['cut', 'build', 'erosion', 'afterglow', 'pixels'][st.style]}-${stamp(startMs)}-${w}`;
   try {
     let zip, gif, vid;
     if (EXP.fmt === 'seq' || (single && kinds.length > 1)) zip = zipWriter();
@@ -1607,7 +1727,7 @@ if (PAGE === 'studio') {
     const simH = (EXP.frames - 1)*EXP.step/60, len = EXP.frames/EXP.fps;
     $('expSum').textContent = EXP.fmt === 'png' ? `One ${EXP.map === 'all' ? 'zip with three PNGs' : 'PNG'} of this moment, ${new Date(st.ms).toISOString().slice(0, 16).replace('T', ' ')} UTC.`
       : `${EXP.frames} frames covering ${simH < 1 ? Math.round(simH*60) + ' min' : simH.toFixed(1) + ' h'} of satellite time` + (EXP.fmt === 'seq' ? ', as numbered PNGs in a zip with meta.json.' : `, ${len.toFixed(1)} s at ${EXP.fps} fps.`);
-    $('expHint').textContent = (EXP.map === 'height' || EXP.map === 'all' ? 'Height: 16-bit PNG, ' + (st.style === 1 || st.style === 3 ? 'black = surface, white = top layer' : 'white = surface, black = deepest layer') + ` (${(heightRange()*RE).toFixed(0)} km at Earth scale). ` : '')
+    $('expHint').textContent = (EXP.map === 'height' || EXP.map === 'all' ? 'Height: 16-bit PNG, ' + (st.style === 1 || st.style >= 3 ? 'black = surface, white = top layer' : 'white = surface, black = deepest layer') + ` (${(heightRange()*RE).toFixed(0)} km at Earth scale). ` : '')
       + 'All maps are 2:1 equirectangular, north up, 180°W at the left edge, ready for a UV sphere. Shaded is the frame exactly as sent to the LED sphere.'
       + (EXP.fmt === 'gif' || EXP.fmt === 'video' ? ' Video and GIF are 8-bit; use an image sequence for 16-bit height.' : '')
       + (!HI && EXP.size > 2048 ? ' This device exports up to 2048 × 1024.' : '');
