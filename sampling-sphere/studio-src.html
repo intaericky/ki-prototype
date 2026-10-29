@@ -59,6 +59,7 @@ button,select{-webkit-tap-highlight-color:transparent}
 #carvePanel[data-tab=material] .grp-carve,#carvePanel[data-tab=material] .grp-light{display:none!important}
 #spacingRow{flex-wrap:wrap;gap:6px;margin-bottom:10px} #spacingRow .small{font:11px/1.3 var(--ui);color:var(--ink);width:100%}
 body.mode-tool .erode-only,body:not(.mode-tool) .tool-only{display:none!important}
+body.mode-glow .noglow-only,body:not(.mode-glow) .glow-only{display:none!important}
 #sliders label{display:grid;grid-template-columns:1fr auto;gap:2px 8px;font:11px/1.3 var(--ui);color:var(--ink)}
 #sliders output{font:11px/1.3 var(--mono);color:var(--mute);font-variant-numeric:tabular-nums}
 #sliders input{grid-column:1/-1;width:100%;accent-color:#f2f1ee}
@@ -143,7 +144,7 @@ body.page-sphere.ui-on #carvePanel{display:block}
   <div class="bar top">
     <div class="group"><span class="label">Surface</span>
       <div class="seg" id="segStyle">
-        <button data-v="0">Cut</button><button data-v="1">Build</button><button data-v="2">Erosion (earlier)</button>
+        <button data-v="3">Afterglow</button><button data-v="0">Cut</button><button data-v="1">Build</button><button data-v="2">Erosion (earlier)</button>
       </div></div>
     <div class="group"><span class="label">View</span>
       <div class="seg" id="segView">
@@ -161,7 +162,8 @@ body.page-sphere.ui-on #carvePanel{display:block}
   <details id="carvePanel" open>
     <summary><span class="when-closed">Settings</span><span class="when-open">Settings</span><span class="x when-open" aria-label="Close">×</span></summary>
     <div class="seg tabs" id="segTab2"><button type="button" data-t="carve">Carving</button><button type="button" data-t="light">Light</button><button type="button" data-t="material">Material</button></div>
-    <div class="group tool-only grp-carve" id="spacingRow"><span class="small">Layer levels</span><div class="seg" id="segSpacing"><button data-v="0">Evenly stacked</button><button data-v="1">Orbit height</button></div></div>
+    <div class="group grp-carve glow-only" id="inkRow"><span class="small">Light</span><div class="seg" id="segInk"><button data-v="0">Light on dark</button><button data-v="1">Dark on light</button></div></div>
+    <div class="group tool-only noglow-only grp-carve" id="spacingRow"><span class="small">Layer levels</span><div class="seg" id="segSpacing"><button data-v="0">Evenly stacked</button><button data-v="1">Orbit height</button></div></div>
     <div id="sliders" class="grp-carve"></div>
     <div class="grp-light choice"><span class="small">Light comes from</span><div class="seg" id="segLightMode"><button type="button" data-v="0">Each point's own upper left</button><button type="button" data-v="1">One direction</button></div></div>
     <div class="grp-light choice"><span class="small">Tone mapping</span><div class="seg" id="segTone"><button type="button" data-v="1">Filmic</button><button type="button" data-v="0">None</button></div></div>
@@ -274,20 +276,20 @@ const scaleMat = new THREE.ShaderMaterial({uniforms:{uK:{value:new THREE.Vector4
 function scaleRT(rt, k){ scaleMat.uniforms.uK.value.set(...k); pass(scaleMat, rt); }
 
 /* instanced stamps in equirect space (exact on the sphere, poles and dateline included) */
-function makeStamper(fragBody, blendMax){
+function makeStamper(fragBody, blendMax, extraU = {}, extraDecl = ''){
   const MAXI = 16384, g = new THREE.InstancedBufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0,0,0, 1,0,0, 1,1,0, 0,1,0]), 3));
   g.setIndex([0,1,2, 0,2,3]);
-  const A = {aN0:3, aN1:3, aB0:3, aB1:3, aBox:4, aP:4, aSun:3}, attrs = {};
+  const A = {aN0:3, aN1:3, aB0:3, aB1:3, aBox:4, aP:4, aSun:3, aQ:4}, attrs = {};
   for (const k in A) { attrs[k] = new THREE.InstancedBufferAttribute(new Float32Array(MAXI*A[k]), A[k]); attrs[k].setUsage(THREE.DynamicDrawUsage); g.setAttribute(k, attrs[k]); }
   g.instanceCount = 0;
-  const mat = new THREE.ShaderMaterial({uniforms:{uLW:{value:0.002}, uRes:{value:new THREE.Vector2(2048, 1024)}},
-    vertexShader:`attribute vec3 aN0; attribute vec3 aN1; attribute vec3 aB0; attribute vec3 aB1; attribute vec4 aBox; attribute vec4 aP; attribute vec3 aSun;
-      varying vec2 vLL; varying vec3 vN0; varying vec3 vN1; varying vec3 vB0; varying vec3 vB1; varying vec4 vP; varying vec3 vSun;
+  const mat = new THREE.ShaderMaterial({uniforms:{uLW:{value:0.002}, uRes:{value:new THREE.Vector2(2048, 1024)}, ...extraU},
+    vertexShader:`attribute vec3 aN0; attribute vec3 aN1; attribute vec3 aB0; attribute vec3 aB1; attribute vec4 aBox; attribute vec4 aP; attribute vec3 aSun; attribute vec4 aQ;
+      varying vec2 vLL; varying vec3 vN0; varying vec3 vN1; varying vec3 vB0; varying vec3 vB1; varying vec4 vP; varying vec3 vSun; varying vec4 vQ;
       void main(){ float lon = mix(aBox.x, aBox.y, position.x), lat = mix(aBox.z, aBox.w, position.y);
-        vLL = vec2(lon, lat); vB0 = aB0; vB1 = aB1; vN0 = aN0; vN1 = aN1; vP = aP; vSun = aSun; gl_Position = vec4(lon/180.0, lat/90.0, 0.0, 1.0); }`,
+        vLL = vec2(lon, lat); vB0 = aB0; vB1 = aB1; vN0 = aN0; vN1 = aN1; vP = aP; vSun = aSun; vQ = aQ; gl_Position = vec4(lon/180.0, lat/90.0, 0.0, 1.0); }`,
     fragmentShader:`#define PI_ 3.141592653589793
-      uniform float uLW; uniform vec2 uRes; varying vec2 vLL; varying vec3 vN0; varying vec3 vN1; varying vec3 vB0; varying vec3 vB1; varying vec4 vP; varying vec3 vSun;
+      uniform float uLW; uniform vec2 uRes; varying vec2 vLL; varying vec3 vN0; varying vec3 vN1; varying vec3 vB0; varying vec3 vB1; varying vec4 vP; varying vec3 vSun; varying vec4 vQ; ${extraDecl}
       void main(){ vec2 ll = (gl_FragCoord.xy / uRes * 2.0 - 1.0) * vec2(PI_, 0.5*PI_);   // from the pixel itself, so every stamp agrees on it exactly
         float lo = ll.x, la = ll.y;
         vec3 p = vec3(cos(la)*cos(lo), cos(la)*sin(lo), sin(la)); ${fragBody} }`,
@@ -298,7 +300,7 @@ function makeStamper(fragBody, blendMax){
   const scene = new THREE.Scene(), mesh = new THREE.Mesh(g, mat); mesh.frustumCulled = false; scene.add(mesh);
   let n = 0;
   return {
-    push(n0, n1, wdeg, P, sun, b0 = [0,0,0], b1 = [0,0,0]){
+    push(n0, n1, wdeg, P, sun, b0 = [0,0,0], b1 = [0,0,0], q = [0,0,0,0]){
       const [la0, lo0] = latlon(n0), [la1, lo1r] = latlon(n1);
       const lo1 = lo0 + wrap180(lo1r - lo0);
       let laMin = Math.max(-90, Math.min(la0, la1) - wdeg), laMax = Math.min(90, Math.max(la0, la1) + wdeg);
@@ -313,14 +315,15 @@ function makeStamper(fragBody, blendMax){
       }
       for (const [a, b] of boxes) { if (n >= MAXI) return; const i = n++;
         attrs.aN0.array.set(n0, i*3); attrs.aN1.array.set(n1, i*3); attrs.aB0.array.set(b0, i*3); attrs.aB1.array.set(b1, i*3); attrs.aSun.array.set(sun, i*3);
-        attrs.aBox.array.set([a, b, laMin, laMax], i*4); attrs.aP.array.set(P, i*4); }
+        attrs.aBox.array.set([a, b, laMin, laMax], i*4); attrs.aP.array.set(P, i*4); attrs.aQ.array.set(q, i*4); }
     },
     flush(rt){
       if (!n) return; g.instanceCount = n;
       for (const k in attrs) attrs[k].needsUpdate = true;
       mat.uniforms.uLW.value = 2.0 * 2*PI / rt.width; mat.uniforms.uRes.value.set(rt.width, rt.height);
       renderer.setRenderTarget(rt); renderer.render(scene, passCam); n = 0;
-    }
+    },
+    mat
   };
 }
 // memory: R optical count, G active count, B swath edges + ground track (rolling), A last seen
@@ -421,7 +424,8 @@ const meshUniforms = {uH:{value:heightRT.texture}, uTexel:{value:new THREE.Vecto
   uVerts:{value:new THREE.Vector2(HI ? 1280 : 640, HI ? 640 : 320)}, uOccD:{value:0.02}, uShadow:{value:0.34}, uRot:{value:new THREE.Matrix3()}, uStage:{value:new THREE.Matrix3()},
   uLMode:{value:0}, uLAz:{value:0}, uLEl:{value:0}, uKey:{value:3}, uKeyC:{value:new THREE.Color()}, uEnv:{value:0.7}, uEnvC:{value:new THREE.Color()},
   uCast:{value:0.8}, uSoft:{value:0.3}, uSLen:{value:0.09}, uAO:{value:0.6}, uExpo:{value:1}, uTone:{value:1},
-  uBase:{value:new THREE.Color()}, uRough:{value:0.6}, uMetal:{value:0}, uSpec:{value:0.5}, uClear:{value:0.1}, uClearR:{value:0.3}, uSSS:{value:0.2}, uSSSC:{value:new THREE.Color()}, uDebug:{value:0}, uInside:{value:0}};
+  uBase:{value:new THREE.Color()}, uRough:{value:0.6}, uMetal:{value:0}, uSpec:{value:0.5}, uClear:{value:0.1}, uClearR:{value:0.3}, uSSS:{value:0.2}, uSSSC:{value:new THREE.Color()}, uDebug:{value:0}, uInside:{value:0},
+  uGlow:{value:0}, uInk:{value:0}, uGGamma:{value:1.15}, uSheenG:{value:0.7}};
 meshUniforms.uRelief0 = meshUniforms.uRelief;
 function applyLook(){
   const U = meshUniforms, L = LOOK;
@@ -432,6 +436,19 @@ function applyLook(){
   U.uSSS.value = L.sss; U.uSSSC.value.copy(col(L.sssColor));
 }
 applyLook();
+// afterglow shading: the brightness is the picture; the low relief only catches a sheen where it turns toward the light
+const GLOW_LIGHT = `
+  uniform float uGlow; uniform float uInk; uniform float uGGamma; uniform float uSheenG;
+  vec3 glowLight(float g, vec3 N, vec3 L, vec3 V, vec3 R, float expo){
+    float t = pow(clamp(g, 0.0, 1.0), uGGamma);
+    vec3 Hh = normalize(L + V); float nh = max(dot(N, Hh), 0.0);
+    float spec = pow(nh, 90.0) + 0.18*pow(nh, 14.0);
+    float turn = clamp(dot(N - R, L)*5.0, -1.0, 1.0);             // relief facing the light reads lighter, facing away darker
+    float v = uInk > 0.5 ? 1.0 - 0.92*t : t;
+    v *= 1.0 + 0.45*turn*(uInk > 0.5 ? 0.5 : t + 0.15);
+    v += uSheenG*spec*(uInk > 0.5 ? 0.35 : 0.12 + 0.9*t);
+    return vec3(clamp(v*expo, 0.0, 1.0));
+  }`;
 const meshMat = new THREE.ShaderMaterial({uniforms:meshUniforms, side:THREE.DoubleSide,
   vertexShader:`#define PI 3.141592653589793
     uniform sampler2D uH; uniform float uRelief; uniform float uSign; uniform vec2 uVerts; varying vec3 vObj; varying vec3 vWorld;
@@ -451,6 +468,7 @@ const meshMat = new THREE.ShaderMaterial({uniforms:meshUniforms, side:THREE.Doub
     uniform float uCast; uniform float uSoft; uniform float uSLen; uniform float uAO; uniform float uExpo; uniform int uTone;
     uniform vec3 uBase; uniform float uRough; uniform float uMetal; uniform float uSpec; uniform float uClear; uniform float uClearR; uniform float uSSS; uniform vec3 uSSSC; uniform int uDebug; uniform float uInside;
     varying vec3 vObj; varying vec3 vWorld;
+    ${GLOW_LIGHT}
     vec3 toDisp(vec3 v){ return uRot * vec3(v.x, v.z, -v.y); }        // earth-frame vector -> display space
     vec3 toEarth(vec3 d){ vec3 o = transpose(uRot) * d; return vec3(o.x, -o.z, o.y); }
     float H(vec2 uv){ return uSign * texture2D(uH, uv).r * uRelief0; }   // actual height in sphere radii
@@ -475,6 +493,8 @@ const meshMat = new THREE.ShaderMaterial({uniforms:meshUniforms, side:THREE.Doub
         vec3 tUp = ul > 1e-3 ? up/ul : vec3(1.0, 0.0, 0.0), tSide = cross(r, tUp);
         L = normalize(sin(uLEl)*r + cos(uLEl)*(cos(uLAz)*tUp + sin(uLAz)*tSide));
       } else L = normalize(vec3(-sin(uLAz)*cos(uLEl), sin(uLEl), cos(uLAz)*cos(uLEl)));
+      if (uGlow > 0.5) { vec3 Rg = normalize(uStage * r), Vg = uInside > 0.5 ? Rg : normalize(cameraPosition - vWorld);
+        gl_FragColor = vec4(glowLight(texture2D(uH, uv).g, normalize(uStage * nD), normalize(uStage * L), Vg, Rg, uExpo), 1.0); return; }
       // cast shadows: march from this point toward the light through the height field
       vec3 Le = toEarth(L);
       float lx = dot(Le, eLon), ly = dot(Le, eLat), lz = dot(Le, e), lxy = max(length(vec2(lx, ly)), 1e-4);
@@ -553,6 +573,32 @@ const unwrapMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uCube:{v
     void main(){ float lon = (vUv.x*2.0-1.0)*PI, lat = (vUv.y-0.5)*PI;
       vec3 e = vec3(cos(lat)*cos(lon), cos(lat)*sin(lon), sin(lat));
       gl_FragColor = textureCube(uCube, vec3(e.x, e.z, -e.y)); }`});
+const glowFrameMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:meshUniforms,
+  fragmentShader:`#define PI 3.141592653589793
+    uniform sampler2D uH; uniform vec2 uTexel; uniform float uRelief0; uniform float uSign; uniform mat3 uRot; uniform int uLMode; uniform float uLAz; uniform float uLEl; uniform float uExpo;
+    varying vec2 vUv;
+    ${GLOW_LIGHT}
+    vec3 toDisp(vec3 v){ return uRot * vec3(v.x, v.z, -v.y); }
+    vec3 toEarth(vec3 d){ vec3 o = transpose(uRot) * d; return vec3(o.x, -o.z, o.y); }
+    float H(vec2 uv){ return uSign * texture2D(uH, uv).r * uRelief0; }
+    void main(){
+      float flon = (vUv.x*2.0 - 1.0)*PI, flat_ = (vUv.y - 0.5)*PI;
+      vec3 f = vec3(cos(flat_)*cos(flon), cos(flat_)*sin(flon), sin(flat_));
+      vec3 r = vec3(f.x, f.z, -f.y);                      // the direction this pixel looks, as the 360 camera would film it
+      vec3 e = toEarth(r);
+      float lat = asin(clamp(e.z, -1.0, 1.0)), lon = atan(e.y, e.x), cl = max(cos(lat), 0.04);
+      vec2 uv = vec2((lon + PI)/(2.0*PI), (lat + 0.5*PI)/PI);
+      float hE = H(uv + vec2(uTexel.x, 0.0)), hW = H(uv - vec2(uTexel.x, 0.0)), hN = H(uv + vec2(0.0, uTexel.y)), hS = H(uv - vec2(0.0, uTexel.y));
+      float dLon = (hE - hW) / (2.0*uTexel.x*2.0*PI), dLat = (hN - hS) / (2.0*uTexel.y*PI);
+      vec3 eLon = vec3(-sin(lon), cos(lon), 0.0), eLat = vec3(-sin(lat)*cos(lon), -sin(lat)*sin(lon), cos(lat));
+      vec3 N = normalize(toDisp(normalize(e - (dLat*eLat + dLon/cl*eLon))));
+      vec3 L;
+      if (uLMode == 0) { vec3 up = vec3(0.0, 1.0, 0.0) - r*r.y; float ul = length(up);
+        vec3 tUp = ul > 1e-3 ? up/ul : vec3(1.0, 0.0, 0.0), tSide = cross(r, tUp);
+        L = normalize(sin(uLEl)*r + cos(uLEl)*(cos(uLAz)*tUp + sin(uLAz)*tSide));
+      } else L = normalize(vec3(-sin(uLAz)*cos(uLEl), sin(uLEl), cos(uLAz)*cos(uLEl)));
+      gl_FragColor = vec4(glowLight(texture2D(uH, uv).g, N, L, r, r, uExpo), 1.0);
+    }`});
 const ledMat = new THREE.ShaderMaterial({uniforms:{uF:{value:frameRT.texture}},
   vertexShader:`varying vec3 vObj; void main(){ vObj = position; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
   fragmentShader:`#define PI 3.141592653589793
@@ -660,13 +706,13 @@ const svTrack = new THREE.LineSegments(svTrackGeo, lineMat(0.55)); svTrack.frust
 
 /* ================= simulation ================= */
 const SPEEDS = [1, 10, 60, 120, 600, 3600, 21600];
-const st = {regrow:10, follow:false, ms:T0, speed:4, paused:false, style:0, view:0, frame:0, tab:0, sel:0, gran:true, center:false, sub:20000};
+const st = {regrow:10, follow:false, ms:T0, speed:4, paused:false, style:3, view:0, frame:0, tab:0, sel:0, gran:true, center:false, sub:20000};
 /* pages: 'studio' (everything), 'sphere' (only the equirect frame, full screen), 'tablet' (only the map). Settings can come from the URL:
-   ?style=cut|build|erosion &frame=earth|sun|satellite &sat=TERRA &trail=6 &depth=223 &levels=even|orbit &speed=600 &loop=1 (days) &clock=1 */
+   ?style=afterglow|cut|build|erosion &frame=earth|sun|satellite &sat=TERRA &trail=6 &depth=223 &levels=even|orbit &speed=600 &loop=1 (days) &clock=1 */
 const PAGE = window.PAGE || 'studio';
 const Q = new URLSearchParams(location.search);
 { const v = (k, list) => list.indexOf(Q.get(k)); let i;
-  if ((i = v('style', ['cut', 'build', 'erosion'])) >= 0) st.style = i;
+  if ((i = v('style', ['cut', 'build', 'erosion', 'afterglow'])) >= 0) st.style = i;
   if ((i = v('frame', ['earth', 'sun', 'satellite'])) >= 0) st.frame = i;
   if (Q.get('sat')) { i = SATS.findIndex(x => x[0].toLowerCase().replace(/[^a-z0-9]/g, '') === Q.get('sat').toLowerCase().replace(/[^a-z0-9]/g, '')); if (i >= 0) st.sel = i; }
   if (Q.get('speed')) { i = SPEEDS.indexOf(+Q.get('speed')); if (i >= 0) st.speed = i; } }
@@ -717,6 +763,125 @@ function stampTools(now, sol){
   if (frameAt.size > 4000) frameAt.clear();
   clearRT(heightRT); toolStamp.flush(heightRT);
 }
+/* ================= afterglow: each pass is light that fades, drawn the way its instrument actually looks ================= */
+/* Every satellite's last few hours of swath are re-drawn each frame as light: brightest where it is looking now, fading with the
+   age of the observation. Across the swath the brightness follows the instrument (a scanner is sharpest at nadir, a pushbroom is
+   even, radar looks to one side, a conical radiometer is strongest at its edges, SWOT has a gap under it, lasers draw a thread).
+   Thin lines mark the time slices the archive stores (granules); passes add up where satellites overlap. */
+const SNOISE = `
+  vec4 sn_perm(vec4 x){ return mod(((x*34.0) + 1.0)*x, 289.0); }
+  float snoise(vec3 v){
+    const vec2 C = vec2(1.0/6.0, 1.0/3.0); const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+    vec3 i = floor(v + dot(v, C.yyy)); vec3 x0 = v - i + dot(i, C.xxx);
+    vec3 g = step(x0.yzx, x0.xyz); vec3 l = 1.0 - g; vec3 i1 = min(g.xyz, l.zxy); vec3 i2 = max(g.xyz, l.zxy);
+    vec3 x1 = x0 - i1 + C.xxx; vec3 x2 = x0 - i2 + 2.0*C.xxx; vec3 x3 = x0 - 1.0 + 3.0*C.xxx;
+    i = mod(i, 289.0);
+    vec4 p = sn_perm(sn_perm(sn_perm(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+    float n_ = 1.0/7.0; vec3 ns = n_*D.wyz - D.xzx;
+    vec4 j = p - 49.0*floor(p*ns.z*ns.z); vec4 x_ = floor(j*ns.z); vec4 y_ = floor(j - 7.0*x_);
+    vec4 x = x_*ns.x + ns.yyyy; vec4 y = y_*ns.x + ns.yyyy; vec4 h = 1.0 - abs(x) - abs(y);
+    vec4 b0 = vec4(x.xy, y.xy); vec4 b1 = vec4(x.zw, y.zw);
+    vec4 s0 = floor(b0)*2.0 + 1.0; vec4 s1 = floor(b1)*2.0 + 1.0; vec4 sh = -step(h, vec4(0.0));
+    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy; vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+    vec3 p0 = vec3(a0.xy, h.x); vec3 p1 = vec3(a0.zw, h.y); vec3 p2 = vec3(a1.xy, h.z); vec3 p3 = vec3(a1.zw, h.w);
+    vec4 norm = 1.79284291400159 - 0.85373472095314*vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3));
+    p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
+    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0); m = m*m;
+    return 42.0*dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+  }`;
+// instrument: [cross-track profile, archive slice in minutes (0 = none drawn)]
+//   profile 0 scanner (nadir sharpest), 1 pushbroom (even), 2 side-looking radar, 3 SWOT (two swaths, gap under it), 4 conical radiometer, 5 profiler (a thread)
+const INSTRUMENT = {'MODIS':[0, 5], 'VIIRS':[0, 6], 'OCI':[0, 5], 'OLI':[1, 0.4], 'OLI-2':[1, 0.4], 'MSI':[1, 0], 'OLCI':[1, 3], 'SAR':[2, 25/60],
+  'KaRIn':[3, 0], 'RAD':[4, 49], 'DPR/GMI':[4, 0], 'AMSR2':[4, 0], 'ATLAS':[5, 95/14], 'ALT':[5, 0], 'OCO':[5, 0], 'KBR':[5, 0]};
+sats.forEach(s => { const [pr, gm] = INSTRUMENT[s.inst] || [1, 0]; s.profile = pr; s.granMin = gm; });
+const glowP = {fade:3.2, gain:1.1, overlap:0.35, lines:0.28, edges:0.22, bloom:0.35, memory:0.12, gap:0.1, relief:0.006, sheen:0.7, focus:0.35, gamma:1.15, ink:0};
+const glowRT = makeRT(HW, HW/2, RTTYPE, true);
+// R: light of the passes added up, G: granule slices + swath edges, B: how many swaths cover it, A: the brightest single pass here
+const glowStamp = makeStamper(`
+  vec3 h = normalize(cross(vN0, vN1)); float xs = dot(p, h), x = abs(xs), W = vP.x;
+  if (x > W + uLW) discard;
+  if (dot(p, vN0 + vN1) <= 0.0) discard;
+  float fl = floor(vP.y/2.0 + 0.01), opt = vP.y - 2.0*fl;
+  bool first = mod(fl, 2.0) > 0.5, last = fl > 1.5;
+  float q = 0.25*uLW, s0 = dot(p, vB0), s1 = dot(p, vB1);
+  if (s0 < (first ? -q : 0.0) || s1 >= (last ? q : 0.0)) discard;
+  float u = clamp(s0/max(s0 - s1, 1e-9), 0.0, 1.0);
+  float ageMin = mix(vP.z, vP.w, u), age = ageMin/uTrail;
+  float fade = exp(-age*uDecay) * (1.0 - smoothstep(0.82, 1.0, age));
+  float head = 1.2*exp(-ageMin/4.0);                                   // where it is looking right now
+  float sunF = opt > 0.5 ? smoothstep(-0.03, 0.12, dot(p, vSun)) : 1.0;   // optical instruments only see the lit side, fading through twilight
+  float c = clamp(xs/W, -1.0, 1.0), ac = abs(c), pr = vQ.x, prof;
+  if (pr < 0.5) prof = 1.0 - 0.72*ac*ac;                          // scanner: pixels grow toward the edges
+  else if (pr < 1.5) prof = 0.82 + 0.18*(1.0 - ac*ac*ac*ac);      // pushbroom: even
+  else if (pr < 2.5) prof = 0.35 + 0.65*(1.0 - (c*0.5 + 0.5));   // radar: near range bright, far range dim
+  else if (pr < 3.5) prof = ac < 0.17 ? 0.0 : 0.9;               // SWOT: nothing straight below
+  else if (pr < 4.5) prof = 0.45 + 0.55*pow(ac, 6.0);            // conical: the scan arc's edges
+  else prof = 1.0;                                                // profiler: a thread
+  float aa = 1.0 - smoothstep(W - q, W + q, x);
+  if (first) aa *= smoothstep(-q, q, s0);
+  if (last) aa *= 1.0 - smoothstep(-q, q, s1);
+  float edge = (1.0 - smoothstep(0.0, uLW*0.9, abs(x - W))) * step(0.05, W/uLW);
+  float gl = 0.0;
+  if (vQ.y > 0.0) { float ph = (uNowAbs - ageMin)/vQ.y; float d = abs(fract(ph + 0.5) - 0.5), w = fwidth(ph);
+    gl = 1.0 - smoothstep(0.5*w, 1.5*w, d); }
+  float k = vQ.z * sunF * aa;
+  float light = k*fade*prof*(1.0 + head);
+  gl_FragColor = vec4(light, k*fade*(uLines*gl + uEdges*edge), aa*sunF*(1.0 - smoothstep(0.82, 1.0, age)), light);`, false,
+  {uTrail:{value:360}, uDecay:{value:2.2}, uNowAbs:{value:0}, uLines:{value:0.5}, uEdges:{value:0.5}},
+  'uniform float uTrail; uniform float uDecay; uniform float uNowAbs; uniform float uLines; uniform float uEdges;');
+function stampGlow(now, sol){
+  const W = toolP.trail*3600000, dt = Math.max(30000, Math.ceil(W/360/10000)*10000);
+  const t0 = now - W, k0 = Math.floor(t0/dt) + 1, k1 = Math.floor(now/dt), min = 60000;
+  const dayStart = Math.floor(now/86400000)*86400000;
+  const GU = glowStamp.mat.uniforms;
+  GU.uTrail.value = W/min; GU.uDecay.value = glowP.fade; GU.uNowAbs.value = (now - dayStart)/min; GU.uLines.value = glowP.lines; GU.uEdges.value = glowP.edges;
+  for (const [i, s] of sats.entries()) {
+    const T = [t0], pts = [groundAt(s, t0, false)];
+    for (let k = k0; k <= k1; k++) if (k*dt > t0 && k*dt < now) { T.push(k*dt); pts.push(groundAt(s, k*dt, true)); }
+    T.push(now); pts.push(groundAt(s, now, false));
+    for (const key of s.trail.keys()) if (key < t0 - dt || key % dt) s.trail.delete(key);
+    const gain = i === st.sel ? 1 : 1 - glowP.focus, wd = s.halfW/D2R + 0.3, Q4 = [s.profile, s.granMin, gain, 0];
+    let b = null, prevI = -1;
+    for (let j = 1; j < pts.length; j++) {
+      if (!pts[j]) continue; if (prevI < 0) { if (pts[j - 1]) prevI = j - 1; else { prevI = j; continue; } }
+      const a0 = sol ? pts[prevI].sol : pts[prevI].geo, a1 = sol ? pts[j].sol : pts[j].geo;
+      if (a0[0]*a1[0] + a0[1]*a1[1] + a0[2]*a1[2] > 0.9999999) continue;
+      b = seg(a0, a1, b);
+      const flags = (prevI === 0 ? 1 : 0) + (j === pts.length - 1 ? 2 : 0);
+      glowStamp.push(a0, a1, wd, [s.sinW, (s.optical ? 1 : 0) + 2*flags, (now - T[prevI])/min, (now - T[j])/min], sol ? pts[j].F.sunSol : pts[j].F.sunGeo, b[0], b[1], Q4);
+      prevI = j;
+    }
+  }
+  if (frameAt.size > 4000) frameAt.clear();
+  clearRT(glowRT); glowStamp.flush(glowRT);
+}
+// compose: light -> brightness (with glow and a faint memory of earlier passes) and a low relief that follows it
+const glowMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uG:{value:glowRT.texture}, uMem:{value:null}, uTime:{value:0},
+    uGain:{value:1.3}, uOverlap:{value:0.35}, uBloom:{value:0.45}, uMemory:{value:0.22}, uGap:{value:0.1}, uRelief:{value:0.006}, uTexel:{value:new THREE.Vector2(1/HW, 2/HW)}},
+  fragmentShader:`#define PI 3.141592653589793
+    uniform sampler2D uG; uniform sampler2D uMem; uniform float uTime; uniform float uGain; uniform float uOverlap; uniform float uBloom; uniform float uMemory; uniform float uGap; uniform float uRelief; uniform vec2 uTexel; varying vec2 vUv;
+    ${SNOISE}
+    void main(){
+      float lat = (vUv.y - 0.5)*PI, lon = (vUv.x*2.0 - 1.0)*PI, cl = max(cos(lat), 0.06);
+      vec4 a = texture2D(uG, vUv);
+      // two soft rings around the point: a glow for the eye, a smooth surface for the relief
+      float near = 0.0, far = 0.0, wn = 0.0, wf = 0.0;
+      for (int i = 0; i < 12; i++) { float t = float(i)*0.5235988;
+        vec2 d = vec2(cos(t)/cl, sin(t));
+        vec4 s1 = texture2D(uG, vUv + d*uTexel*3.0); vec4 s2 = texture2D(uG, vUv + d*uTexel*9.0); vec4 s3 = texture2D(uG, vUv + d*uTexel*22.0);
+        near += s1.r + 0.5*s1.g; wn += 1.0; far += 0.6*(s2.r + 0.4*s2.g) + 0.4*s3.r; wf += 1.0; }
+      near /= wn; far /= wf;
+      float body = mix(1.0 - exp(-uGain*a.a), 1.0 - exp(-uGain*a.r), uOverlap), lines = clamp(a.g, 0.0, 1.0);
+      float glow = (1.0 - exp(-uGain*far))*uBloom;
+      vec3 p = vec3(cos(lat)*cos(lon), cos(lat)*sin(lon), sin(lat));
+      float mem = (1.0 - exp(-texture2D(uMem, vUv).b*0.45))*uMemory;          // earlier passes, still remembered
+      float n = snoise(p*3.2 + vec3(0.0, 0.0, uTime*0.02))*0.6 + snoise(p*7.5 - vec3(uTime*0.03, 0.0, 0.0))*0.4;
+      float gap = uGap*(0.5 + 0.5*n)*(1.0 - smoothstep(0.0, 0.25, body + mem));  // where nobody looked, models fill in
+      float g = clamp(max(body + lines*(1.0 - 0.6*body) + glow*(1.0 - body), mem) + gap, 0.0, 1.0);
+      float h = uRelief*(1.0 - exp(-uGain*(0.55*near + 0.45*a.r)));
+      gl_FragColor = vec4(h, g, a.b, 1.0);
+    }`});
+
 function stepSats(ms, record){
   const date = new Date(ms), gmst = satellite.gstime(date), sun = sunECI(ms);
   const sunGeo = rotZ(sun, -gmst), ssl = Math.atan2(sunGeo[1], sunGeo[0]), sunSol = rotZ(sunGeo, -ssl);
@@ -787,7 +952,19 @@ const fmtH = v => v < 1 ? Math.round(v*60) + ' min' : (+v.toFixed(2)) + ' h';
 // [key, label, min, max, step, default, format, set, shown-in]
 const SLIDERS = [
   ['trail', 'Trail length (how long a tool stays)', 0.0833, 12, 0.0833, 6, fmtH, v => toolP.trail = v, 'tool'],
-  ['depth', 'Deepest layer', 0.005, 0.1, 0.001, 0.05, v => (v*RE).toFixed(0) + ' km', v => toolP.depth = v, 'tool'],
+  ['depth', 'Deepest layer', 0.005, 0.1, 0.001, 0.05, v => (v*RE).toFixed(0) + ' km', v => toolP.depth = v, 'tool noglow'],
+  ['fade', 'Afterglow: how fast a pass fades', 0.3, 6, 0.05, glowP.fade, v => v.toFixed(2), v => glowP.fade = v, 'glow'],
+  ['gain', 'Brightness of the light', 0.2, 4, 0.05, glowP.gain, v => v.toFixed(2), v => glowMat.uniforms.uGain.value = glowP.gain = v, 'glow'],
+  ['overlap', 'Overlaps add up', 0, 1, 0.01, glowP.overlap, v => Math.round(v*100) + '%', v => glowMat.uniforms.uOverlap.value = glowP.overlap = v, 'glow'],
+  ['gamma', 'Contrast', 0.5, 2.5, 0.01, glowP.gamma, v => v.toFixed(2), v => meshUniforms.uGGamma.value = glowP.gamma = v, 'glow'],
+  ['lines', 'Granule lines (archive time slices)', 0, 1.5, 0.01, glowP.lines, v => v.toFixed(2), v => glowP.lines = v, 'glow'],
+  ['edges', 'Swath edges', 0, 1.5, 0.01, glowP.edges, v => v.toFixed(2), v => glowP.edges = v, 'glow'],
+  ['bloom', 'Glow', 0, 1.5, 0.01, glowP.bloom, v => v.toFixed(2), v => glowMat.uniforms.uBloom.value = glowP.bloom = v, 'glow'],
+  ['memory', 'Memory of earlier passes', 0, 1, 0.01, glowP.memory, v => v.toFixed(2), v => glowMat.uniforms.uMemory.value = glowP.memory = v, 'glow'],
+  ['gap', 'Filled-in gaps (model noise)', 0, 0.6, 0.01, glowP.gap, v => v.toFixed(2), v => glowMat.uniforms.uGap.value = glowP.gap = v, 'glow'],
+  ['grelief', 'Relief under the light', 0, 0.02, 0.0005, glowP.relief, v => (v*RE).toFixed(0) + ' km', v => glowMat.uniforms.uRelief.value = glowP.relief = v, 'glow'],
+  ['sheen', 'Sheen', 0, 2, 0.01, glowP.sheen, v => v.toFixed(2), v => meshUniforms.uSheenG.value = glowP.sheen = v, 'glow'],
+  ['focus', 'Dim the others (selected satellite stands out)', 0, 0.9, 0.01, glowP.focus, v => Math.round(v*100) + '%', v => glowP.focus = v, 'glow'],
   ['pass', 'Depth per pass', 0, 0.025, 0.0005, 0.007, v => (v*RE).toFixed(0) + ' km', v => heightMat.uniforms.uDepth.value = v, 'erode'],
   ['fresh', 'Fresh cut depth', 0, 0.05, 0.001, 0.012, v => (v*RE).toFixed(0) + ' km', v => heightMat.uniforms.uFresh.value = v, 'erode'],
   ['freshT', 'Fresh cut lasts', 1, 120, 1, 15, v => v + ' min', v => heightMat.uniforms.uFreshT.value = v/1440, 'erode'],
@@ -827,7 +1004,7 @@ const sliderEls = {};
 SLIDERS.forEach(([key, name, mn, mx, step, def, fmt, set, grp], i) => {
   const isLook = key in LOOK_DEFAULTS, isColor = typeof def === 'string';
   const l = document.createElement('label'); const id = 'sl' + i;
-  l.className = (grp === 'light' || grp === 'material') ? 'grp-' + grp : 'grp-carve' + (grp ? ' ' + grp + '-only' : '');
+  l.className = (grp === 'light' || grp === 'material') ? 'grp-' + grp : 'grp-carve' + (grp ? ' ' + grp.split(' ').map(g => g + '-only').join(' ') : '');
   l.innerHTML = isColor ? `<span>${name}</span><input type="color" id="${id}" value="${def}">`
     : `<span>${name}</span><output for="${id}"></output><input type="range" id="${id}" min="${mn}" max="${mx}" step="${step}" value="${def}">`;
   const inp = l.querySelector('input'), out = l.querySelector('output');
@@ -865,15 +1042,15 @@ if (Q.get('levels')) toolP.spacing = Q.get('levels') === 'orbit' ? 1 : 0;
 $('closeParams').onclick = () => $('carvePanel').open = false;
 $('resetParams').onclick = () => {
   const tab = $('carvePanel').dataset.tab;
-  if (tab === 'carve') { for (const k in sliderEls) if (!(k in LOOK)) sliderEls[k].set(sliderEls[k].def); toolP.spacing = 0; syncSpacing(); }
+  if (tab === 'carve') { for (const k in sliderEls) if (!(k in LOOK)) sliderEls[k].set(sliderEls[k].def); toolP.spacing = 0; syncSpacing(); glowP.ink = meshUniforms.uInk.value = 0; syncInk(); }
   else { for (const k in LOOK_DEFAULTS) { const g = SLIDERS.find(x => x[0] === k); if (!g || g[8] === tab) LOOK[k] = LOOK_DEFAULTS[k]; }
     if (tab === 'light') { LOOK.lightMode = 0; LOOK.tone = 1; } applyLook(); saveLook(); syncLookUI(); } };
 $('linkParams').onclick = async () => {
   const p = new URLSearchParams();
-  p.set('style', ['cut', 'build', 'erosion'][st.style]); p.set('frame', ['earth', 'sun', 'satellite'][st.frame]);
+  p.set('style', ['cut', 'build', 'erosion', 'afterglow'][st.style]); p.set('frame', ['earth', 'sun', 'satellite'][st.frame]);
   if (st.frame === 2) p.set('sat', sats[st.sel].name);
   p.set('trail', +toolP.trail.toFixed(3)); p.set('depth', Math.round(toolP.depth*RE)); p.set('levels', toolP.spacing ? 'orbit' : 'even');
-  p.set('relief', meshUniforms.uRelief.value); p.set('speed', SPEEDS[st.speed]);
+  p.set('relief', meshUniforms.uRelief.value); p.set('speed', SPEEDS[st.speed]); if (st.style === 3 && glowP.ink) p.set('ink', 'dark');
   p.set('look', btoa(JSON.stringify(LOOK)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''));
   const url = (window.DEPLOYED ? location.origin + '/sphere-display' : 'sphere-display') + '?' + p.toString();
   $('linkOut').hidden = false; $('linkOut').value = url; $('linkOut').select();
@@ -885,6 +1062,9 @@ $('segTab2').addEventListener('click', e => { const b = e.target.closest('button
 setTab('carve');
 const syncSpacing = (() => { const el = $('segSpacing'), sync = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.v === toolP.spacing));
   el.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { toolP.spacing = +b.dataset.v; sync(); } }); sync(); return sync; })();
+const syncInk = (() => { const el = $('segInk'), sync = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.v === glowP.ink));
+  el.addEventListener('click', e => { const b = e.target.closest('button'); if (b) { glowP.ink = meshUniforms.uInk.value = +b.dataset.v; sync(); } }); sync(); return sync; })();
+if (Q.get('ink')) { glowP.ink = meshUniforms.uInk.value = Q.get('ink') === 'dark' ? 1 : 0; syncInk(); }
 $('resetSculpt').onclick = () => { clearRT(acc[0]); clearRT(acc[1]); resetTransient(); }; bindSeg('segView', 'view', notes);
 const syncFrame = bindSeg('segFrame', 'frame', () => { resetTransient(); if (st.frame === 2) { yaw = -PI/2; pitch = 0; idle = -1e9; } else idle = 0; notes(); });
 bindSeg('segTab', 'tab', notes);
@@ -909,7 +1089,8 @@ addEventListener('keydown', e => { if (e.target.tagName === 'SELECT') return;
 const STYLE_NOTES = [
   'Cut: each satellite is one hard-edged tool, the width of its swath, cutting to its own fixed level (set by its orbit). The shape is the path it swept in the last few hours, nothing accumulates: where tools overlap, the deepest wins. Optical tools only cut in daylight.',
   'Build: the same tools, adding instead of cutting, so each satellite stands up as its own layer.',
-  'Erosion (earlier): every pass planes one more layer off and unseen ground grows back, so the surface remembers.'];
+  'Erosion (earlier): every pass planes one more layer off and unseen ground grows back, so the surface remembers.',
+  'Afterglow: the Earth exists here only as light from being looked at. Each satellite\'s last hours of swath glow brightest where it is looking now and fade with the age of the observation; across the swath the light follows how its instrument sees (a scanner sharpest straight down, a pushbroom even, radar to one side, a conical radiometer at its edges, SWOT with a gap beneath, a laser as a thread). Thin cross lines are the time slices the archive cuts the data into. Where satellites overlap, the light adds up; black is where no one is looking, and the faint drifting grain is what models fill in. Pick a satellite on the tablet to bring its layer forward.'];
 const VIEW_NOTES = [
   'Mesh: the white relief as it exists in 3D. Drag to orbit. Each point is lit from its own upper left, so the relief reads the same from every side of the physical sphere.',
   'On LED sphere: the mesh filmed by a 360 camera at its centre, unwrapped to an equirectangular frame, and wrapped back onto a plain sphere. Drag around it: what survives is the shading, not parallax.',
@@ -1048,6 +1229,7 @@ const copyMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uF:{value:
   fragmentShader:`uniform sampler2D uF; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(uF, vUv).rgb, 1.0); }`});
 function captureFrame(){
   renderer.setScissorTest(false);
+  if (st.style === 3 && !window.__glowCube) { pass(glowFrameMat, frameRT); return; }
   renderer.autoClear = true; cubeCam.update(renderer, captureScene); renderer.autoClear = false;
   pass(unwrapMat, frameRT);
 }
@@ -1071,8 +1253,12 @@ function prepareSurface(){
   heightMat.uniforms.uK.value = 40 + 300*Math.max((st.ms - T0)/86400000, 0.05);
   heightMat.uniforms.uNow.value = info.t;
   if (st.style === 2) { meshUniforms.uSign.value = 1; meshUniforms.uDark.value = 1; meshUniforms.uOccD.value = 0.02; pass(heightMat, heightRT); }      // erosion writes signed heights
+  else if (st.style === 3 && PAGE !== 'tablet') { meshUniforms.uSign.value = 1; meshUniforms.uDark.value = 0; meshUniforms.uOccD.value = 0.01;
+    stampGlow(st.ms, st.frame === 1); const G = glowMat.uniforms; G.uMem.value = acc[st.frame === 1 ? 1 : 0].texture; G.uTime.value = performance.now()/1000;
+    pass(glowMat, heightRT); }
   else if (PAGE !== 'tablet') { meshUniforms.uSign.value = st.style === 1 ? 1 : -1; meshUniforms.uDark.value = st.style === 1 ? 0 : 0.6/toolP.depth; meshUniforms.uOccD.value = toolP.depth*0.6; stampTools(st.ms, st.frame === 1); }
-  document.body.classList.toggle('mode-tool', st.style !== 2);
+  document.body.classList.toggle('mode-tool', st.style !== 2); document.body.classList.toggle('mode-glow', st.style === 3);
+  meshUniforms.uGlow.value = st.style === 3 ? 1 : 0;
 }
 function drawScreen(dtReal){
   const fs = sats[st.sel];
@@ -1141,12 +1327,12 @@ const expMat = new THREE.ShaderMaterial({vertexShader:FSV, uniforms:{uH:{value:h
     }`});
 const expRTs = {};
 const expRT = w => expRTs[w] || (expRTs[w] = makeRT(w, w/2, THREE.UnsignedByteType, true));
-function heightRange(){ return st.style === 2 ? heightMat.uniforms.uDepth.value*heightMat.uniforms.uMaxL.value + heightMat.uniforms.uFresh.value : toolP.depth; }
+function heightRange(){ return st.style === 3 ? glowP.relief : st.style === 2 ? heightMat.uniforms.uDepth.value*heightMat.uniforms.uMaxL.value + heightMat.uniforms.uFresh.value : toolP.depth; }
 // read one map; returns top-down rows: {w, h, ch, bits, data}
 function readMap(kind, w){
   const h = w/2, rt = expRT(w), U = expMat.uniforms;
   U.uMode.value = kind === 'shaded' ? 0 : kind === 'height' ? 1 : 2;
-  U.uSign.value = st.style === 1 ? 1 : -1; U.uTool.value = st.style === 2 ? 0 : 1;
+  U.uSign.value = st.style === 1 || st.style === 3 ? 1 : -1; U.uTool.value = st.style === 2 ? 0 : 1;
   U.uRange.value = heightRange(); U.uRelief.value = meshUniforms.uRelief.value; U.uFlipG.value = EXP.flipG ? -1 : 1;
   if (kind === 'shaded') captureFrame();
   pass(expMat, rt);
@@ -1272,10 +1458,10 @@ const stamp = ms => new Date(ms).toISOString().slice(0, 16).replace(/[-:]/g, '')
 function metaJSON(startMs, n){
   const frameName = ['Earth-fixed', 'Sun-fixed', 'Satellite (maps stay Earth-fixed)'][st.frame];
   return JSON.stringify({
-    project:'Sampling Sphere Studio', surface:['Cut', 'Build', 'Erosion'][st.style], frame:frameName,
+    project:'Sampling Sphere Studio', surface:['Cut', 'Build', 'Erosion', 'Afterglow'][st.style], frame:frameName,
     start_utc:new Date(startMs).toISOString(), frames:n, minutes_per_frame:n > 1 ? EXP.step : 0,
     projection:'equirectangular, 2:1, north up, left edge 180°W, centre 0°; u=(lon+180)/360, v=(90-lat)/180',
-    height:{format:'16-bit greyscale PNG', meaning:st.style === 1 ? '0 = original surface, 1 = top of the highest layer' : '1 = original surface, 0 = bottom of the deepest layer',
+    height:{format:'16-bit greyscale PNG', meaning:st.style === 1 || st.style === 3 ? '0 = original surface, 1 = top of the highest layer' : '1 = original surface, 0 = bottom of the deepest layer',
       range_sphere_radii:heightRange(), range_km_at_earth_scale:+(heightRange()*RE).toFixed(1)},
     normal:{space:'tangent (x east, y north, z out)', green:EXP.flipG ? 'flipped (DirectX / Unreal)' : 'OpenGL', relief_exaggeration:meshUniforms.uRelief.value},
     shaded:'the lit white relief exactly as the 360 camera films it for the LED sphere (display frame)',
@@ -1287,7 +1473,7 @@ async function runExport(progress){
   const w = Math.min(EXP.size, HI ? 4096 : 2048), kinds = EXP.map === 'all' ? ['shaded', 'height', 'normal'] : [EXP.map];
   const single = EXP.fmt === 'png', n = single ? 1 : Math.max(1, Math.min(3600, EXP.frames|0)), startMs = st.ms;
   exporting = true; expCancel = false;
-  const base = `sphere-${['cut', 'build', 'erosion'][st.style]}-${stamp(startMs)}-${w}`;
+  const base = `sphere-${['cut', 'build', 'erosion', 'afterglow'][st.style]}-${stamp(startMs)}-${w}`;
   try {
     let zip, gif, vid;
     if (EXP.fmt === 'seq' || (single && kinds.length > 1)) zip = zipWriter();
@@ -1323,7 +1509,7 @@ const liveTopic = k => `sampling-sphere/v1/${LIVE.room}/${k}`;
 const newRoom = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
 function liveState(){
   const carve = {}; for (const k in sliderEls) if (!(k in LOOK)) carve[k] = +sliderEls[k].inp.value;
-  return {v:1, style:st.style, frame:st.frame, sel:st.sel, speed:st.speed, spacing:toolP.spacing, carve, look:{...LOOK}};
+  return {v:1, style:st.style, frame:st.frame, sel:st.sel, speed:st.speed, spacing:toolP.spacing, ink:glowP.ink, carve, look:{...LOOK}};
 }
 function applyLiveState(o){
   if (!o || o.v !== 1) return;
@@ -1334,6 +1520,7 @@ function applyLiveState(o){
     if (Number.isInteger(o.sel) && o.sel !== st.sel && sats[o.sel]) selectSat(o.sel, false);
     if (Number.isInteger(o.speed) && SPEEDS[o.speed]) st.speed = o.speed;
     if (o.spacing === 0 || o.spacing === 1) { toolP.spacing = o.spacing; syncSpacing(); }
+    if (o.ink === 0 || o.ink === 1) { glowP.ink = meshUniforms.uInk.value = o.ink; syncInk(); }
     if (o.carve) for (const k in o.carve) if (sliderEls[k] && !(k in LOOK) && +sliderEls[k].inp.value !== o.carve[k]) sliderEls[k].set(o.carve[k]);
     if (o.look) { for (const k in LOOK_DEFAULTS) if (k in o.look && typeof o.look[k] === typeof LOOK_DEFAULTS[k]) LOOK[k] = o.look[k]; applyLook(); syncLookUI(); }
     notes();
@@ -1420,7 +1607,7 @@ if (PAGE === 'studio') {
     const simH = (EXP.frames - 1)*EXP.step/60, len = EXP.frames/EXP.fps;
     $('expSum').textContent = EXP.fmt === 'png' ? `One ${EXP.map === 'all' ? 'zip with three PNGs' : 'PNG'} of this moment, ${new Date(st.ms).toISOString().slice(0, 16).replace('T', ' ')} UTC.`
       : `${EXP.frames} frames covering ${simH < 1 ? Math.round(simH*60) + ' min' : simH.toFixed(1) + ' h'} of satellite time` + (EXP.fmt === 'seq' ? ', as numbered PNGs in a zip with meta.json.' : `, ${len.toFixed(1)} s at ${EXP.fps} fps.`);
-    $('expHint').textContent = (EXP.map === 'height' || EXP.map === 'all' ? 'Height: 16-bit PNG, ' + (st.style === 1 ? 'black = surface, white = top layer' : 'white = surface, black = deepest layer') + ` (${(heightRange()*RE).toFixed(0)} km at Earth scale). ` : '')
+    $('expHint').textContent = (EXP.map === 'height' || EXP.map === 'all' ? 'Height: 16-bit PNG, ' + (st.style === 1 || st.style === 3 ? 'black = surface, white = top layer' : 'white = surface, black = deepest layer') + ` (${(heightRange()*RE).toFixed(0)} km at Earth scale). ` : '')
       + 'All maps are 2:1 equirectangular, north up, 180°W at the left edge, ready for a UV sphere. Shaded is the frame exactly as sent to the LED sphere.'
       + (EXP.fmt === 'gif' || EXP.fmt === 'video' ? ' Video and GIF are 8-bit; use an image sequence for 16-bit height.' : '')
       + (!HI && EXP.size > 2048 ? ' This device exports up to 2048 × 1024.' : '');
@@ -1458,6 +1645,7 @@ if (!TEST) requestAnimationFrame(loop);
 window.__st = st; window.__frame = (dt, n = 1) => { for (let i = 0; i < n; i++) renderFrame(dt); };
 window.__view = (y, p, z) => { yaw = y; pitch = p; zoom = z; idle = 0; };
 window.__adv = (ms) => advance(ms, 0);
+window.__set = (k, v) => sliderEls[k].set(v); window.__glowP = glowP; window.__shot = w => { const m = readMap('shaded', w); let b = ''; for (let i = 0; i < m.data.length; i += 8192) b += String.fromCharCode.apply(null, m.data.subarray(i, i + 8192)); return {w:m.w, h:m.h, b64:btoa(b)}; };   // test hooks
 window.__mu = meshUniforms;
 window.__look = o => { Object.assign(LOOK, o); applyLook(); };
 window.__dbg = () => { const b = new Float32Array(1024*512*4); renderer.readRenderTargetPixels(waveRT[waveI], 0, 0, 1024, 512, b); let mn = 1e9, mx = -1e9; for (let i = 0; i < b.length; i += 4) { mn = Math.min(mn, b[i]); mx = Math.max(mx, b[i]); } return [mn, mx, waveMat.uniforms.uR.value.slice(0,4).join(','), JSON.stringify(waveMat.uniforms.uSrc.value[0])]; };
