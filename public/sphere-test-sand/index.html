@@ -9,6 +9,10 @@
 <style>
 .legend{font:11px/1.5 var(--mono);color:var(--mute);margin-top:10px}
 .legend b{color:var(--ink);font-weight:400}
+.panel .row label{display:flex;align-items:center;gap:6px;font:11px/1 var(--ui)}
+.panel input[type=color]{all:unset;width:22px;height:22px;border:1px solid var(--faint);cursor:pointer}
+.panel input[type=color]::-webkit-color-swatch-wrapper{padding:0}.panel input[type=color]::-webkit-color-swatch{border:0}
+body.frame #gl{inset:0;margin:auto;width:min(100vw,177.78vh);height:min(56.25vw,100vh)}
 </style>
 </head>
 <body>
@@ -18,20 +22,22 @@
   <div class="seg" id="segSpeed"><button data-v="1">Real time</button><button data-v="60">×60</button><button data-v="600">×600</button><button data-v="3600">×3600</button></div>
   <span id="clock" style="font:12px var(--mono);color:var(--mute)"></span>
   <span class="spacer"></span>
-  <button class="btn" id="sinceMidnight">Dig since 00:00 UTC</button>
+  <div class="seg" id="segView" aria-label="View"><button data-v="3d">3D</button><button data-v="frame">360 frame</button></div>
+  <a class="btn" id="openDisplay" target="_blank" rel="noopener" href="/sphere-test-sand?display">Open display ↗</a>
   <button class="btn" id="smooth">Smooth the sand</button>
 </header>
 <details class="panel" id="panel" open>
   <summary>Sand and balls</summary>
+  <div class="row" style="margin:0 0 10px"><button class="btn" id="ballsOn">Balls</button><button class="btn" id="rimOn">Pushed-sand rim</button><label>Sand colour <input type="color" id="sandColor" value="#dedbd5"></label></div>
   <div id="sliders"></div>
   <div class="legend" id="legend">Loading orbits…</div>
 </details>
-<p class="note">The satellites NASA publishes daily or scene imagery from, each as a metal ball as wide as its swath, rolling on its real orbit (SGP4, CelesTrak elements) over an Earth-fixed soft sphere and pressing its groove into it. Drag to turn, scroll to zoom.</p>
+<p class="note">The satellites NASA publishes daily or scene imagery from, each as a metal ball as wide as its swath, rolling on its real orbit (SGP4, CelesTrak elements) over an Earth-fixed soft sphere. Each ball rests on whatever sand is under it, old grooves included, and presses its own groove from there. The sand never resets; it only settles back by itself over the hours set in the panel. 360 frame lays the whole sphere out as one 1920 × 1080 equirectangular frame for the LED sphere; Open display shows only that, F for full screen.</p>
 <script src="/sphere-assets/vendor/satellite.min.js"></script>
 <script type="module">
 import * as THREE from '/sphere-assets/vendor/three.module.min.js';
 const $ = id => document.getElementById(id), PI = Math.PI, TAU = 2*PI, RE = 6378.137;
-const TEST = location.hash === '#test';
+const QS = new URLSearchParams(location.search), TEST = location.hash === '#test', DISPLAY = QS.has('display');
 
 /* the satellites whose pictures NASA publishes (GIBS: MODIS, VIIRS daily; HLS: Landsat and Sentinel-2 scenes), with swath widths in km.
    Geostationary imagers (GOES, Himawari) are left out: they do not move over the ground, so they would only press one pit. */
@@ -39,9 +45,13 @@ const LIST = [['TERRA', 'MODIS', 2330], ['AQUA', 'MODIS', 2330], ['SUOMI NPP', '
   ['LANDSAT 8', 'OLI', 185], ['LANDSAT 9', 'OLI-2', 185], ['SENTINEL-2A', 'MSI', 290], ['SENTINEL-2B', 'MSI', 290], ['SENTINEL-2C', 'MSI', 290]];
 const norm = n => n.toUpperCase().replace(/[- ]+/g, ' ').trim();
 
-const P = {speed: 600, sink: 0.35, scale: 1, metal: 0.25, light: 1.3, rim: 0.25};
+const P = {speed: 600, sink: 0.35, scale: 1, rim: 0.25, rimOn: true, balls: true, settle: 6, metal: 0.25, light: 1.3, color: '#dedbd5', view: DISPLAY ? 'frame' : '3d'};
+for (const k in P) if (QS.has(k)) { const v = QS.get(k);                // every setting can come in the address (the display link carries them)
+  if (typeof P[k] === 'number') { if (v !== '' && isFinite(+v)) P[k] = +v; }
+  else if (typeof P[k] === 'boolean') P[k] = v !== '0';
+  else if (k === 'color' ? /^#[0-9a-f]{6}$/i.test(v) : ['3d', 'frame'].includes(v)) P[k] = v; }
 const SL = [['sink', 'How deep each ball sinks (of its radius)', 0.05, 0.9, 0.01], ['scale', 'Ball size (× swath)', 0.25, 2, 0.05],
-  ['rim', 'Rim of pushed sand', 0, 0.6, 0.01], ['metal', 'Metal roughness', 0, 0.8, 0.01], ['light', 'Light', 0.3, 3, 0.05]];
+  ['rim', 'Rim of pushed sand', 0, 0.6, 0.01], ['settle', 'Sand settles back in (hours, 0 = never)', 0, 48, 0.5], ['metal', 'Metal roughness', 0, 0.8, 0.01], ['light', 'Light', 0.3, 3, 0.05]];
 
 /* ---------- orbits ---------- */
 let simMs = Date.now(), balls = [];
@@ -53,20 +63,32 @@ function subPoint(rec, ms){                                 // Earth-fixed unit 
 }
 const to3 = v => new THREE.Vector3(v[0], v[2], -v[1]);      // (x, y, z north) -> three's frame, matching the sphere's uv
 
-/* ---------- the soft body: a height map pressed by the balls, used as displacement ---------- */
-// heights kept as floats (1 = untouched surface, 0 = DEPTH down) and sent to the GPU as half floats, so the grooves shade smoothly
-const HW = 2048, HH = 1024, height = new Float32Array(HW*HH), half = new Uint16Array(HW*HH);
+/* ---------- the soft body: a height map of the sand, in world units off the radius-1 surface (0 untouched, below 0 pressed, above 0 pushed up) ---------- */
+// kept as floats and sent to the GPU as half floats, so the grooves shade smoothly
+const HW = 2048, HH = 1024, height = new Float32Array(HW*HH), half = new Uint16Array(HW*HH), rowT = new Float64Array(HH);
 const hTex = new THREE.DataTexture(half, HW, HH, THREE.RedFormat, THREE.HalfFloatType);
 hTex.colorSpace = THREE.NoColorSpace; hTex.wrapS = THREE.RepeatWrapping; hTex.magFilter = hTex.minFilter = THREE.LinearFilter; hTex.flipY = true;
-const ONE = THREE.DataUtils.toHalfFloat(1);
-let dirty = null;                                           // rows touched since the last upload
-function smoothSand(){ height.fill(1); half.fill(ONE); hTex.needsUpdate = true; }
+const H16 = THREE.DataUtils.toHalfFloat;
+const pBy = new Int8Array(HW*HH).fill(-1), pSeg = new Int32Array(HW*HH), rimBy = new Int8Array(HW*HH).fill(-1), rimSeg = new Int32Array(HW*HH), rimAdd = new Float32Array(HW*HH);   // which ball heaped each spot's rim last, on which stretch, by how much
+let dirty = false, MAXD = 0.1;                               // MAXD: deepest the sand can be pressed, set from the balls
+function smoothSand(){ height.fill(0); half.fill(0); rimBy.fill(-1); pBy.fill(-1); rowT.fill(simMs); hTex.needsUpdate = true; }
 const ROWC = new Float64Array(HH), ROWS = new Float64Array(HH), COLC = new Float64Array(HW), COLS = new Float64Array(HW);
 for (let j = 0; j < HH; j++) { const la = (0.5 - (j + 0.5)/HH)*PI; ROWC[j] = Math.cos(la); ROWS[j] = Math.sin(la); }
 for (let i = 0; i < HW; i++) { const lo = ((i + 0.5)/HW - 0.5)*TAU; COLC[i] = Math.cos(lo); COLS[i] = Math.sin(lo); }
-let DEPTH = 0.08;                                            // world depth that black (0) stands for; set from the deepest ball
+
+/* the sand settles: every row eases back toward the untouched surface, by e^(-elapsed / settle time), a few rows at a time */
+function relaxRows(j0, j1, now, upload = true){
+  const tau = P.settle*3600e3;
+  for (let j = j0; j < j1; j++) { const f = tau > 0 ? Math.exp(-(now - rowT[j])/tau) : 1; rowT[j] = now; if (f >= 1) continue;
+    for (let k = j*HW, e = k + HW; k < e; k++) { const h = height[k]; if (h === 0) continue; const n = Math.abs(h) < 1e-5 ? 0 : h*f; height[k] = n; if (upload) half[k] = H16(n); } }
+  if (upload) dirty = true;
+}
+let relaxRow = 0;
+function relaxSome(){ relaxRows(relaxRow, relaxRow + 128, simMs); relaxRow = (relaxRow + 128)%HH; }
+
+/* ---------- drawing ---------- */
 const renderer = new THREE.WebGLRenderer({canvas: $('gl'), antialias: true, preserveDrawingBuffer: TEST});
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x000000);
 const cam = new THREE.PerspectiveCamera(32, 1, 0.01, 100);
 // a soft studio for the metal to reflect: dark floor, bright ceiling, a few long lights
@@ -76,42 +98,91 @@ const env = document.createElement('canvas'); env.width = 1024; env.height = 512
 const envTex = new THREE.CanvasTexture(env); envTex.mapping = THREE.EquirectangularReflectionMapping; envTex.colorSpace = THREE.SRGBColorSpace;
 const pmrem = new THREE.PMREMGenerator(renderer); scene.environment = pmrem.fromEquirectangular(envTex).texture;
 const world = new THREE.Group(); scene.add(world);
-const sandMat = new THREE.MeshStandardMaterial({color: 0xdedbd5, roughness: 0.92, metalness: 0, displacementMap: hTex, displacementScale: DEPTH, displacementBias: -DEPTH,
-  envMapIntensity: 0.35});
-// shading: each vertex's normal is worked out from the pressed surface around it (the height map's neighbours), so grooves light smoothly
-sandMat.onBeforeCompile = sh => {
-  sh.vertexShader = sh.vertexShader.replace('#include <displacementmap_pars_vertex>', `#include <displacementmap_pars_vertex>
-    vec3 sandAt(vec2 t){ float ph = t.x*6.2831853, th = (1.0 - t.y)*3.1415927;
-      vec3 d = vec3(-cos(ph)*sin(th), cos(th), sin(ph)*sin(th)); return d*(1.0 + texture2D(displacementMap, t).x*displacementScale + displacementBias); }`)
-    .replace('#include <beginnormal_vertex>', `vec2 eu = vec2(${(1.5/HW).toFixed(7)}, 0.0), ev = vec2(0.0, ${(1.5/HH).toFixed(7)});
-    vec3 objectNormal = cross(sandAt(uv + eu) - sandAt(uv - eu), sandAt(uv + ev) - sandAt(uv - ev));
-    objectNormal = length(objectNormal) < 1e-9 ? normalize(position) : normalize(objectNormal); if (dot(objectNormal, position) < 0.0) objectNormal = -objectNormal;`);
-};
-const sand = new THREE.Mesh(new THREE.SphereGeometry(1, 1024, 512), sandMat); world.add(sand);
+
+/* the sand: one dense sphere displaced by the height map; its normal is worked out per pixel from the map, so groove edges stay smooth at any mesh density.
+   frame = 1 lays it out as the equirectangular frame (u, v straight to the screen), seen from straight above every point with the light from the north-west */
+const GLC = `const float KPI = 3.14159265, KTAU = 6.28318531;
+  vec3 dirOf(vec2 t){ float ph = t.x*KTAU, th = (1.0 - t.y)*KPI; return vec3(-cos(ph)*sin(th), cos(th), sin(ph)*sin(th)); }
+  vec3 eastOf(vec3 up){ return normalize(cross(vec3(0.0, 1.0, 0.0), up) + vec3(1e-6, 0.0, 0.0)); }`;
+const U = {hMap: {value: hTex}, frame: {value: 0}, uColor: {value: new THREE.Color(P.color)}, uLight: {value: P.light}, uL: {value: new THREE.Vector3()}, uCam: {value: new THREE.Vector3()}};
+const SAND_V = `${GLC} uniform sampler2D hMap; uniform float frame; varying vec2 vUv; varying vec3 vP;
+  void main(){ vUv = uv; float h = texture2D(hMap, uv).x; vP = normalize(position)*(1.0 + h);
+    gl_Position = frame > 0.5 ? vec4(uv.x*2.0 - 1.0, uv.y*2.0 - 1.0, 0.5 - h, 1.0) : projectionMatrix*modelViewMatrix*vec4(vP, 1.0); }`;
+const SAND_F = `${GLC} uniform sampler2D hMap; uniform float frame, uLight; uniform vec3 uColor, uL, uCam; varying vec2 vUv; varying vec3 vP;
+  vec3 sandAt(vec2 t){ return dirOf(t)*(1.0 + texture2D(hMap, t).x); }
+  void main(){ vec2 eu = vec2(${(1/HW).toFixed(8)}, 0.0), ev = vec2(0.0, ${(1/HH).toFixed(8)});
+    vec3 up = normalize(vP), N = cross(sandAt(vUv + eu) - sandAt(vUv - eu), sandAt(vUv + ev) - sandAt(vUv - ev));
+    N = length(N) < 1e-12 ? up : normalize(N); if (dot(N, up) < 0.0) N = -N;
+    vec3 L, V; if (frame > 0.5) { vec3 e = eastOf(up), n = cross(up, e); L = normalize(up*0.8 - e*0.45 + n*0.5); V = up; } else { L = uL; V = normalize(uCam - vP); }
+    float dif = max(dot(N, L), 0.0), fill = max(dot(N, V), 0.0), sp = pow(max(dot(N, normalize(L + V)), 0.0), 60.0);
+    gl_FragColor = vec4(uColor*(0.14 + uLight*(0.55*dif + 0.17*fill)) + uLight*0.03*sp, 1.0);
+    #include <colorspace_fragment>
+  }`;
+const sandGeo = new THREE.SphereGeometry(1, 1536, 768);
+const sand = new THREE.Mesh(sandGeo, new THREE.ShaderMaterial({uniforms: U, vertexShader: SAND_V, fragmentShader: SAND_F})); world.add(sand);
 const sun = new THREE.DirectionalLight(0xffffff, P.light); sun.position.set(-3, 4, 5); scene.add(sun);
 const ballMat = new THREE.MeshStandardMaterial({color: 0xffffff, metalness: 1, roughness: P.metal});
 
-/* each ball: radius from its swath (an arc of swath km on the Earth is that much of the unit sphere), resting in its own groove */
+/* the 360 frame: the same sand drawn flat, and each ball drawn by longitude/latitude around its own centre (three times, so one on the seam shows on both edges);
+   depth is height above the sand, so what is seen is what sits highest, as from outside the sphere */
+const fscene = new THREE.Scene(); fscene.background = new THREE.Color(0x000000);
+const fcam = new THREE.OrthographicCamera();
+const sandF = new THREE.Mesh(sandGeo, new THREE.ShaderMaterial({uniforms: {...U, frame: {value: 1}}, vertexShader: SAND_V, fragmentShader: SAND_F, side: THREE.DoubleSide}));
+sandF.frustumCulled = false; fscene.add(sandF);
+const ballGeoF = new THREE.SphereGeometry(1, 64, 32), RUF = {value: P.metal}, ENVF = {value: envTex};
+const BALL_V = `${GLC} uniform mat4 uM; uniform float shift; varying vec3 vN, vC;
+  void main(){ vec3 p = (uM*vec4(position, 1.0)).xyz, c = uM[3].xyz; vN = mat3(uM)*position; vC = c;
+    float lc = atan(-c.z, c.x), d = atan(-p.z, p.x) - lc; d -= KTAU*floor((d + KPI)/KTAU);
+    float r = length(p), la = asin(clamp(p.y/r, -1.0, 1.0));
+    gl_Position = vec4(((lc + d)/KTAU + 0.5 + shift)*2.0 - 1.0, la/KPI*2.0, 0.5 - (r - 1.0), 1.0); }`;
+const BALL_F = `${GLC} uniform sampler2D env; uniform float rough; varying vec3 vN, vC;
+  void main(){ vec3 up = normalize(vC), e = eastOf(up), n0 = cross(up, e), z = normalize(up*0.5 + n0*0.87), n = cross(z, e), R = reflect(-up, normalize(vN)), r = vec3(dot(R, e), dot(R, n), dot(R, z));
+    vec2 t = vec2(atan(r.y, r.x)/KTAU + 0.5, asin(clamp(r.z, -1.0, 1.0))/KPI + 0.5);
+    gl_FragColor = vec4(textureLod(env, t, rough*7.0).rgb*0.9, 1.0);
+    #include <colorspace_fragment>
+  }`;
+
+/* each ball: radius from its swath (an arc of swath km on the Earth is that much of the unit sphere) */
 function build(rows){
-  for (const b of balls) world.remove(b.mesh); balls = [];
+  for (const b of balls) { world.remove(b.mesh); for (const m of b.fm) fscene.remove(m); } balls = [];
   for (const [name, inst, swath] of LIST) { const row = rows.find(r => norm(r[0]) === norm(name)); if (!row) continue;
     let rec; try { rec = satellite.twoline2satrec(row[1], row[2]); } catch (e) { continue; }
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), ballMat); world.add(mesh);
-    balls.push({name, inst, swath, rec, mesh, last: null, stamped: null}); }
+    const fm = [-1, 0, 1].map(s => { const m = new THREE.Mesh(ballGeoF, new THREE.ShaderMaterial({uniforms: {uM: {value: mesh.matrix}, shift: {value: s}, env: ENVF, rough: RUF},
+      vertexShader: BALL_V, fragmentShader: BALL_F, side: THREE.DoubleSide})); m.frustumCulled = false; fscene.add(m); return m; });
+    balls.push({id: balls.length, seg: 0, name, inst, swath, rec, mesh, fm, last: null, stamped: null, L: null, e: 0, c: 0, cv: null}); }
   sizes();
   $('legend').innerHTML = balls.map(b => `<b>${b.name}</b> ${b.inst} · ${b.swath.toLocaleString('en-US')} km`).join('<br>') + (balls.length < LIST.length ? `<br>not in today's catalogue: ${LIST.filter(l => !balls.some(b => b.name === l[0])).map(l => l[0]).join(', ')}` : '');
 }
 function sizes(){
   let deepest = 0;
   for (const b of balls) { b.r = Math.sin(b.swath/RE/2)*P.scale; b.s = b.r*P.sink; b.w = Math.sqrt(Math.max(0, 2*b.r*b.s - b.s*b.s)); deepest = Math.max(deepest, b.s); b.mesh.scale.setScalar(b.r); }
-  DEPTH = Math.max(0.005, deepest); sandMat.displacementScale = DEPTH; sandMat.displacementBias = -DEPTH;
+  MAXD = Math.max(0.005, 1.5*deepest);
 }
-/* one press of a ball into the map: the groove's cross-section is the ball's own circle, deepest where it rests; darker = deeper, the deeper wins */
-function stamp(b, v, prev){                                 // one stretch of groove, from the last press (prev) to v, measured across the track
-  prev = prev || v;
-  const mid = slerp(prev, v, 0.5), halfLen = angle(prev, v)/2, RIM = 1.4;
-  const lo = Math.atan2(mid[1], mid[0]), la = Math.asin(Math.max(-1, Math.min(1, mid[2]))), cx = ((lo/TAU + 0.5)%1 + 1)%1*HW, cy = (0.5 - la/PI)*HH;
-  const reach = b.w*RIM + halfLen, ry = Math.ceil(reach/PI*HH) + 1, cr = Math.cos(reach), j0 = Math.max(0, Math.floor(cy - ry)), j1 = Math.min(HH - 1, Math.ceil(cy + ry));
+const clamp1 = x => Math.max(-1, Math.min(1, x)), smooth01 = x => x <= 0 ? 0 : x >= 1 ? 1 : x*x*(3 - 2*x);
+function texel(v){ const lo = Math.atan2(v[1], v[0]), la = Math.asin(clamp1(v[2])); return [((lo/TAU + 0.5)%1 + 1)%1*HW, (0.5 - la/PI)*HH]; }
+
+/* gravity: the ball settles on whatever sand is under it (old grooves, rims), touching the highest point. Returns that level (off radius 1);
+   it then sinks by s into fresh sand, less into sand already pressed down (packed), so the grooves deepen with each pass but level off */
+function rest(b, v){
+  const [cx, cy] = texel(v), r2 = b.r*b.r, ry = Math.ceil(Math.asin(Math.min(1, b.r))/PI*HH) + 1, st = Math.max(1, Math.round(ry/24));
+  let top = -Infinity;
+  for (let j = Math.max(0, Math.floor(cy) - ry); j <= Math.min(HH - 1, Math.floor(cy) + ry); j += st) {
+    const rc = ROWC[j], rs = ROWS[j], rx = rc > 0.02 ? Math.min(HW/2, Math.ceil(ry/rc) + 1) : HW/2;
+    for (let di = -rx; di <= rx; di += st) { const i = ((Math.floor(cx) + di)%HW + HW)%HW;
+      const dot = rc*COLC[i]*v[0] + rc*COLS[i]*v[1] + rs*v[2]; if (dot <= 0) continue; const q2 = 1 - dot*dot; if (q2 >= r2) continue;
+      const t = height[j*HW + i] + Math.sqrt(r2 - q2); if (t > top) top = t; } }
+  return top === -Infinity ? 0 : top - b.r;
+}
+const sinkAt = (b, L) => b.s*Math.max(0.15, Math.min(1, 1 + L/MAXD));
+/* one stretch of groove, from the last press (prev, resting level L0, sink e0) to v (L1, e1), measured across the track. The ball's circle is pressed
+   below the level it rests on, that level and sink blending along the stretch so the floor and walls run on without steps; eased into the sand at the lip
+   so there is no hard edge; the lower wins. */
+function stamp(b, v, prev, L0, e0, L1, e1){
+  prev = prev || v; b.seg++;
+  const mid = slerp(prev, v, 0.5), halfLen = angle(prev, v)/2, RIM = 1.45, K = 0.2*b.s, rimOn = P.rimOn && P.rim > 0, r2 = b.r*b.r;
+  const [cx, cy] = texel(mid);
+  const reach = Math.max(b.w*RIM, b.w + 4*K) + halfLen, ry = Math.ceil(reach/PI*HH) + 1, cr = Math.cos(reach), j0 = Math.max(0, Math.floor(cy - ry)), j1 = Math.min(HH - 1, Math.ceil(cy + ry));
   let n = [prev[1]*v[2] - prev[2]*v[1], prev[2]*v[0] - prev[0]*v[2], prev[0]*v[1] - prev[1]*v[0]]; const nl = Math.hypot(...n), seg = nl > 1e-9; if (seg) n = n.map(c => c/nl);
   for (let j = j0; j <= j1; j++) {
     const rc = ROWC[j], rs = ROWS[j], rx = rc > 0.02 ? Math.min(HW/2, Math.ceil(ry/rc) + 1) : HW/2;
@@ -119,80 +190,126 @@ function stamp(b, v, prev){                                 // one stretch of gr
       const u0 = rc*COLC[i], u1 = rc*COLS[i], u2 = rs;
       if (u0*mid[0] + u1*mid[1] + u2*mid[2] < cr) continue;
       // distance to the arc prev..v: straight across it where the foot falls inside, else to the nearer end
-      let q, side = false;
-      if (seg) { const sd = u0*n[0] + u1*n[1] + u2*n[2], f0 = u0 - sd*n[0], f1 = u1 - sd*n[1], f2 = u2 - sd*n[2];
+      let q, f = 0, side = false, sd = 0, ov = 0;
+      if (seg) { sd = u0*n[0] + u1*n[1] + u2*n[2]; const f0 = u0 - sd*n[0], f1 = u1 - sd*n[1], f2 = u2 - sd*n[2];
         const a1 = (prev[1]*f2 - prev[2]*f1)*n[0] + (prev[2]*f0 - prev[0]*f2)*n[1] + (prev[0]*f1 - prev[1]*f0)*n[2];
         const a2 = (f1*v[2] - f2*v[1])*n[0] + (f2*v[0] - f0*v[2])*n[1] + (f0*v[1] - f1*v[0])*n[2];
-        if (a1 >= 0 && a2 >= 0) { q = Math.abs(sd); side = true; } }
-      if (!side) q = Math.sin(Math.min(angle([u0, u1, u2], prev), angle([u0, u1, u2], v)));
-      const d = b.s - (b.r - Math.sqrt(Math.max(0, b.r*b.r - q*q))), k = j*HW + i;
-      if (d > 0) { const h = 1 - d/DEPTH; if (h < height[k]) { height[k] = h; half[k] = THREE.DataUtils.toHalfFloat(h); } continue; }
-      // the pushed-aside sand: a soft rim along both sides of the groove, only on sand that has not been pressed yet
-      if (!side || height[k] < 0.999) continue;
-      const t = (q - b.w)/(b.w*(RIM - 1)); if (t <= 0 || t >= 1) continue;
-      const h = 1 + P.rim*b.s/DEPTH*Math.sin(PI*t)**2; if (h > height[k]) { height[k] = h; half[k] = THREE.DataUtils.toHalfFloat(h); } } }
+        if (a1 >= 0 && a2 >= 0) { q = Math.abs(sd); side = true; f = a1 + a2 > 0 ? a1/(a1 + a2) : 0; } }
+      if (!side) { const A = angle([u0, u1, u2], prev), B = angle([u0, u1, u2], v); q = Math.sin(Math.min(A, B)); f = A < B ? 0 : 1; ov = Math.sqrt(Math.max(0, q*q - sd*sd)); }
+      const L = L0 + (L1 - L0)*f, e = e0 + (e1 - e0)*f;
+      const k = j*HW + i; let h = height[k];
+      if (q < b.r) {                                                              // the ball's underside here, pressed in with a soft blend (no crease where it meets the sand)
+        let t = L - e + b.r - Math.sqrt(r2 - q*q);
+        const x = t + MAXD; t = -MAXD + (x + Math.sqrt(x*x + K*K))/2;             // never deeper than MAXD, eased
+        if (pBy[k] === b.id && b.seg - pSeg[k] < 8) h = Math.min(h, t);         // the same pass again (stretches overlap at their ends): no second blend
+        else { const m = Math.max(K - Math.abs(h - t), 0)/K; h = Math.min(h, t) - m*m*K*0.25; pBy[k] = b.id; }
+        pSeg[k] = b.seg; }
+      // the pushed-aside sand: a soft rim heaped beside the track on top of whatever is there, once per pass (where neighbouring stretches overlap, on the inside
+      // of a bend, it is only topped up to the higher of the two; just past each end it is measured straight across too, so the outside of a bend has no gaps)
+      if (rimOn && seg && (side || ov < 2*halfLen)) { const we = Math.sqrt(Math.max(1e-12, 2*b.r*e - e*e)), w = (Math.abs(sd) - we)/(we*(RIM - 1));
+        if (w > 0 && w < 1) { const add = P.rim*e*Math.sin(PI*w)**2;
+          if (rimBy[k] === b.id && b.seg - rimSeg[k] < 8) { if (add > rimAdd[k]) { h += add - rimAdd[k]; rimAdd[k] = add; } }
+          else { h += add; rimAdd[k] = add; rimBy[k] = b.id; }
+          rimSeg[k] = b.seg; } }
+      if (h !== height[k]) { height[k] = h; half[k] = H16(h); } } }
   dirty = true;
 }
-const slerp = (a, b, t) => { const w = Math.acos(Math.max(-1, Math.min(1, a[0]*b[0] + a[1]*b[1] + a[2]*b[2]))); if (w < 1e-7) return a; const s = Math.sin(w), ka = Math.sin((1 - t)*w)/s, kb = Math.sin(t*w)/s; return [a[0]*ka + b[0]*kb, a[1]*ka + b[1]*kb, a[2]*ka + b[2]*kb]; };
-const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0]*b[0] + a[1]*b[1] + a[2]*b[2])));
-const AX = new THREE.Vector3(), Q = new THREE.Quaternion();
-function advance(b, ms){                                    // press along the path since the last frame, then roll the ball to where it is
+const slerp = (a, b, t) => { const w = Math.acos(clamp1(a[0]*b[0] + a[1]*b[1] + a[2]*b[2])); if (w < 1e-7) return a; const s = Math.sin(w), ka = Math.sin((1 - t)*w)/s, kb = Math.sin(t*w)/s; return [a[0]*ka + b[0]*kb, a[1]*ka + b[1]*kb, a[2]*ka + b[2]*kb]; };
+const angle = (a, b) => Math.acos(clamp1(a[0]*b[0] + a[1]*b[1] + a[2]*b[2]));
+const AX = new THREE.Vector3(), Q = new THREE.Quaternion(), IQ = new THREE.Quaternion();
+function advance(b, ms){                                    // press along the path since the last frame, each press settling on the sand first, then roll the ball to where it is
   const v = subPoint(b.rec, ms); if (!v) return;
-  if (!b.stamped) { stamp(b, v); b.stamped = v; }
-  const gap = angle(b.stamped, v), step = Math.max(b.w/2, 0.002);
-  if (gap > 0.5) { stamp(b, v); b.stamped = v; }         // a jump (speed change, reload): no groove across it
-  else if (gap >= step) { const n = Math.floor(gap/step); for (let i = 1; i <= n; i++) stamp(b, slerp(b.stamped, v, i*step/gap), slerp(b.stamped, v, (i - 1)*step/gap)); b.stamped = slerp(b.stamped, v, n*step/gap); }
-  const c = to3(v), pos = c.clone().multiplyScalar(1 - b.s + b.r);
+  const press = (p, from) => { const raw = rest(b, p), L0 = b.L, e0 = b.e; b.L = L0 == null ? raw : L0 + (raw - L0)*0.6; b.e = sinkAt(b, b.L); b.c = b.L + b.r - b.e;
+    stamp(b, p, from, L0 == null ? b.L : L0, L0 == null ? b.e : e0, b.L, b.e); };
+  if (!b.stamped || angle(b.stamped, v) > 0.5) { b.L = null; press(v); b.stamped = v; }   // a start or a jump (speed change, reload): no groove across it
+  else { const gap = angle(b.stamped, v), step = Math.max(b.w/2, 0.002);
+    if (gap >= step) { const n = Math.floor(gap/step); for (let i = 1; i <= n; i++) press(slerp(b.stamped, v, i*step/gap), slerp(b.stamped, v, (i - 1)*step/gap)); b.stamped = slerp(b.stamped, v, n*step/gap); } }
+  b.cv = b.cv == null ? b.c : b.cv + (b.c - b.cv)*0.3;
+  const c = to3(v), pos = c.clone().multiplyScalar(1 + b.cv);
   if (b.last) { const d = pos.clone().sub(b.last), len = d.length();
     if (len > 1e-7 && len < 0.5) { AX.crossVectors(c, d).normalize(); Q.setFromAxisAngle(AX, len/b.r); b.mesh.quaternion.premultiply(Q); } }   // rolls without slipping
   b.mesh.position.copy(pos); b.last = pos;
 }
-function digSince(ms0){                                     // press every pass from ms0 to now at once
-  smoothSand(); for (const b of balls) { b.stamped = null; b.last = null; for (let t = ms0; t < simMs; t += 20000) advance(b, t); advance(b, simMs); }
+function digSince(ms0){                                     // press every pass from ms0 to now at once, settling as it goes
+  smoothSand(); rowT.fill(ms0);
+  for (const b of balls) { b.stamped = null; b.last = null; b.L = null; b.cv = null; }
+  let next = ms0 + 600000;
+  for (let t = ms0; t < simMs; t += 20000) { for (const b of balls) advance(b, t); if (t >= next) { relaxRows(0, HH, t, false); next += 600000; } }
+  for (const b of balls) advance(b, simMs); relaxRows(0, HH, simMs, false);
+  for (let k = 0; k < height.length; k++) half[k] = H16(height[k]); dirty = true;
 }
 
-/* ---------- view: drag turns the sand freely, wheel zooms ---------- */
+/* ---------- view: 3D (drag turns the sand freely, wheel zooms) or the 360 frame at 1920 x 1080 ---------- */
 let dist = 4.2, drag = null;
-function size(){ renderer.setSize(innerWidth, innerHeight, false); cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); }
-addEventListener('resize', size); size();
+function size(){
+  document.body.classList.toggle('frame', P.view === 'frame');
+  if (P.view === 'frame') { renderer.setPixelRatio(1); renderer.setSize(1920, 1080, false); }
+  else { renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight, false); cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); }
+}
+addEventListener('resize', size);
 const cv = $('gl');
-cv.addEventListener('pointerdown', e => { drag = {x: e.clientX, y: e.clientY}; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointerdown', e => { if (P.view !== '3d') return; drag = {x: e.clientX, y: e.clientY}; cv.setPointerCapture(e.pointerId); });
 cv.addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
   const k = 2*(dist - 1)*Math.tan(cam.fov/2*PI/180)/innerHeight, a = Math.hypot(dx, dy)*k; if (!a) return;
   Q.setFromAxisAngle(AX.set(dy, dx, 0).normalize(), a); world.quaternion.premultiply(Q); });
 cv.addEventListener('pointerup', () => { drag = null; });
-cv.addEventListener('wheel', e => { dist = Math.max(1.5, Math.min(9, dist*Math.exp(e.deltaY*0.001))); e.preventDefault(); }, {passive: false});
+cv.addEventListener('wheel', e => { if (P.view !== '3d') return; dist = Math.max(1.5, Math.min(9, dist*Math.exp(e.deltaY*0.001))); e.preventDefault(); }, {passive: false});
 world.rotation.x = 0.35;
 
 /* ---------- controls ---------- */
-const segSync = () => document.querySelectorAll('#segSpeed button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.v === P.speed)));
-$('segSpeed').onclick = e => { const b = e.target.closest('button'); if (!b) return; P.speed = +b.dataset.v; if (P.speed === 1) { simMs = Date.now(); for (const q of balls) q.stamped = null; } segSync(); };
+if (DISPLAY) document.body.classList.add('display');
+function sync(){
+  document.querySelectorAll('#segSpeed button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.v === P.speed)));
+  document.querySelectorAll('#segView button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === P.view)));
+  $('ballsOn').setAttribute('aria-pressed', String(P.balls)); $('ballsOn').textContent = 'Balls: ' + (P.balls ? 'on' : 'off');
+  for (const b of balls) { b.mesh.visible = P.balls; for (const m of b.fm) m.visible = P.balls; }
+  $('rimOn').setAttribute('aria-pressed', String(P.rimOn)); $('rimOn').textContent = 'Pushed-sand rim: ' + (P.rimOn ? 'on' : 'off');
+  const q = new URLSearchParams({display: '', speed: P.speed, sink: P.sink, scale: P.scale, rim: P.rim, rimOn: P.rimOn ? 1 : 0, balls: P.balls ? 1 : 0, settle: P.settle, metal: P.metal, light: P.light, color: P.color});
+  $('openDisplay').href = '/sphere-test-sand?' + q.toString().replace('display=&', 'display&');
+}
+$('segSpeed').onclick = e => { const b = e.target.closest('button'); if (!b) return; P.speed = +b.dataset.v; if (P.speed === 1) { simMs = Date.now(); for (const q of balls) q.stamped = null; } sync(); };
+$('segView').onclick = e => { const b = e.target.closest('button'); if (!b) return; P.view = b.dataset.v; size(); sync(); };
+$('rimOn').onclick = () => { P.rimOn = !P.rimOn; sync(); };
+$('ballsOn').onclick = () => { P.balls = !P.balls; sync(); };
+$('sandColor').value = P.color;
+$('sandColor').oninput = e => { P.color = e.target.value; U.uColor.value.set(P.color); sync(); };
 for (const [k, label, lo, hi, st] of SL) { const l = document.createElement('label'); l.innerHTML = `<span>${label}</span><output>${P[k]}</output><input type="range" min="${lo}" max="${hi}" step="${st}" value="${P[k]}">`;
   l.querySelector('input').oninput = e => { P[k] = +e.target.value; l.querySelector('output').textContent = P[k];
-    if (k === 'sink' || k === 'scale') { sizes(); digSince(lastDig); } if (k === 'metal') ballMat.roughness = P.metal; if (k === 'rim') digSince(lastDig); if (k === 'light') sun.intensity = P.light; };
+    if (k === 'sink' || k === 'scale') sizes(); if (k === 'metal') ballMat.roughness = RUF.value = P.metal; if (k === 'light') sun.intensity = U.uLight.value = P.light; sync(); };
   $('sliders').append(l); }
-let lastDig = simMs;
-$('sinceMidnight').onclick = () => { lastDig = Date.parse(new Date(simMs).toISOString().slice(0, 10) + 'T00:00:00Z'); digSince(lastDig); };
-$('smooth').onclick = () => { lastDig = simMs; smoothSand(); for (const b of balls) b.stamped = null; };
-segSync();
+$('smooth').onclick = () => { smoothSand(); for (const b of balls) { b.stamped = null; b.L = null; } };
+addEventListener('keydown', e => {
+  if (e.target.closest && e.target.closest('input')) return;
+  if (e.key === 'f' || e.key === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen?.().catch(() => {}); }
+  if (e.key === 'b' || e.key === 'B') { P.balls = !P.balls; sync(); }
+  if ((e.key === 'u' || e.key === 'U') && DISPLAY) document.body.classList.toggle('ui-on');
+  if (e.key === 'v' || e.key === 'V') { P.view = P.view === 'frame' ? '3d' : 'frame'; size(); sync(); } });
+size(); sync();
 
 /* ---------- data: the same live catalogue as Constellations (CelesTrak active), with the built-in sample as fallback ---------- */
 async function load(){
   try { const r = await fetch('/api/orbits', {cache: 'no-store'}); if (r.ok) { const d = await r.json(); if (d.sats && d.sats.length > 100) return d.sats; } } catch (e) {}
   const f = await (await fetch('/sphere-eye/fallback.json')).json(); return f.sats.map(s => [s.name, s.l1, s.l2]);
 }
-smoothSand(); build(await load()); sizes();
-let lastT = performance.now();
+smoothSand(); build(await load()); sync();
+digSince(simMs - 3*3600e3);                                 // the sand as the last three hours left it, so it never starts blank
+let lastT = performance.now(), fc = 0;
+function render(){
+  if (P.view === 'frame') { for (const b of balls) b.mesh.updateMatrix(); renderer.render(fscene, fcam); return; }
+  cam.position.set(0, 0, dist); cam.lookAt(0, 0, 0); IQ.copy(world.quaternion).invert();
+  U.uL.value.set(-3, 4, 5).normalize().applyQuaternion(IQ); U.uCam.value.set(0, 0, dist).applyQuaternion(IQ);
+  renderer.render(scene, cam);
+}
 function frame(dt, show = true){
   if (P.speed === 1) simMs = Date.now(); else simMs += dt*1000*P.speed;
   for (const b of balls) advance(b, simMs);
+  if (P.settle > 0 && (++fc & 3) === 0) relaxSome();
   if (dirty) { hTex.needsUpdate = true; dirty = false; }
   $('clock').textContent = new Date(simMs).toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
-  if (!show) return;
-  cam.position.set(0, 0, dist); cam.lookAt(0, 0, 0); renderer.render(scene, cam);
+  if (show) render();
 }
 function loop(){ const now = performance.now(), dt = Math.min(0.1, (now - lastT)/1000); lastT = now; frame(dt); requestAnimationFrame(loop); }
-window.__sand = {height, HW, HH, frame, digSince, balls: () => balls, P, set: (k, v) => { P[k] = v; sizes(); }, world};
+window.__sand = {height, HW, HH, frame, render, digSince, balls: () => balls, P, set: (k, v) => { P[k] = v; sizes(); size(); sync(); }, world, U};
 if (!TEST) loop(); else frame(0);
 </script>
 </body>
