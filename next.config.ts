@@ -7,7 +7,7 @@ const nextConfig: NextConfig = {
   // Sampling Sphere pages are static HTML in public/ (built by sampling-sphere/build.py)
   async rewrites() {
     return [
-      ...["sphere-display", "sphere-tablet", "sphere-studio", "sphere-test-ripples", "sphere-test-shell", "sphere-test-liquid", "sphere-eye"].map((page) => ({
+      ...["sphere-display", "sphere-tablet", "sphere-studio", "sphere-test-ripples", "sphere-test-shell", "sphere-test-liquid", "sphere-test-sand", "sphere-eye"].map((page) => ({
         source: `/${page}`,
         destination: `/${page}/index.html`,
       })),

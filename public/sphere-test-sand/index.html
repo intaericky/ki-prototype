@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sampling Sphere · Sand test</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/sphere-tests/tests.css">
+<style>
+.legend{font:11px/1.5 var(--mono);color:var(--mute);margin-top:10px}
+.legend b{color:var(--ink);font-weight:400}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<header class="bar">
+  <nav class="seg" aria-label="Scene"><a href="/constellations-studio">Constellations</a><a href="/sphere-test-sand" aria-current="page">Sand test</a></nav>
+  <div class="seg" id="segSpeed"><button data-v="1">Real time</button><button data-v="60">×60</button><button data-v="600">×600</button><button data-v="3600">×3600</button></div>
+  <span id="clock" style="font:12px var(--mono);color:var(--mute)"></span>
+  <span class="spacer"></span>
+  <button class="btn" id="sinceMidnight">Dig since 00:00 UTC</button>
+  <button class="btn" id="smooth">Smooth the sand</button>
+</header>
+<details class="panel" id="panel" open>
+  <summary>Sand and balls</summary>
+  <div id="sliders"></div>
+  <div class="legend" id="legend">Loading orbits…</div>
+</details>
+<p class="note">The satellites NASA publishes daily or scene imagery from, each as a metal ball as wide as its swath, rolling on its real orbit (SGP4, CelesTrak elements) over an Earth-fixed soft sphere and pressing its groove into it. Drag to turn, scroll to zoom.</p>
+<script src="/sphere-assets/vendor/satellite.min.js"></script>
+<script type="module">
+import * as THREE from '/sphere-assets/vendor/three.module.min.js';
+const $ = id => document.getElementById(id), PI = Math.PI, TAU = 2*PI, RE = 6378.137;
+const TEST = location.hash === '#test';
+
+/* the satellites whose pictures NASA publishes (GIBS: MODIS, VIIRS daily; HLS: Landsat and Sentinel-2 scenes), with swath widths in km.
+   Geostationary imagers (GOES, Himawari) are left out: they do not move over the ground, so they would only press one pit. */
+const LIST = [['TERRA', 'MODIS', 2330], ['AQUA', 'MODIS', 2330], ['SUOMI NPP', 'VIIRS', 3040], ['NOAA 20', 'VIIRS', 3040], ['NOAA 21', 'VIIRS', 3040],
+  ['LANDSAT 8', 'OLI', 185], ['LANDSAT 9', 'OLI-2', 185], ['SENTINEL-2A', 'MSI', 290], ['SENTINEL-2B', 'MSI', 290], ['SENTINEL-2C', 'MSI', 290]];
+const norm = n => n.toUpperCase().replace(/[- ]+/g, ' ').trim();
+
+const P = {speed: 600, sink: 0.35, scale: 1, metal: 0.25, light: 1.3, rim: 0.25};
+const SL = [['sink', 'How deep each ball sinks (of its radius)', 0.05, 0.9, 0.01], ['scale', 'Ball size (× swath)', 0.25, 2, 0.05],
+  ['rim', 'Rim of pushed sand', 0, 0.6, 0.01], ['metal', 'Metal roughness', 0, 0.8, 0.01], ['light', 'Light', 0.3, 3, 0.05]];
+
+/* ---------- orbits ---------- */
+let simMs = Date.now(), balls = [];
+const jd = ms => ms/86400000 + 2440587.5;
+function subPoint(rec, ms){                                 // Earth-fixed unit vector under the satellite
+  const r = satellite.sgp4(rec, (jd(ms) - rec.jdsatepoch)*1440); if (!r || !r.position || isNaN(r.position.x)) return null;
+  const p = r.position, lo = Math.atan2(p.y, p.x) - satellite.gstime(jd(ms)), la = Math.atan2(p.z, Math.hypot(p.x, p.y));
+  return [Math.cos(la)*Math.cos(lo), Math.cos(la)*Math.sin(lo), Math.sin(la)];
+}
+const to3 = v => new THREE.Vector3(v[0], v[2], -v[1]);      // (x, y, z north) -> three's frame, matching the sphere's uv
+
+/* ---------- the soft body: a height map pressed by the balls, used as displacement ---------- */
+// heights kept as floats (1 = untouched surface, 0 = DEPTH down) and sent to the GPU as half floats, so the grooves shade smoothly
+const HW = 2048, HH = 1024, height = new Float32Array(HW*HH), half = new Uint16Array(HW*HH);
+const hTex = new THREE.DataTexture(half, HW, HH, THREE.RedFormat, THREE.HalfFloatType);
+hTex.colorSpace = THREE.NoColorSpace; hTex.wrapS = THREE.RepeatWrapping; hTex.magFilter = hTex.minFilter = THREE.LinearFilter; hTex.flipY = true;
+const ONE = THREE.DataUtils.toHalfFloat(1);
+let dirty = null;                                           // rows touched since the last upload
+function smoothSand(){ height.fill(1); half.fill(ONE); hTex.needsUpdate = true; }
+const ROWC = new Float64Array(HH), ROWS = new Float64Array(HH), COLC = new Float64Array(HW), COLS = new Float64Array(HW);
+for (let j = 0; j < HH; j++) { const la = (0.5 - (j + 0.5)/HH)*PI; ROWC[j] = Math.cos(la); ROWS[j] = Math.sin(la); }
+for (let i = 0; i < HW; i++) { const lo = ((i + 0.5)/HW - 0.5)*TAU; COLC[i] = Math.cos(lo); COLS[i] = Math.sin(lo); }
+let DEPTH = 0.08;                                            // world depth that black (0) stands for; set from the deepest ball
+const renderer = new THREE.WebGLRenderer({canvas: $('gl'), antialias: true, preserveDrawingBuffer: TEST});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x000000);
+const cam = new THREE.PerspectiveCamera(32, 1, 0.01, 100);
+// a soft studio for the metal to reflect: dark floor, bright ceiling, a few long lights
+const env = document.createElement('canvas'); env.width = 1024; env.height = 512; { const g = env.getContext('2d');
+  const gr = g.createLinearGradient(0, 0, 0, 512); gr.addColorStop(0, '#fff'); gr.addColorStop(0.45, '#777'); gr.addColorStop(0.55, '#222'); gr.addColorStop(1, '#050505'); g.fillStyle = gr; g.fillRect(0, 0, 1024, 512);
+  g.fillStyle = '#fff'; for (const [x, w] of [[120, 60], [430, 24], [700, 90]]) g.fillRect(x, 70, w, 150); }
+const envTex = new THREE.CanvasTexture(env); envTex.mapping = THREE.EquirectangularReflectionMapping; envTex.colorSpace = THREE.SRGBColorSpace;
+const pmrem = new THREE.PMREMGenerator(renderer); scene.environment = pmrem.fromEquirectangular(envTex).texture;
+const world = new THREE.Group(); scene.add(world);
+const sandMat = new THREE.MeshStandardMaterial({color: 0xdedbd5, roughness: 0.92, metalness: 0, displacementMap: hTex, displacementScale: DEPTH, displacementBias: -DEPTH,
+  envMapIntensity: 0.35});
+// shading: each vertex's normal is worked out from the pressed surface around it (the height map's neighbours), so grooves light smoothly
+sandMat.onBeforeCompile = sh => {
+  sh.vertexShader = sh.vertexShader.replace('#include <displacementmap_pars_vertex>', `#include <displacementmap_pars_vertex>
+    vec3 sandAt(vec2 t){ float ph = t.x*6.2831853, th = (1.0 - t.y)*3.1415927;
+      vec3 d = vec3(-cos(ph)*sin(th), cos(th), sin(ph)*sin(th)); return d*(1.0 + texture2D(displacementMap, t).x*displacementScale + displacementBias); }`)
+    .replace('#include <beginnormal_vertex>', `vec2 eu = vec2(${(1.5/HW).toFixed(7)}, 0.0), ev = vec2(0.0, ${(1.5/HH).toFixed(7)});
+    vec3 objectNormal = cross(sandAt(uv + eu) - sandAt(uv - eu), sandAt(uv + ev) - sandAt(uv - ev));
+    objectNormal = length(objectNormal) < 1e-9 ? normalize(position) : normalize(objectNormal); if (dot(objectNormal, position) < 0.0) objectNormal = -objectNormal;`);
+};
+const sand = new THREE.Mesh(new THREE.SphereGeometry(1, 1024, 512), sandMat); world.add(sand);
+const sun = new THREE.DirectionalLight(0xffffff, P.light); sun.position.set(-3, 4, 5); scene.add(sun);
+const ballMat = new THREE.MeshStandardMaterial({color: 0xffffff, metalness: 1, roughness: P.metal});
+
+/* each ball: radius from its swath (an arc of swath km on the Earth is that much of the unit sphere), resting in its own groove */
+function build(rows){
+  for (const b of balls) world.remove(b.mesh); balls = [];
+  for (const [name, inst, swath] of LIST) { const row = rows.find(r => norm(r[0]) === norm(name)); if (!row) continue;
+    let rec; try { rec = satellite.twoline2satrec(row[1], row[2]); } catch (e) { continue; }
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), ballMat); world.add(mesh);
+    balls.push({name, inst, swath, rec, mesh, last: null, stamped: null}); }
+  sizes();
+  $('legend').innerHTML = balls.map(b => `<b>${b.name}</b> ${b.inst} · ${b.swath.toLocaleString('en-US')} km`).join('<br>') + (balls.length < LIST.length ? `<br>not in today's catalogue: ${LIST.filter(l => !balls.some(b => b.name === l[0])).map(l => l[0]).join(', ')}` : '');
+}
+function sizes(){
+  let deepest = 0;
+  for (const b of balls) { b.r = Math.sin(b.swath/RE/2)*P.scale; b.s = b.r*P.sink; b.w = Math.sqrt(Math.max(0, 2*b.r*b.s - b.s*b.s)); deepest = Math.max(deepest, b.s); b.mesh.scale.setScalar(b.r); }
+  DEPTH = Math.max(0.005, deepest); sandMat.displacementScale = DEPTH; sandMat.displacementBias = -DEPTH;
+}
+/* one press of a ball into the map: the groove's cross-section is the ball's own circle, deepest where it rests; darker = deeper, the deeper wins */
+function stamp(b, v, prev){                                 // one stretch of groove, from the last press (prev) to v, measured across the track
+  prev = prev || v;
+  const mid = slerp(prev, v, 0.5), halfLen = angle(prev, v)/2, RIM = 1.4;
+  const lo = Math.atan2(mid[1], mid[0]), la = Math.asin(Math.max(-1, Math.min(1, mid[2]))), cx = ((lo/TAU + 0.5)%1 + 1)%1*HW, cy = (0.5 - la/PI)*HH;
+  const reach = b.w*RIM + halfLen, ry = Math.ceil(reach/PI*HH) + 1, cr = Math.cos(reach), j0 = Math.max(0, Math.floor(cy - ry)), j1 = Math.min(HH - 1, Math.ceil(cy + ry));
+  let n = [prev[1]*v[2] - prev[2]*v[1], prev[2]*v[0] - prev[0]*v[2], prev[0]*v[1] - prev[1]*v[0]]; const nl = Math.hypot(...n), seg = nl > 1e-9; if (seg) n = n.map(c => c/nl);
+  for (let j = j0; j <= j1; j++) {
+    const rc = ROWC[j], rs = ROWS[j], rx = rc > 0.02 ? Math.min(HW/2, Math.ceil(ry/rc) + 1) : HW/2;
+    for (let di = -rx; di <= rx; di++) { const i = ((Math.floor(cx) + di)%HW + HW)%HW;
+      const u0 = rc*COLC[i], u1 = rc*COLS[i], u2 = rs;
+      if (u0*mid[0] + u1*mid[1] + u2*mid[2] < cr) continue;
+      // distance to the arc prev..v: straight across it where the foot falls inside, else to the nearer end
+      let q, side = false;
+      if (seg) { const sd = u0*n[0] + u1*n[1] + u2*n[2], f0 = u0 - sd*n[0], f1 = u1 - sd*n[1], f2 = u2 - sd*n[2];
+        const a1 = (prev[1]*f2 - prev[2]*f1)*n[0] + (prev[2]*f0 - prev[0]*f2)*n[1] + (prev[0]*f1 - prev[1]*f0)*n[2];
+        const a2 = (f1*v[2] - f2*v[1])*n[0] + (f2*v[0] - f0*v[2])*n[1] + (f0*v[1] - f1*v[0])*n[2];
+        if (a1 >= 0 && a2 >= 0) { q = Math.abs(sd); side = true; } }
+      if (!side) q = Math.sin(Math.min(angle([u0, u1, u2], prev), angle([u0, u1, u2], v)));
+      const d = b.s - (b.r - Math.sqrt(Math.max(0, b.r*b.r - q*q))), k = j*HW + i;
+      if (d > 0) { const h = 1 - d/DEPTH; if (h < height[k]) { height[k] = h; half[k] = THREE.DataUtils.toHalfFloat(h); } continue; }
+      // the pushed-aside sand: a soft rim along both sides of the groove, only on sand that has not been pressed yet
+      if (!side || height[k] < 0.999) continue;
+      const t = (q - b.w)/(b.w*(RIM - 1)); if (t <= 0 || t >= 1) continue;
+      const h = 1 + P.rim*b.s/DEPTH*Math.sin(PI*t)**2; if (h > height[k]) { height[k] = h; half[k] = THREE.DataUtils.toHalfFloat(h); } } }
+  dirty = true;
+}
+const slerp = (a, b, t) => { const w = Math.acos(Math.max(-1, Math.min(1, a[0]*b[0] + a[1]*b[1] + a[2]*b[2]))); if (w < 1e-7) return a; const s = Math.sin(w), ka = Math.sin((1 - t)*w)/s, kb = Math.sin(t*w)/s; return [a[0]*ka + b[0]*kb, a[1]*ka + b[1]*kb, a[2]*ka + b[2]*kb]; };
+const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0]*b[0] + a[1]*b[1] + a[2]*b[2])));
+const AX = new THREE.Vector3(), Q = new THREE.Quaternion();
+function advance(b, ms){                                    // press along the path since the last frame, then roll the ball to where it is
+  const v = subPoint(b.rec, ms); if (!v) return;
+  if (!b.stamped) { stamp(b, v); b.stamped = v; }
+  const gap = angle(b.stamped, v), step = Math.max(b.w/2, 0.002);
+  if (gap > 0.5) { stamp(b, v); b.stamped = v; }         // a jump (speed change, reload): no groove across it
+  else if (gap >= step) { const n = Math.floor(gap/step); for (let i = 1; i <= n; i++) stamp(b, slerp(b.stamped, v, i*step/gap), slerp(b.stamped, v, (i - 1)*step/gap)); b.stamped = slerp(b.stamped, v, n*step/gap); }
+  const c = to3(v), pos = c.clone().multiplyScalar(1 - b.s + b.r);
+  if (b.last) { const d = pos.clone().sub(b.last), len = d.length();
+    if (len > 1e-7 && len < 0.5) { AX.crossVectors(c, d).normalize(); Q.setFromAxisAngle(AX, len/b.r); b.mesh.quaternion.premultiply(Q); } }   // rolls without slipping
+  b.mesh.position.copy(pos); b.last = pos;
+}
+function digSince(ms0){                                     // press every pass from ms0 to now at once
+  smoothSand(); for (const b of balls) { b.stamped = null; b.last = null; for (let t = ms0; t < simMs; t += 20000) advance(b, t); advance(b, simMs); }
+}
+
+/* ---------- view: drag turns the sand freely, wheel zooms ---------- */
+let dist = 4.2, drag = null;
+function size(){ renderer.setSize(innerWidth, innerHeight, false); cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); }
+addEventListener('resize', size); size();
+const cv = $('gl');
+cv.addEventListener('pointerdown', e => { drag = {x: e.clientX, y: e.clientY}; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+  const k = 2*(dist - 1)*Math.tan(cam.fov/2*PI/180)/innerHeight, a = Math.hypot(dx, dy)*k; if (!a) return;
+  Q.setFromAxisAngle(AX.set(dy, dx, 0).normalize(), a); world.quaternion.premultiply(Q); });
+cv.addEventListener('pointerup', () => { drag = null; });
+cv.addEventListener('wheel', e => { dist = Math.max(1.5, Math.min(9, dist*Math.exp(e.deltaY*0.001))); e.preventDefault(); }, {passive: false});
+world.rotation.x = 0.35;
+
+/* ---------- controls ---------- */
+const segSync = () => document.querySelectorAll('#segSpeed button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.v === P.speed)));
+$('segSpeed').onclick = e => { const b = e.target.closest('button'); if (!b) return; P.speed = +b.dataset.v; if (P.speed === 1) { simMs = Date.now(); for (const q of balls) q.stamped = null; } segSync(); };
+for (const [k, label, lo, hi, st] of SL) { const l = document.createElement('label'); l.innerHTML = `<span>${label}</span><output>${P[k]}</output><input type="range" min="${lo}" max="${hi}" step="${st}" value="${P[k]}">`;
+  l.querySelector('input').oninput = e => { P[k] = +e.target.value; l.querySelector('output').textContent = P[k];
+    if (k === 'sink' || k === 'scale') { sizes(); digSince(lastDig); } if (k === 'metal') ballMat.roughness = P.metal; if (k === 'rim') digSince(lastDig); if (k === 'light') sun.intensity = P.light; };
+  $('sliders').append(l); }
+let lastDig = simMs;
+$('sinceMidnight').onclick = () => { lastDig = Date.parse(new Date(simMs).toISOString().slice(0, 10) + 'T00:00:00Z'); digSince(lastDig); };
+$('smooth').onclick = () => { lastDig = simMs; smoothSand(); for (const b of balls) b.stamped = null; };
+segSync();
+
+/* ---------- data: the same live catalogue as Constellations (CelesTrak active), with the built-in sample as fallback ---------- */
+async function load(){
+  try { const r = await fetch('/api/orbits', {cache: 'no-store'}); if (r.ok) { const d = await r.json(); if (d.sats && d.sats.length > 100) return d.sats; } } catch (e) {}
+  const f = await (await fetch('/sphere-eye/fallback.json')).json(); return f.sats.map(s => [s.name, s.l1, s.l2]);
+}
+smoothSand(); build(await load()); sizes();
+let lastT = performance.now();
+function frame(dt, show = true){
+  if (P.speed === 1) simMs = Date.now(); else simMs += dt*1000*P.speed;
+  for (const b of balls) advance(b, simMs);
+  if (dirty) { hTex.needsUpdate = true; dirty = false; }
+  $('clock').textContent = new Date(simMs).toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+  if (!show) return;
+  cam.position.set(0, 0, dist); cam.lookAt(0, 0, 0); renderer.render(scene, cam);
+}
+function loop(){ const now = performance.now(), dt = Math.min(0.1, (now - lastT)/1000); lastT = now; frame(dt); requestAnimationFrame(loop); }
+window.__sand = {height, HW, HH, frame, digSince, balls: () => balls, P, set: (k, v) => { P[k] = v; sizes(); }, world};
+if (!TEST) loop(); else frame(0);
+</script>
+</body>
+</html>

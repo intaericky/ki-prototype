@@ -25,6 +25,7 @@ const PAGES = [
       { href: "/sphere-test-ripples", title: "Ripples", text: "White sphere; click anywhere to send large waves across it." },
       { href: "/sphere-test-shell", title: "Open shell", text: "Thick shell with an anamorphic front window that opens; small balls fall in and fill it." },
       { href: "/sphere-test-liquid", title: "Liquid", text: "Same open shell; water pours in from the top, rests, and drains through a whirlpool at the bottom." },
+      { href: "/sphere-test-sand", title: "Sand", text: "Metal balls as wide as each public imager's swath roll on their real orbits and press grooves into a soft sphere." },
     ],
   },
   {
