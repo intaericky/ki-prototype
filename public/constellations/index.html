@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Constellations</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/sphere-tests/tests.css">
+<style>
+html,body{background:var(--bg)}
+:root{--bg:#000}
+body.invert{--bg:#fff}
+#map{position:fixed;inset:0;width:100%;height:100%;display:none;touch-action:none}
+body.show-map #map{display:block}
+body.show-map #gl{visibility:hidden}
+.panel{width:280px}
+.sec{border-top:1px solid var(--faint);margin-top:10px;padding-top:10px}
+.k{font:10px/1 var(--ui);letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin:0 0 6px}
+.small{font:11px/1.45 var(--ui);color:var(--mute);margin:4px 0 0}
+.panel .row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.panel input[type=text]{width:90px;background:#000;color:var(--ink);border:1px solid var(--faint);font:12px var(--mono);padding:5px 6px}
+.panel a.btn{text-decoration:none}
+#draw{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:none;gap:6px;z-index:4}
+body.drafting #draw{display:flex}
+#draw .btn{background:rgba(0,0,0,.6)}
+#tabBar{position:fixed;top:10px;right:max(16px,env(safe-area-inset-right,0px));display:flex;gap:6px;z-index:4}
+body.display .bar,body.display .panel,body.display #tabBar,body.display #draw{display:none}
+body.tablet .bar,body.tablet .panel{display:none}
+body:not(.tablet) #tabBar{display:none}
+body.display{cursor:none}
+body.invert .bar{background:rgba(0,0,0,.75)}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="map" aria-label="Equirectangular frame"></canvas>
+
+<!-- studio -->
+<header class="bar">
+  <nav class="seg" aria-label="Project"><a href="/constellations-studio" aria-current="page">Constellations</a><a href="/sphere-studio">Sampling sphere</a></nav>
+  <div class="seg" id="segView"><button data-v="sphere">Sphere</button><button data-v="frame">360 frame</button></div>
+  <div class="seg" id="segSpeed"><button data-v="1">Real time</button><button data-v="60">×60</button><button data-v="600">×600</button></div>
+  <span id="clock"></span>
+  <span class="spacer"></span>
+</header>
+<aside class="panel" id="panel">
+  <div>
+    <p class="k">Look</p>
+    <div class="row" style="margin-top:0"><div class="seg" id="segRender"><button data-v="3d">3D spheres and tubes</button><button data-v="2d">2D flat</button></div></div>
+    <div class="row"><button class="btn" id="invertBtn">Invert</button><button class="btn" id="gridBtn">Grid</button><button class="btn" id="soundBtn">Sound</button></div>
+    <div id="sliders" style="margin-top:10px"></div>
+  </div>
+  <div class="sec">
+    <p class="k">Room</p>
+    <div class="row" style="margin-top:0"><input type="text" id="room" aria-label="Room code" spellcheck="false"><a class="btn" id="openDisplay" target="_blank">Sphere display</a><a class="btn" id="openTablet" target="_blank">Tablet</a></div>
+    <p class="small">Studio, sphere display and tablet in the same room stay in step: look, speed and every constellation.</p>
+  </div>
+  <div class="sec">
+    <p class="k">Data</p>
+    <p class="small" id="status">Loading the catalogue…</p>
+    <p class="small" id="consN"></p>
+    <div class="row"><button class="btn" id="clearBtn">Clear all constellations</button></div>
+  </div>
+</aside>
+
+<!-- tablet -->
+<div id="tabBar"><div class="seg" id="segTabView"><button data-v="sphere">Globe</button><button data-v="frame">Map</button></div><button class="btn" id="tabSound">Sound</button></div>
+
+<!-- while drawing -->
+<div id="draw" role="toolbar" aria-label="Constellation"><button class="btn" id="undoBtn">Undo</button><button class="btn" id="finishBtn">Finish</button></div>
+
+<script src="/sphere-assets/vendor/satellite.min.js"></script>
+<script type="module">
+import * as THREE from '/sphere-assets/vendor/three.module.min.js';
+
+/* Constellations: every active satellite in the public catalogue, moving on its real orbit. Visitors join satellites into
+   constellations; the orbits pull the shapes apart; a tap on a line eases it back to the shape as it was drawn.
+   Three pages from this one file, by path: /constellations-studio (every control), /constellations-display (the 1920x1080
+   equirect frame for the LED sphere), /constellations-tablet (where visitors draw). Pages in the same ?room= stay in step. */
+const $ = id => document.getElementById(id), Q = new URLSearchParams(location.search), TEST = location.hash === '#test';
+const MODE = Q.has('display') || /display/.test(location.pathname) ? 'display' : Q.has('tablet') || /tablet/.test(location.pathname) ? 'tablet' : 'studio';
+document.body.classList.add(MODE);
+const PI = Math.PI, TAU = 2*PI, RE = 6378.137, MU = 398600.4418, D2R = PI/180;
+const W = 1920, H = 1080;                                   // the LED's own equirect resolution: one frame pixel = one LED pixel
+const ME = Math.random().toString(36).slice(2, 10);
+THREE.ColorManagement.enabled = false;                      // grey levels go to the screen exactly as set
+
+/* ---------- look: set in the studio, followed by the display and the tablet ---------- */
+const DEF = {render: '3d', invert: false, dot: 3, line: 1.5, dotRest: 0.62, lineRest: 0.62, grid: true, speed: 1};
+const P = {...DEF};
+try { Object.assign(P, JSON.parse(localStorage.getItem('constellations-look') || '{}')); } catch (e) {}
+if (Q.get('speed')) P.speed = +Q.get('speed');
+const SLIDERS = [['dot', 'Dot size (LED px)', 1, 12, 0.5], ['line', 'Line thickness (LED px)', 0.5, 8, 0.25],
+  ['dotRest', 'Dot brightness at rest', 0.1, 1, 0.01], ['lineRest', 'Line brightness at rest', 0.1, 1, 0.01]];
+const ink = v => P.invert ? 1 - v : v;                      // a level (1 = full) as a grey on the current background
+const grey = v => { const c = Math.round(ink(v)*255); return `rgb(${c},${c},${c})`; };
+const rad = px => px/2*PI/H;                                // LED pixels (diameter) -> angular radius
+
+/* ---------- the catalogue ---------- */
+let sats = [], meta = {};
+const byId = new Map();
+function classify(rec){
+  const n = rec.no/60, a = Math.cbrt(MU/(n*n)), e = rec.ecco, per = TAU/rec.no, apo = a*(1 + e) - RE, peri = a*(1 - e) - RE;
+  return {per, peri, cls: e > 0.25 ? 'HEO' : Math.abs(per - 1436.1) < 40 && e < 0.05 ? 'GEO' : apo < 2000 ? 'LEO' : 'MEO'};
+}
+async function load(fallback){
+  let data = null, from = 'live';
+  try { const r = await fetch('/api/orbits', {cache: 'no-store'}); if (r.ok) { data = await r.json(); if (!data.sats || data.sats.length < 100) data = null; } } catch (e) {}
+  if (!data && !fallback) return null;
+  if (!data) { from = 'built-in'; const f = await (await fetch('/sphere-eye/fallback.json')).json(); data = {fetched: f.source, source: 'built-in sample', sats: f.sats.map(s => [s.name, s.l1, s.l2])}; }
+  const list = [];
+  for (const [name, l1, l2] of data.sats) {
+    let rec; try { rec = satellite.twoline2satrec(l1, l2); } catch (e) { continue; } if (!rec || rec.error || !rec.no) continue;
+    const o = {name: name.replace(/^0 /, ''), id: l1.slice(2, 7).trim(), rec, ...classify(rec), x: NaN, y: 0, u: null};
+    if (o.peri > 80) list.push(o);                          // below 80 km it is already falling in
+  }
+  return {list, meta: {from, fetched: data.fetched, source: data.source}};
+}
+function apply(cat){
+  sats.length = 0; sats.push(...cat.list); meta = cat.meta;
+  byId.clear(); for (const o of sats) byId.set(o.id, o);
+  $('status').textContent = meta.from === 'live' ? `${sats.length.toLocaleString('en-US')} satellites · ${meta.source}, fetched ${String(meta.fetched).slice(0, 16).replace('T', ' ')} UTC`
+    : `Live catalogue unavailable; showing a ${sats.length}-satellite sample.`;
+}
+
+/* ---------- time and geometry ---------- */
+let simMs = Date.now(), lastReal = performance.now(), yaw = 0, gridShift = 0;
+const jdOf = ms => ms/86400000 + 2440587.5;
+function eci(o, ms){ const r = satellite.sgp4(o.rec, (jdOf(ms) - o.rec.jdsatepoch)*1440); return r && r.position && !isNaN(r.position.x) ? r : null; }
+const lonOf = p => Math.atan2(p.y, p.x), latOf = p => Math.atan2(p.z, Math.hypot(p.x, p.y));
+const X = lon => ((lon/TAU + 0.5) % 1 + 1) % 1*W, Y = lat => (0.5 - lat/PI)*H;
+const unit = (lo, la) => [Math.cos(la)*Math.cos(lo), Math.cos(la)*Math.sin(lo), Math.sin(la)];
+const ll = v => [Math.atan2(v[1], v[0]), Math.asin(Math.max(-1, Math.min(1, v[2])))];
+const dot3 = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross3 = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+const nrm = v => { const l = Math.hypot(...v) || 1; return v.map(c => c/l); };
+const ang = (a, b) => Math.acos(Math.max(-1, Math.min(1, dot3(a, b))));
+function slerp(a, b, t){ const w = ang(a, b); if (w < 1e-6) return a.slice(); const s = Math.sin(w), ka = Math.sin((1 - t)*w)/s, kb = Math.sin(t*w)/s; return [a[0]*ka + b[0]*kb, a[1]*ka + b[1]*kb, a[2]*ka + b[2]*kb]; }
+function earthLL(o, ms){ const s = eci(o, ms); return s ? [lonOf(s.position) - satellite.gstime(jdOf(ms)), latOf(s.position)] : null; }
+function arcPts(a, b, step){ const n = Math.max(2, Math.ceil(ang(a, b)/step) + 1), out = []; for (let i = 0; i < n; i++) out.push(slerp(a, b, i/(n - 1))); return out; }
+const to3 = v => new THREE.Vector3(v[0], v[2], -v[1]);      // our (x east-of-Greenwich, y, z north) -> three's frame (matches the globe's uv)
+
+/* ---------- constellations ---------- */
+const ROOM = (Q.get('room') || '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
+const BASE = ROOM ? `sampling-sphere/v1/orbits/${ROOM}` : 'sampling-sphere/v1/orbits';
+const TOPIC = `${BASE}/constellations`, LOOK = `${BASE}/look`;
+let cons = [], draft = null, reveal = null, revealM = 0, shown = null, mq = null, draftSent = 0, hoverSent = 0;
+let draftSet = new Set(), others = new Map(), remoteHover = new Map(), snap = null, hoverP = null;
+function starsNow(c, m){                                    // where each star is drawn now, or eased back toward where it was when finished
+  return c.stars.map((id, i) => {
+    const o = byId.get(id), L = o && earthLL(o, simMs), now = L ? unit(L[0] + gridShift, L[1]) : null;
+    const was = c.orig ? unit(c.orig[i][0] + gridShift, c.orig[i][1]) : null;
+    if (!now) return was; if (!was || m <= 0) return now; return slerp(now, was, m);
+  });
+}
+function edgesOf(c, m, step){ const S = starsNow(c, m), out = []; c.edges.forEach(([i, j], k) => { if (S[i] && S[j]) { const a = arcPts(S[i], S[j], step); a.k = k; out.push(a); } }); return out; }
+function lineList(step){                                    // every line to draw now: [unit-vector points, level]
+  revealM += ((reveal ? 1 : 0) - revealM)*0.08; if (reveal) shown = reveal; else if (revealM < 0.002) { revealM = 0; shown = null; }
+  const now = performance.now(), list = [];
+  for (const c of cons.slice(-300)) {
+    const m = c === shown ? revealM : 0, base = c === shown ? P.lineRest + (1 - P.lineRest)*revealM : P.lineRest;
+    for (const e of edgesOf(c, m, step)) list.push([e, Math.min(1, base + (c.hit && c.hit[e.k] ? (1 - base)*Math.exp(-(now - c.hit[e.k])/350) : 0))]);
+  }
+  for (const {d} of others.values()) for (const e of edgesOf(d, 0, step)) list.push([e, 1]);
+  if (draft) {
+    for (const e of edgesOf(draft, 0, step)) list.push([e, 1]);
+    const S = starsNow(draft, 0), pen = S[draft.pen];
+    if (pen && snap && snap.id !== draft.stars[draft.pen]) { const L = earthLL(snap, simMs); if (L) list.push([arcPts(pen, unit(L[0] + gridShift, L[1]), step), (1 + P.lineRest)/2]); }
+  }
+  return list;
+}
+function nearestDot(p, r){
+  if (!p) return null; let best = null, bd = r*r;
+  for (const o of sats) { if (isNaN(o.x)) continue; let dx = Math.abs(o.x - p[0]); dx = Math.min(dx, W - dx); const d = dx*dx + (o.y - p[1])**2; if (d < bd) { bd = d; best = o; } }
+  return best;
+}
+function hitCon(p, r){
+  if (!p) return null; let best = null, bd = r*r;
+  for (const c of cons.slice(-300)) for (const e of edgesOf(c, c === shown ? revealM : 0, 1.5*D2R)) for (let i = 0; i < e.length - 1; i++) {
+    const [la0, lb0] = ll(e[i]), [la1, lb1] = ll(e[i + 1]), ax = X(la0), ay = Y(lb0), bx = X(la1), by = Y(lb1); if (Math.abs(bx - ax) > W/2) continue;
+    const vx = bx - ax, vy = by - ay, t = Math.max(0, Math.min(1, ((p[0] - ax)*vx + (p[1] - ay)*vy)/(vx*vx + vy*vy || 1)));
+    const d = (ax + t*vx - p[0])**2 + (ay + t*vy - p[1])**2; if (d < bd) { bd = d; best = c; } }
+  return best;
+}
+const SNAP = 40;                                            // frame pixels: how far the cursor reaches for the nearest satellite
+function tap(p){
+  if (draft) { const o = nearestDot(p, SNAP); if (o) addStar(o); return; }
+  const c = hitCon(p, 9);
+  if (c) { reveal = reveal === c ? null : c; if (reveal) { strum(c, 'now'); setTimeout(() => reveal === c && strum(c, 'then'), 1100); } return; }
+  if (reveal) { reveal = null; return; }
+  const o = nearestDot(p, SNAP); if (o) { draft = {stars: [], edges: [], pen: -1, hist: []}; addStar(o); }
+}
+function addStar(o){
+  const i = draft.stars.indexOf(o.id);
+  if (i >= 0 && i === draft.pen) return finish();          // clicking the star you are on again finishes
+  draft.hist.push(JSON.stringify([draft.stars, draft.edges, draft.pen]));
+  let j = i; if (j < 0) { if (draft.stars.length >= 40) return; draft.stars.push(o.id); j = draft.stars.length - 1; }
+  if (draft.pen >= 0 && !draft.edges.some(([a, b]) => (a === draft.pen && b === j) || (a === j && b === draft.pen))) draft.edges.push([draft.pen, j]);
+  const joined = draft.pen >= 0 && draft.pen !== j; draft.pen = j; changed();
+  if (joined) strum(draft, 'now', [draft.edges.length - 1]);
+}
+function undo(){ if (!draft) return; const h = draft.hist.pop(); if (!h) return cancelDraft(); [draft.stars, draft.edges, draft.pen] = JSON.parse(h); if (!draft.stars.length) return cancelDraft(); changed(); }
+function cancelDraft(){ draft = null; changed(); }
+function finish(){
+  if (!draft) return; if (!draft.edges.length) return cancelDraft();
+  const orig = draft.stars.map(id => { const o = byId.get(id), L = o && earthLL(o, simMs); return L ? [+L[0].toFixed(5), +L[1].toFixed(5)] : [0, 0]; });
+  const c = {id: Date.now().toString(36) + ME.slice(0, 4), at: Date.now(), sim: Math.round(simMs), stars: draft.stars.slice(), edges: draft.edges.map(e => e.slice()), orig};
+  draft = null; add(c, true); changed(); reveal = null;
+  strum(cons.find(k => k.id === c.id) || c, 'now');
+}
+function changed(){ draftSet = new Set(draft ? draft.stars : []); document.body.classList.toggle('drafting', !!draft); sendDraft(); }
+$('undoBtn').onclick = undo; $('finishBtn').onclick = finish;
+addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return;
+  if (draft && e.key === 'Escape') cancelDraft(); else if (draft && e.key === 'Backspace') { e.preventDefault(); undo(); } else if (draft && e.key === 'Enter') finish(); else if (reveal && e.key === 'Escape') reveal = null; });
+
+/* ---------- keeping and sharing: this browser, plus the relay (retained, so they stay for everyone in the room) ---------- */
+const clean = c => {                                        // anything from the relay is checked before use
+  if (!c || typeof c !== 'object' || typeof c.id !== 'string' || !/^[a-z0-9]{1,24}$/.test(c.id)) return null;
+  const n = Array.isArray(c.stars) ? c.stars.length : 0; if (n < 2 || n > 40) return null;
+  if (!c.stars.every(s => typeof s === 'string' && /^[A-Z0-9 ]{1,9}$/.test(s))) return null;
+  if (!Array.isArray(c.edges) || c.edges.length < 1 || c.edges.length > 120 || !c.edges.every(e => Array.isArray(e) && e.length === 2 && e.every(i => Number.isInteger(i) && i >= 0 && i < n))) return null;
+  if (c.orig !== undefined && (!Array.isArray(c.orig) || c.orig.length !== n || !c.orig.every(q => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite)))) return null;
+  return {id: c.id, at: Number.isFinite(c.at) ? c.at : Date.now(), sim: Number.isFinite(c.sim) ? c.sim : 0, stars: c.stars.map(String), edges: c.edges.map(e => [e[0], e[1]]), orig: c.orig, pen: 0};
+};
+const STORE = `constellations${ROOM ? '-' + ROOM : ''}`;
+function add(c, mine){
+  c = clean(c); if (!c || cons.some(k => k.id === c.id)) return;
+  cons.push(c); cons.sort((a, b) => a.at - b.at); if (cons.length > 1000) cons.splice(0, cons.length - 1000);
+  saveLocal(); if (mine && mq) mq.publish(`${TOPIC}/c/${c.id}`, JSON.stringify(c), {retain: true, qos: 1});
+  $('consN').textContent = `${cons.length.toLocaleString('en-US')} constellation${cons.length === 1 ? '' : 's'} in this room`;
+}
+function saveLocal(){ try { localStorage.setItem(STORE, JSON.stringify(cons.slice(-500))); } catch (e) {} }
+function sendDraft(){
+  if (!mq) return; const now = performance.now(); if (now - draftSent < 150 && draft) return; draftSent = now;
+  mq.publish(`${TOPIC}/draft/${ME}`, draft ? JSON.stringify({id: 'd' + ME, stars: draft.stars, edges: draft.edges, at: Date.now()}) : '');
+}
+let hoverLast = '';
+function sendHover(){ const id = snap ? snap.id : ''; if (!mq || id === hoverLast) return; const now = performance.now(); if (now - hoverSent < 120) return; hoverSent = now; hoverLast = id; mq.publish(`${TOPIC}/hover/${ME}`, id); }
+let lookSent = 0, lookTimer = 0;
+function sendLook(){ if (MODE !== 'studio' || !mq) return; clearTimeout(lookTimer); lookTimer = setTimeout(() => mq.publish(LOOK, JSON.stringify(P), {retain: true, qos: 1}), 120); }
+function setLook(d){
+  if (!d || typeof d !== 'object') return;
+  for (const k in DEF) if (k in d && typeof d[k] === typeof DEF[k] && (typeof d[k] !== 'number' || Number.isFinite(d[k]))) P[k] = d[k];
+  if (!['3d', '2d'].includes(P.render)) P.render = '3d';
+  syncLook();
+}
+$('clearBtn').onclick = () => {
+  if (!confirm(`Remove all ${cons.length} constellations in this room, for everyone?`)) return;
+  if (mq) for (const c of cons) mq.publish(`${TOPIC}/c/${c.id}`, '', {retain: true, qos: 1});
+  cons = []; reveal = null; saveLocal(); $('consN').textContent = '0 constellations in this room';
+};
+try { for (const c of JSON.parse(localStorage.getItem(STORE) || '[]')) add(c, false); } catch (e) {}
+if (!Q.has('solo')) import('/sphere-assets/vendor/mqtt.esm.js').then(m => {
+  const mqtt = m.default || m; mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', {connectTimeout: 30000, keepalive: 30});
+  mq.on('connect', () => {
+    mq.subscribe(`${TOPIC}/c/+`); mq.subscribe(`${TOPIC}/draft/+`); mq.subscribe(`${TOPIC}/hover/+`); if (MODE !== 'studio') mq.subscribe(LOOK);
+    for (const c of cons) mq.publish(`${TOPIC}/c/${c.id}`, JSON.stringify(c), {retain: true, qos: 1});
+    sendLook();
+  });
+  mq.on('message', (t, msg) => {
+    const who = t.split('/').pop(), s = msg.toString();
+    if (t === LOOK) { try { setLook(JSON.parse(s)); } catch (e) {} return; }
+    if (t.includes('/hover/')) { if (who !== ME) { if (s && /^[A-Z0-9 ]{1,9}$/.test(s)) remoteHover.set(who, {id: s, t: Date.now()}); else remoteHover.delete(who); } return; }
+    let d = null; try { d = s ? JSON.parse(s) : null; } catch (e) { return; }
+    if (t.includes('/draft/')) { if (who === ME) return; const c = d && clean({...d, id: 'd' + who.replace(/[^a-z0-9]/g, '').slice(0, 20)}); if (c) others.set(who, {d: c, t: Date.now()}); else others.delete(who); return; }
+    if (!d) { cons = cons.filter(c => c.id !== who); if (reveal && reveal.id === who) reveal = null; saveLocal(); return; }   // cleared
+    add(d, false);
+  });
+}).catch(() => {});
+setInterval(() => { const now = Date.now(); for (const M of [others, remoteHover]) for (const [k, v] of M) if (now - v.t > 8000) M.delete(k); if (draft) sendDraft(); }, 2000);
+
+/* ---------- sound: every line is a string ---------- */
+// Pitch follows a line's length right now (shorter is higher), so as the orbits pull a shape apart its chord falls out of tune.
+// Other satellites crossing a line pluck it. Joining plucks, finishing strums, opening a first shape plays it now, then as drawn.
+let soundOn = MODE !== 'tablet', ac = null, master = null, voices = 0, plucksThisFrame = 0, conStrings = [];
+const pitch = len => Math.max(70, Math.min(1800, 115/Math.max(len, 1e-3)));     // 10 degrees ~ 660 Hz
+function audio(){
+  if (!soundOn) return;
+  try {
+    if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)();
+      const comp = ac.createDynamicsCompressor(); comp.threshold.value = -20; comp.ratio.value = 8;
+      master = ac.createGain(); master.gain.value = 0.7; master.connect(comp); comp.connect(ac.destination); }
+    if (ac.state === 'suspended') ac.resume();
+  } catch (e) {}
+}
+addEventListener('pointerdown', audio, {capture: true});
+function pluck(freq, along, cls, vel){
+  if (!ac || !soundOn || ac.state !== 'running' || voices > 40 || plucksThisFrame > 10) return;
+  plucksThisFrame++; voices++;
+  const t = ac.currentTime, dec = cls === 'LEO' ? 0.8 : cls === 'MEO' ? 2.6 : 3.6, f = freq;
+  const g = ac.createGain(), pan = ac.createStereoPanner(), lp = ac.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.setValueAtTime(f*10, t); lp.frequency.exponentialRampToValueAtTime(f*1.2, t + dec*0.6);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.16*vel, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dec);
+  pan.pan.value = Math.max(-1, Math.min(1, along*2 - 1));
+  lp.connect(g).connect(pan).connect(master);
+  const parts = cls === 'LEO' ? [[1, 'triangle', 1]] : [[1, 'sine', 1], [2.76, 'sine', 0.25], [5.4, 'sine', 0.08]];   // higher orbits ring like a bell
+  let left = parts.length;
+  for (const [m, type, a] of parts) { const o = ac.createOscillator(), og = ac.createGain(); o.type = type; o.frequency.value = f*m; og.gain.value = a;
+    o.connect(og).connect(lp); o.start(t); o.stop(t + dec + 0.05); o.onended = () => { if (--left === 0) { voices--; pan.disconnect(); } }; }
+}
+function strum(c, when, only){
+  audio(); const S = when === 'then' && c.orig ? c.orig.map(q => unit(...q)) : starsNow(c, 0);
+  const L = c.edges.map(([i, j]) => S[i] && S[j] ? ang(S[i], S[j]) : null);
+  (only || c.edges.map((e, k) => k)).forEach((k, n) => { if (L[k] === null) return;
+    setTimeout(() => { pluck(pitch(L[k]), (n + 0.5)/Math.max(1, c.edges.length), 'MEO', 0.7); if (c.hit) c.hit[k] = performance.now(); }, n*70); });
+}
+function buildConStrings(){                                 // the lines of the newest shapes (and an opened one), fixed to the Earth
+  const out = [], list = cons.slice(-12); if (shown && !list.includes(shown)) list.push(shown);
+  for (const c of list) {
+    c.hit = c.hit || [];
+    const U = c.stars.map(id => { const o = byId.get(id), L = o && earthLL(o, simMs); return L ? unit(...L) : null; });
+    c.edges.forEach(([i, j], k) => { const A = U[i], B = U[j]; if (!A || !B) return; const len = ang(A, B); if (len < 1e-3 || len > PI - 1e-3) return;
+      out.push({A, B, n: nrm(cross3(A, B)), len, freq: pitch(len), ids: [c.stars[i], c.stars[j]], hit: () => { c.hit[k] = performance.now(); }}); });
+  }
+  return out;
+}
+function crossings(o, u0, u1){
+  if (dot3(u0, u1) < 0.996) return;                          // a jump (new catalogue, speed change), not a crossing
+  for (const st of conStrings) {
+    if (st.ids[0] === o.id || st.ids[1] === o.id) continue;  // a line's own satellites do not pluck it
+    const d0 = dot3(st.n, u0), d1 = dot3(st.n, u1); if ((d0 > 0) === (d1 > 0)) continue;
+    const t = d0/(d0 - d1), q = nrm([u0[0] + (u1[0] - u0[0])*t, u0[1] + (u1[1] - u0[1])*t, u0[2] + (u1[2] - u0[2])*t]);
+    if (dot3(cross3(st.A, q), st.n) < 0 || dot3(cross3(q, st.B), st.n) < 0) continue;
+    pluck(st.freq, ang(st.A, q)/st.len, o.cls, (o.cls === 'LEO' ? 0.55 : 1)*0.6); st.hit();
+  }
+}
+
+/* ---------- 2D: the flat equirect frame ---------- */
+const out = $('map'); out.width = W; out.height = H; const ox = out.getContext('2d');
+function polyline(pts){                                     // unit vectors -> frame, broken where it wraps
+  ox.beginPath(); let px = null, py = 0;
+  for (const v of pts) { const [lo, la] = ll(v), cx = X(lo), cy = Y(la);
+    if (px === null) ox.moveTo(cx, cy);
+    else if (Math.abs(cx - px) > W/2) { const k = cx < px ? W : -W; ox.lineTo(cx + k, cy); ox.moveTo(px - k, py); ox.lineTo(cx, cy); }
+    else ox.lineTo(cx, cy);
+    px = cx; py = cy; }
+  ox.stroke();
+}
+function draw2D(levels, lines){
+  ox.fillStyle = grey(0); ox.fillRect(0, 0, W, H);
+  if (P.grid) { ox.lineWidth = 1;
+    for (let la = -60; la <= 60; la += 30) { ox.strokeStyle = grey(la ? 0.18 : 0.32); const y = Math.round(Y(la*D2R)) + 0.5; ox.beginPath(); ox.moveTo(0, y); ox.lineTo(W, y); ox.stroke(); }
+    for (let lo = -180; lo < 180; lo += 30) { ox.strokeStyle = grey(lo ? 0.18 : 0.32); const x = Math.round(X(lo*D2R + gridShift)) + 0.5; ox.beginPath(); ox.moveTo(x, 0); ox.lineTo(x, H); ox.stroke(); } }
+  ox.lineWidth = P.line; ox.lineJoin = ox.lineCap = 'round';
+  for (const [pts, b] of lines) { ox.strokeStyle = grey(b); polyline(pts); }
+  // dots: widened by 1/cos(latitude) so they come out round and equal everywhere on the sphere, snapped to whole pixels
+  const ry = Math.max(1, P.dot), kx = W/(2*H);
+  for (let i = 0; i < sats.length; i++) { const o = sats[i]; if (isNaN(o.x)) continue;
+    const la = (0.5 - o.y/H)*PI, rx = Math.max(1, Math.min(W, ry*kx/Math.max(0.02, Math.cos(la))));
+    ox.fillStyle = grey(levels[i]);
+    const x0 = Math.round(o.x - rx/2), y0 = Math.round(o.y - ry/2), w = Math.round(rx), h = Math.round(ry);
+    ox.fillRect(x0, y0, w, h); if (x0 + w > W) ox.fillRect(x0 - W, y0, w, h); if (x0 < 0) ox.fillRect(x0 + W, y0, w, h); }
+}
+
+/* ---------- 3D: spheres and tubes, pure flat (emissive) colour, as they will be built in Unreal ---------- */
+const canvas = $('gl'), renderer = new THREE.WebGLRenderer({canvas, antialias: true, preserveDrawingBuffer: TEST});
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+renderer.setPixelRatio(MODE === 'display' ? 1 : Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(32, 1, 0.01, 100);
+const flat = () => new THREE.MeshBasicMaterial({color: 0xffffff});
+const MAXD = 40000, MAXT = 60000;
+const dotsMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), flat(), MAXD);
+const tubes = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 8, 1, true), flat(), MAXT);
+const joints = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), flat(), MAXT);
+for (const m of [dotsMesh, tubes, joints]) { m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.setColorAt(0, new THREE.Color()); m.instanceColor.setUsage(THREE.DynamicDrawUsage); m.frustumCulled = false; m.count = 0; scene.add(m); }
+const tex = new THREE.CanvasTexture(out); tex.colorSpace = THREE.NoColorSpace; tex.anisotropy = 8;
+const globeMat = new THREE.MeshBasicMaterial({color: 0x000000});
+const globe = new THREE.Mesh(new THREE.SphereGeometry(1, 128, 64), globeMat); scene.add(globe);
+// the LED frame from the 3D scene: a camera at the centre looks every way at once, then that is unwrapped to equirect
+const cubeRT = new THREE.WebGLCubeRenderTarget(1024), cubeCam = new THREE.CubeCamera(0.01, 10, cubeRT); scene.add(cubeCam);
+const unwrap = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({uniforms: {uCube: {value: cubeRT.texture}}, depthTest: false, depthWrite: false,
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: `uniform samplerCube uCube; varying vec2 vUv;
+    void main(){ float lo = (vUv.x - 0.5)*6.2831853, la = (vUv.y - 0.5)*3.1415927;
+      vec3 d = vec3(cos(la)*cos(lo), sin(la), -cos(la)*sin(lo)); gl_FragColor = vec4(textureCube(uCube, d).rgb, 1.0); }`}));
+const unwrapScene = new THREE.Scene(), unwrapCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1); unwrapScene.add(unwrap);
+let orb = {yaw: PI/2, pitch: 0.25, dist: 4.2};
+function size(){ renderer.setSize(innerWidth, innerHeight, false); cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); }
+addEventListener('resize', size); size();
+
+const M4 = new THREE.Matrix4(), QT = new THREE.Quaternion(), V1 = new THREE.Vector3(), V2 = new THREE.Vector3(), SC = new THREE.Vector3(), UPY = new THREE.Vector3(0, 1, 0), COL = new THREE.Color();
+function gridLines(){                                       // latitude and longitude every 30 degrees, as thin tubes (so they keep their width on the sphere)
+  const out = [];
+  for (let la = -60; la <= 60; la += 30) { const p = []; for (let i = 0; i <= 360; i += 3) p.push(unit(i*D2R + yaw, la*D2R)); out.push([p, la ? 0.18 : 0.32, 0.5]); }
+  for (let lo = -180; lo < 180; lo += 30) { const p = []; for (let la = -90; la <= 90; la += 3) p.push(unit(lo*D2R + yaw, la*D2R)); out.push([p, lo ? 0.18 : 0.32, 0.5]); }
+  return out;
+}
+function draw3D(levels, lines){
+  const r = rad(P.dot), t0 = rad(P.line);
+  if (P.grid) lines = gridLines().concat(lines);
+  let n = 0;
+  for (let i = 0; i < sats.length && n < MAXD; i++) { const o = sats[i]; if (!o.v) continue;
+    M4.compose(V1.set(o.v[0], o.v[2], -o.v[1]), QT.identity(), SC.setScalar(r)); dotsMesh.setMatrixAt(n, M4); dotsMesh.setColorAt(n, COL.setScalar(ink(levels[i]))); n++; }
+  dotsMesh.count = n;
+  let k = 0;
+  for (const [pts, b, w] of lines) { COL.setScalar(ink(b)); const t = w ? rad(w) : t0;
+    for (let i = 0; i < pts.length && k < MAXT; i++) {
+      V1.set(pts[i][0], pts[i][2], -pts[i][1]);
+      M4.compose(V1, QT.identity(), SC.setScalar(t)); joints.setMatrixAt(k, M4); joints.setColorAt(k, COL);
+      if (i < pts.length - 1) { V2.set(pts[i + 1][0], pts[i + 1][2], -pts[i + 1][1]); const len = V1.distanceTo(V2);
+        QT.setFromUnitVectors(UPY, V2.clone().sub(V1).normalize()); M4.compose(V1.clone().add(V2).multiplyScalar(0.5), QT, SC.set(t, len, t)); tubes.setMatrixAt(k, M4); tubes.setColorAt(k, COL); }
+      else { M4.makeScale(0, 0, 0); tubes.setMatrixAt(k, M4); }
+      k++; } }
+  tubes.count = joints.count = k;
+  for (const m of [dotsMesh, tubes, joints]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+}
+
+/* ---------- each frame ---------- */
+let view = MODE === 'display' ? 'frame' : 'sphere';
+function frameLevels(){                                     // brightness of every dot: at rest, or full when hovered, in a drawing, or hovered elsewhere
+  const lit = new Set(draftSet); if (snap) lit.add(snap.id);
+  for (const {id} of remoteHover.values()) lit.add(id);
+  for (const {d} of others.values()) for (const id of d.stars) lit.add(id);
+  return sats.map(o => lit.has(o.id) ? 1 : P.dotRest);
+}
+function step(dtReal){
+  plucksThisFrame = 0;
+  if (P.speed === 1) simMs = Date.now(); else simMs += dtReal*1000*P.speed;
+  const g = satellite.gstime(jdOf(simMs)); gridShift = yaw;
+  conStrings = soundOn && ac ? buildConStrings() : [];
+  for (const o of sats) {                                   // positions now: frame pixels for picking and 2D, unit vectors for 3D and sound
+    const s = eci(o, simMs); if (!s) { o.x = NaN; o.v = null; continue; }
+    const lo = lonOf(s.position) - g, la = latOf(s.position);
+    o.x = X(lo + yaw); o.y = Y(la); o.v = unit(lo + yaw, la);
+    if (conStrings.length) { const u = unit(lo, la); if (o.u) crossings(o, o.u, u); o.u = u; } else o.u = null;
+  }
+  const onLine = hoverP && !draft ? hitCon(hoverP, 9) : null;   // over a finished line a click opens it, so nothing snaps there
+  snap = hoverP && MODE !== 'display' && !onLine ? nearestDot(hoverP, SNAP) : null;
+  if (MODE === 'tablet' || MODE === 'studio') sendHover();
+  const levels = frameLevels(), use3d = P.render === '3d', toFrame = view === 'frame';
+  document.body.classList.toggle('show-map', !use3d && toFrame);
+  if (!use3d) draw2D(levels, lineList(1.5*D2R));
+  for (const m of [dotsMesh, tubes, joints]) m.visible = use3d;
+  if (use3d) draw3D(levels, lineList(2.5*D2R));
+  canvas.style.cursor = out.style.cursor = !hoverP ? '' : snap || onLine ? 'pointer' : 'grab';
+  $('clock').textContent = new Date(simMs).toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+}
+function draw(){
+  const use3d = P.render === '3d', bg = P.invert ? 1 : 0;
+  scene.background = COL.setScalar(bg).clone(); globeMat.color.setScalar(bg);
+  if (view === 'frame') {
+    if (!use3d) return;                                     // the 2D canvas is on screen
+    globe.visible = false; cubeCam.update(renderer, scene);
+    renderer.render(unwrapScene, unwrapCam); return;
+  }
+  globe.visible = true; globe.scale.setScalar(use3d ? 0.997 : 1);
+  globeMat.map = use3d ? null : tex; globeMat.color.setScalar(use3d ? bg : 1); globeMat.needsUpdate = true; if (!use3d) tex.needsUpdate = true;
+  const cp = Math.cos(orb.pitch); cam.position.set(orb.dist*cp*Math.sin(orb.yaw), orb.dist*Math.sin(orb.pitch), orb.dist*cp*Math.cos(orb.yaw)); cam.lookAt(0, 0, 0);
+  renderer.render(scene, cam);
+}
+function loop(){ const now = performance.now(), dt = Math.min(0.25, (now - lastReal)/1000); lastReal = now; step(dt); draw(); requestAnimationFrame(loop); }
+
+/* ---------- pointer: drag turns the sphere, a click on a satellite draws ---------- */
+let drag = null;
+function framePoint(e){
+  if (view === 'frame') { const r = (P.render === '2d' ? out : canvas).getBoundingClientRect(); return [(e.clientX - r.left)/r.width*W, (e.clientY - r.top)/r.height*H]; }
+  const v = new THREE.Vector2(e.clientX/innerWidth*2 - 1, -e.clientY/innerHeight*2 + 1), rc = new THREE.Raycaster(); rc.setFromCamera(v, cam);
+  const hit = rc.intersectObject(globe)[0]; return hit ? [hit.uv.x*W, (1 - hit.uv.y)*H] : null;
+}
+for (const el of [canvas, out]) {
+  el.addEventListener('pointerdown', e => { drag = {x: e.clientX, y: e.clientY, yaw, oy: orb.yaw, op: orb.pitch, moved: false}; el.setPointerCapture(e.pointerId); });
+  el.addEventListener('pointermove', e => {
+    hoverP = e.pointerType === 'touch' ? null : framePoint(e);
+    if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true; if (!drag.moved) return;
+    if (view === 'sphere') { orb.yaw = drag.oy - dx*0.006; orb.pitch = Math.max(-1.4, Math.min(1.4, drag.op + dy*0.006)); }
+    else { yaw = drag.yaw + dx*TAU/innerWidth; try { if (MODE === 'display') localStorage.setItem('constellations-yaw', yaw); } catch (err) {} } });
+  el.addEventListener('pointerup', e => { if (drag && !drag.moved && MODE !== 'display') tap(framePoint(e)); drag = null; });
+  el.addEventListener('pointerleave', () => { hoverP = null; });
+  el.addEventListener('wheel', e => { if (view === 'sphere') { orb.dist = Math.max(1.6, Math.min(8, orb.dist*Math.exp(e.deltaY*0.001))); e.preventDefault(); } }, {passive: false});
+}
+if (MODE === 'display') try { yaw = +(localStorage.getItem('constellations-yaw') || 0) || 0; } catch (e) {}
+
+/* ---------- controls ---------- */
+const segSync = (id, v) => document.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === String(v))));
+const seg = (id, f) => $(id).addEventListener('click', e => { const b = e.target.closest('button'); if (b) { f(b.dataset.v); } });
+function syncLook(){
+  document.body.classList.toggle('invert', P.invert);
+  segSync('segRender', P.render); segSync('segSpeed', P.speed); segSync('segView', view); segSync('segTabView', view);
+  $('invertBtn').setAttribute('aria-pressed', String(P.invert)); $('gridBtn').setAttribute('aria-pressed', String(P.grid));
+  $('soundBtn').setAttribute('aria-pressed', String(soundOn)); $('tabSound').setAttribute('aria-pressed', String(soundOn));
+  for (const [k] of SLIDERS) { const l = $('s-' + k); if (l) { l.querySelector('input').value = P[k]; l.querySelector('output').textContent = P[k]; } }
+  try { localStorage.setItem('constellations-look', JSON.stringify(P)); } catch (e) {}
+}
+const look = (k, v) => { P[k] = v; if (k === 'speed' && v === 1) simMs = Date.now(); syncLook(); sendLook(); };
+for (const [k, label, lo, hi, st] of SLIDERS) {
+  const l = document.createElement('label'); l.id = 's-' + k; l.innerHTML = `<span>${label}</span><output></output><input type="range" min="${lo}" max="${hi}" step="${st}">`;
+  l.querySelector('input').oninput = e => look(k, +e.target.value); $('sliders').append(l);
+}
+seg('segRender', v => look('render', v));
+seg('segSpeed', v => look('speed', +v));
+seg('segView', v => { view = v; syncLook(); });
+seg('segTabView', v => { view = v; syncLook(); });
+$('invertBtn').onclick = () => look('invert', !P.invert);
+$('gridBtn').onclick = () => look('grid', !P.grid);
+const toggleSound = () => { soundOn = !soundOn; if (soundOn) audio(); else if (ac) ac.suspend(); syncLook(); };
+$('soundBtn').onclick = toggleSound; $('tabSound').onclick = toggleSound;
+// room links
+$('room').value = ROOM; $('room').onchange = e => { const r = e.target.value.replace(/[^a-z0-9-]/gi, '').slice(0, 24); const u = new URL(location.href); if (r) u.searchParams.set('room', r); else u.searchParams.delete('room'); location.href = u; };
+const roomQ = ROOM ? `?room=${ROOM}` : '';
+$('openDisplay').href = `/constellations-display${roomQ}`; $('openTablet').href = `/constellations-tablet${roomQ}`;
+if (MODE === 'display') { addEventListener('keydown', e => { if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.().catch(() => {}); });
+  addEventListener('dblclick', () => document.documentElement.requestFullscreen?.().catch(() => {})); }
+
+apply(await load(true));
+setInterval(async () => { const c = await load(false); if (c) apply(c); }, 30*60*1000);   // stay near real time
+$('consN').textContent = `${cons.length.toLocaleString('en-US')} constellation${cons.length === 1 ? '' : 's'} in this room`;
+syncLook();
+window.__con = {sats, P, step, draw, tap, finish, undo, cons: () => cons, draft: () => draft, reveal: c => { reveal = c; }, setView: v => { view = v; syncLook(); }, look, setHover: p => { hoverP = p; }, sound: () => soundOn};
+if (!TEST) loop(); else step(0);
+</script>
+</body>
+</html>

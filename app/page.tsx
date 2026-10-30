@@ -1,12 +1,20 @@
 const PAGES = [
   {
+    group: "Constellations",
+    note: "Every active satellite in real time; visitors join them into constellations that the orbits pull apart. Same ?room= keeps the three in step.",
+    links: [
+      { href: "/constellations-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere. Click once for sound, F for full screen." },
+      { href: "/constellations-tablet", title: "Tablet", text: "Where visitors draw: drag turns the globe, a click on a satellite starts a constellation." },
+      { href: "/constellations-studio", title: "Studio", text: "Every control: 3D spheres and tubes or 2D, invert, dot and line size, speed, room." },
+    ],
+  },
+  {
     group: "Sampling Sphere",
     note: "How NASA Earth data is gathered: 20 satellites carving the sphere with their swaths.",
     links: [
       { href: "/sphere-display", title: "Sphere display", text: "Full-screen equirectangular frame for the LED sphere. Drag to rotate, F for full screen." },
       { href: "/sphere-tablet", title: "Tablet", text: "Full-screen world map forged by the swaths, with the satellite picker." },
       { href: "/sphere-studio", title: "Studio", text: "Every control: surface, light, material, export for Unreal, and live control of the other two pages." },
-      { href: "/sphere-orbits", title: "Orbits", text: "Every active satellite in the public catalogue, as its exact orbit. ?display for the sphere." },
       { href: "/sphere-eye", title: "Satellite eye", text: "Every Earth-observation satellite in real time, lighting only what it sees this instant. ?display for the sphere, ?tablet for the map." },
     ],
   },

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 // Every active satellite in the public catalogue (CelesTrak GP "active", derived from the US Space Force
-// 18th Space Defense Squadron catalogue), fetched server-side and cached for two hours (CelesTrak asks for no more than one download per two hours). Used by /sphere-orbits.
+// 18th Space Defense Squadron catalogue), fetched server-side and cached for two hours (CelesTrak asks for no more than one download per two hours). Used by /constellations-*.
 export const revalidate = 7200;
 
 export async function GET() {
