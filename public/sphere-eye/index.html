@@ -34,6 +34,7 @@ body.tablet .note,body.tablet #segView{display:none}
   <nav class="seg" aria-label="Scene"><a href="/sphere-studio">Main studio</a><a href="/sphere-eye" aria-current="page">Satellite eye</a></nav>
   <div class="seg" id="segView"><button data-v="sphere">Sphere</button><button data-v="frame">360 frame</button><button data-v="map">Map</button></div>
   <div class="seg" id="segSpeed"><button data-v="1">Real time</button><button data-v="10">×10</button><button data-v="60">×60</button><button data-v="600">×600</button></div>
+  <button class="btn" id="brutalBtn" title="True size, this instant only, nothing added">True only</button>
   <span id="clock"></span>
   <span class="spacer"></span>
   <button class="btn" id="displayBtn">Display mode (F)</button>
@@ -57,7 +58,7 @@ body.tablet .note,body.tablet #segView{display:none}
     <div id="sliders"></div>
   </div>
 </aside>
-<p class="note" id="note">Every Earth-observation satellite, in real time. Each instrument lights the sphere only where it is looking at this instant, the way it actually looks: a scanner sweeps a line, a sounder clicks across in spots, a microwave radiometer rides an arc, radar watches a strip to one side, a laser leaves points, a geostationary imager rasters its disk. Small footprints are enlarged to the visible size you set; dim rings are satellites whose looking is tasked or unknown.</p>
+<p class="note" id="note"></p>
 <script src="/sphere-assets/vendor/satellite.min.js"></script>
 <script type="module">
 import * as THREE from '/sphere-assets/vendor/three.module.min.js';
@@ -138,13 +139,14 @@ const MAXS = 40000, sg = new THREE.InstancedBufferGeometry();
 sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0,0,0, 1,0,0, 1,1,0, 0,1,0]), 3)); sg.setIndex([0,1,2, 0,2,3]);
 const SA = {aC:3, aU:3, aP:4, aBox:4, aS:1}, sattr = {};
 for (const k in SA) { sattr[k] = new THREE.InstancedBufferAttribute(new Float32Array(MAXS*SA[k]), SA[k]); sattr[k].setUsage(THREE.DynamicDrawUsage); sg.setAttribute(k, sattr[k]); }
-const stampMat = new THREE.ShaderMaterial({uniforms:{uRes:{value:new THREE.Vector2(FW, FH)}, uLW:{value:1.2*2*PI/FW}},
+const stampMat = new THREE.ShaderMaterial({uniforms:{uRes:{value:new THREE.Vector2(FW, FH)}, uLW:{value:1.2*2*PI/FW}, uBrutal:{value:1}},
   vertexShader:`attribute vec3 aC; attribute vec3 aU; attribute vec4 aP; attribute vec4 aBox; attribute float aS;
     varying vec3 vC; varying vec3 vU; varying vec4 vP; varying float vS;
     void main(){ float lon = mix(aBox.x, aBox.y, position.x), lat = mix(aBox.z, aBox.w, position.y);
       vC = aC; vU = aU; vP = aP; vS = aS; gl_Position = vec4(lon/180.0, lat/90.0, 0.0, 1.0); }`,
   fragmentShader:`#define PI_ 3.141592653589793
-    uniform vec2 uRes; uniform float uLW; varying vec3 vC; varying vec3 vU; varying vec4 vP; varying float vS;
+    uniform vec2 uRes; uniform float uLW; uniform float uBrutal; varying vec3 vC; varying vec3 vU; varying vec4 vP; varying float vS;
+    float cov(float a, float x, float w){ return clamp((min(a, x + w) - max(-a, x - w))/(2.0*w), 0.0, 1.0); }   // share of a pixel the footprint covers
     void main(){
       vec2 ll = (gl_FragCoord.xy/uRes*2.0 - 1.0)*vec2(PI_, 0.5*PI_);
       vec3 p = vec3(cos(ll.y)*cos(ll.x), cos(ll.y)*sin(ll.x), sin(ll.y));
@@ -152,7 +154,9 @@ const stampMat = new THREE.ShaderMaterial({uniforms:{uRes:{value:new THREE.Vecto
       if (sh < 1.5) {                                                  // 0 rectangle, 1 ellipse, in the tangent frame at vC
         if (z <= 0.0) discard;
         vec3 V = cross(vC, vU); float x = atan(dot(p, vU), z), y = atan(dot(p, V), z);
-        if (sh < 0.5) I = (1.0 - smoothstep(vP.x - uLW, vP.x + uLW, abs(x)))*(1.0 - smoothstep(vP.y - uLW, vP.y + uLW, abs(y)));
+        float hp = PI_/uRes.y;                                          // half a pixel
+        if (uBrutal > 0.5) { I = cov(vP.x, x, hp)*cov(vP.y, y, hp)*(sh > 0.5 ? 0.785398 : 1.0); if (sh > 0.5 && min(vP.x, vP.y) > 2.0*hp) { float r = length(vec2(x/vP.x, y/vP.y)); I = clamp((1.0 - r)*min(vP.x, vP.y)/(2.0*hp) + 0.5, 0.0, 1.0); } }
+        else if (sh < 0.5) I = (1.0 - smoothstep(vP.x - uLW, vP.x + uLW, abs(x)))*(1.0 - smoothstep(vP.y - uLW, vP.y + uLW, abs(y)));
         else { float r = length(vec2(x/vP.x, y/vP.y)), w = uLW/min(vP.x, vP.y); I = 1.0 - smoothstep(1.0 - w, 1.0 + w, r); }
       } else if (sh < 2.5) {                                           // 2 geostationary raster: rows vP.x..vP.y, columns vU.x..vU.y (view angles from the satellite)
         if (z < 0.1513) discard;
@@ -191,14 +195,16 @@ function flushStamps(){
 }
 
 /* ---------- what each instrument sees between t0 and t1 (seconds) ---------- */
-const P = {linger:2, minKm:50, earth:0.1, focus:0.55};
-const halfMin = () => P.minKm/2/RE;
+const P = {linger:2, minKm:50, earth:0.1, focus:0.55, brutal:new URLSearchParams(location.search).get('brutal') !== '0'};
+const halfMin = () => P.brutal ? 0 : P.minKm/2/RE;   // 'true only': nothing is enlarged
 const hk = km => Math.max(km/2/RE, halfMin());            // half-size in radians, never below the visible minimum
 function lit(p, sun){ return dot(p, sun) > 0.0872; }      // sun more than 5 degrees up
 function emit(s, ins, t0, t1, sun, sel, budget){
   const n0 = s.n0, n1 = s.n1, dtt = Math.max(t1 - t0, 1e-6), A = s.along, Rt = s.right;
   const at = t => lerpN(n0, n1, Math.min(1, Math.max(0, (t - t0)/dtt)));
   const ok = p => (!ins.day || lit(p, sun)) && (!ins.land || isLand(p));
+  // 'true only': leave out what is not known (occultation positions, when a tasked or planned instrument looks)
+  if (P.brutal && (ins.type === 'ro' || ins.type === 'ring' || ins.key === 'SAR')) return 0;
   let area = 0;
   switch (ins.type) {
     case 'push': {                                       // a line across the swath, always on: the strip it swept this frame
@@ -210,7 +216,7 @@ function emit(s, ins, t0, t1, sun, sel, budget){
       if (ok(at(t1))) area = ins.w*ins.h/ins.interval; break; }
     case 'whisk': {                                      // a mirror sweeps one line across the swath each period
       const T = ins.period, sweep = T*ins.duty, k0 = Math.floor(t0/T), k1 = Math.floor(t1/T), half = ins.swath/2;
-      if (k1 - k0 > 6) { const c = at((t0 + t1)/2); if (!ins.day || lit(c, sun)) stamp(c, Rt, hk(ins.swath), Math.max(halfMin(), s.vg*dtt/2/RE), 0, 1, sel); }
+      if (k1 - k0 > (P.brutal ? 64 : 6)) { const c = at((t0 + t1)/2); if (!ins.day || lit(c, sun)) stamp(c, Rt, hk(ins.swath), Math.max(halfMin(), s.vg*dtt/2/RE), 0, 1, sel); }
       else for (let k = k0; k <= k1; k++) {
         const ts = k*T, a = Math.max(t0, ts), b = Math.min(t1, ts + sweep); if (b <= a) continue;
         const xs = -1 + 2*(a - ts)/sweep, xe = -1 + 2*(b - ts)/sweep, c = at(ts + sweep/2); if (ins.day && !lit(c, sun)) continue;
@@ -230,8 +236,8 @@ function emit(s, ins, t0, t1, sun, sel, budget){
       area = N/T*PI*(ins.foot/2)**2*ins.grow; break; }
     case 'conical': {                                    // a spot riding an arc ahead of (or behind) the satellite
       const T = ins.period, S = ins.sector*D2R, Rc = ins.swath/2/Math.sin(Math.min(S, PI)/2);
-      const m = Math.min(48, Math.max(1, Math.ceil(dtt/(T/90))));
-      if (dtt > T*1.5) { const c = at((t0 + t1)/2); stamp(move(c, ins.aft ? A.map(x => -x) : A, Rc*0.6), Rt, hk(ins.swath), Math.max(halfMin(), s.vg*dtt/2/RE), 0, 0.6, sel); }
+      const m = Math.min(P.brutal ? 400 : 48, Math.max(1, Math.ceil(dtt/(T/90))));
+      if (!P.brutal && dtt > T*1.5) { const c = at((t0 + t1)/2); stamp(move(c, ins.aft ? A.map(x => -x) : A, Rc*0.6), Rt, hk(ins.swath), Math.max(halfMin(), s.vg*dtt/2/RE), 0, 0.6, sel); }
       else for (let j = 1; j <= m; j++) {
         const t = t0 + dtt*j/m, ph = 2*PI*(t/T % 1); let az = ph - PI;               // -pi..pi, 0 = straight ahead
         const centre = ins.aft ? PI : 0, d = Math.abs(wrap180((az - centre)/D2R))*D2R; if (S < 2*PI - 1e-6 && d > S/2) continue;
@@ -246,7 +252,7 @@ function emit(s, ins, t0, t1, sun, sel, budget){
       for (const side of ins.both ? [1, -1] : [1]) stamp(move(c, Rt, side*(near + far)/2), Rt, hk(far - near), b, 0, 1, sel);
       area = (ins.both ? 2 : 1)*(ins.far - ins.near)*s.vg; break; }
     case 'alt': { const c = at(t1); stamp(c, Rt, hk(ins.foot), Math.max(hk(ins.foot), s.vg*dtt/2/RE), 1, 1, sel); area = ins.foot*s.vg; break; }
-    case 'lidar': { const c = at(t1); for (const x of ins.beams) stamp(move(c, Rt, x), Rt, halfMin()*0.6, Math.max(halfMin()*0.6, s.vg*dtt/2/RE), 1, 1, sel); area = 3*0.017*s.vg; break; }
+    case 'lidar': { const c = at(t1); for (const x of ins.beams) stamp(move(c, Rt, x), Rt, Math.max(0.017/2/RE, halfMin()*0.6), Math.max(halfMin()*0.6, s.vg*dtt/2/RE), 1, 1, sel); area = 3*0.017*s.vg; break; }
     case 'ro': {                                         // radio occultations: short soundings at the horizon, fore or aft (positions illustrative)
       const per = 86400/ins.rate, dur = 90, hz = Math.acos(RE/(RE + s.alt))*RE, k1 = Math.floor(t1/per);
       for (let k = k1 - 1; k <= k1; k++) { const tk = k*per + hash(k, s.rec ? s.rec.satnum*1 : 7)*per*0.5; if (t1 < tk || t1 > tk + dur) continue;
@@ -254,7 +260,7 @@ function emit(s, ins, t0, t1, sun, sel, budget){
         stamp(move(c, dir, hz), dir, hk(300), halfMin()*0.6, 1, 0.8, sel); }
       break; }
     case 'geo': {                                        // a geostationary imager rasters its disk: swath by swath (north to south, or south to north), each swept west to east
-      const T = ins.period, Ts = T/ins.swaths, sp = 0.1513, w = 2*sp/ins.swaths, minX = P.minKm/35786/2;
+      const T = ins.period, Ts = T/ins.swaths, sp = 0.1513, w = 2*sp/ins.swaths, minX = P.brutal ? 0 : P.minKm/35786/2;
       const ph0 = ((t0 % T) + T) % T, ph1 = ((t1 % T) + T) % T, i = Math.floor(ph1/Ts);
       const top = ins.dir < 0 ? sp - i*w : -sp + (i + 1)*w;
       const f1 = (ph1 - i*Ts)/Ts, f0 = Math.max(0, ph0 >= i*Ts && ph0 <= ph1 ? (ph0 - i*Ts)/Ts : f1);
@@ -284,9 +290,9 @@ function stepAt(dtReal){
   const tSim = simMs/1000, tPrev = lastSim === null ? tSim - 0.05 : lastSim; lastSim = tSim;
   const date = new Date(simMs), gm = satellite.gstime(date), sun = sunEF(simMs);
   // decay: a flash lingers for P.linger seconds of real time
-  decayMat.uniforms.uK.value = Math.exp(-dtReal/Math.max(0.05, P.linger)); pass(decayMat, field);
+  decayMat.uniforms.uK.value = P.brutal ? 0 : Math.exp(-dtReal/Math.max(0.05, P.linger)); pass(decayMat, field);   // true only: this instant, nothing lingers
   let area = 0, looking = 0;
-  const budget = speed >= 60 ? 24 : 200;
+  const budget = P.brutal ? 4000 : speed >= 60 ? 24 : 200;   // true only: draw every footprint, never a summary band
   sats.forEach((s, idx) => {
     let n;
     if (s.fixed) n = s.fixed;
@@ -361,6 +367,10 @@ if (params.get('room')) import('/sphere-assets/vendor/mqtt.esm.js').then(m => {
   mq.on('message', (t, msg) => { const name = msg.toString(); if (sats.length) select(name ? byName(name) : -1, false); });
 }).catch(() => {});
 $('satSel').onchange = () => select(+$('satSel').value);
+const NOTE_FX = 'Every Earth-observation satellite, in real time. Each instrument lights the sphere only where it is looking at this instant, the way it actually looks: a scanner sweeps a line, a sounder clicks across in spots, a microwave radiometer rides an arc, radar watches a strip to one side, a laser leaves points, a geostationary imager rasters its disk. Small footprints are enlarged to the visible size you set; dim rings are satellites whose looking is tasked or unknown.', NOTE_TRUE = "True only: each instrument at its true footprint, only what it looks at in this frame (1/60 s), nothing enlarged, nothing lingering, no Earth underneath. A pixel is as bright as the share of it being looked at, so a laser's 17 m spot or a 10 km scan line barely registers on a 20 km pixel. Left out because they are not known: where radio occultations happen, when tasked imagers and Sentinel-1 look. Turn True only off for enlarged, lingering flashes.";
+const syncBrutal = () => { $('brutalBtn').setAttribute('aria-pressed', P.brutal); $('sliders').hidden = P.brutal; $('note').textContent = P.brutal ? NOTE_TRUE : NOTE_FX; };
+$('brutalBtn').onclick = () => { P.brutal = !P.brutal; syncBrutal(); };
+syncBrutal();
 function showInfo(){
   const s = sats[selIdx];
   if (!s) { $('info').innerHTML = `<p class="small">Pick one to follow it; the others dim. ${sats.length ? '' : ''}</p>`; drawSpec(); return; }
@@ -426,7 +436,7 @@ function frame(now){
     $('seenKm').textContent = `${fmtKm(areaAvg)} km² measured each second by ${looking} instruments looking right now (overlaps counted twice; spot sounders count only their spots).`;
     drawSpec(); }
   $('clock').textContent = new Date(simMs).toISOString().slice(0, 19).replace('T', ' ') + ' UTC' + (speed === 1 ? '' : '  ×' + speed);
-  const U = composeMat.uniforms; U.uEarth.value = P.earth; U.uFocus.value = selIdx >= 0 ? P.focus : 0;
+  const U = composeMat.uniforms; U.uEarth.value = P.brutal ? 0 : P.earth; U.uFocus.value = selIdx >= 0 && !P.brutal ? P.focus : 0; stampMat.uniforms.uBrutal.value = P.brutal ? 1 : 0;
   // display rotation: yaw about the pole, then pitch
   U.uRot.value.setFromMatrix4(rotM.makeRotationZ(-yaw).multiply(rotP.makeRotationY(pitch)));
   pass(composeMat, frameRT);
