@@ -59,7 +59,8 @@ export const INSTR = {
   UNKNOWN: {type:'ring', bands:[], spec:'not in this table', src:'—'},
 };
 
-// satellites: name pattern -> instruments (first match wins)
+// satellites: name pattern -> instruments (first match wins). Only satellites OSCAR lists as operational get instruments;
+// older or standby ones in the same CelesTrak groups (GOES-16/17, Himawari-8, FY-3A-C, DMSP F16...) fall through to a ring.
 export const RULES = [
   [/^TERRA\b/, ['MODIS']],
   [/^AQUA\b/, ['MODIS', 'AIRS', 'AMSU-A']],
@@ -67,8 +68,8 @@ export const RULES = [
   [/^METOP-[BC]/, ['AVHRR', 'IASI', 'AMSU-A', 'MHS', 'ASCAT', 'GRAS', 'GOME-2']],
   [/^NOAA[ -]1[589]\b/, ['OFF']],
   [/FENGYUN 3[D-H]|FY-3[D-H]/, ['MERSI', 'MWHS-2']],
-  [/METEOR-M/, ['MSU-MR', 'MTVZA']],
-  [/^DMSP/, ['SSMIS']],
+  [/METEOR-M ?2[- ]?[34]\b/, ['MSU-MR', 'MTVZA']],
+  [/^DMSP 5D-3 F1[78]\b/, ['SSMIS']],
   [/GCOM-W/, ['AMSR2']],
   [/^GPM/, ['GMI', 'DPR']],
   [/^SMAP\b/, ['SMAP-RAD']],
@@ -85,12 +86,12 @@ export const RULES = [
   [/^PACE\b/, ['OCI']],
   [/^AURA\b/, ['OMI']],
   [/GEO-KOMPSAT-2A|^GK-2A|COMS 2A/, ['AMI']],
-  [/HIMAWARI/, ['AHI']],
-  [/^GOES[ -]1[6-9]\b/, ['ABI']],
+  [/HIMAWARI[- ]9/, ['AHI']],
+  [/^GOES[ -]1[89]\b/, ['ABI']],
   [/METEOSAT-12|MTG-I1/, ['FCI']],
   [/METEOSAT-(9|10|11)\b/, ['SEVIRI']],
-  [/FENGYUN 4|FY-4/, ['AGRI']],
-  [/^INSAT-3D/, ['IMAGER']],
+  [/FENGYUN 4[AB]|FY-4[AB]/, ['AGRI']],
+  [/^INSAT-3D[RS]/, ['IMAGER']],
   [/^ELEKTRO-L/, ['MSU-GS']],
   [/^FLOCK|SUPERDOVE|^DOVE/, ['PSCOPE']],
   [/^LEMUR/, ['RO']],
