@@ -23,14 +23,17 @@ body.show-map #gl{visibility:hidden}
 #draw{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:none;gap:6px;z-index:4}
 body.drafting #draw{display:flex}
 #draw .btn{background:rgba(0,0,0,.6)}
-#tabBar{position:fixed;top:10px;right:max(16px,env(safe-area-inset-right,0px));display:flex;gap:6px;z-index:4}
-body.display .bar,body.display .panel,body.display #tabBar,body.display #draw{display:none}
-body.tablet .bar,body.tablet .panel{display:none}
-body:not(.tablet) #tabBar{display:none}
+body.display .bar,body.display .panel,body.display #draw,body.tablet .bar,body.tablet .panel,body.tablet #draw,body.tablet #gl,body.tablet #map{display:none}
 body.display{cursor:none}
 body.invert .bar{background:rgba(0,0,0,.75)}
-#tip{position:fixed;left:0;top:0;z-index:5;pointer-events:none;white-space:pre;font:11px/1.5 var(--mono);color:#fff;background:rgba(0,0,0,.72);padding:6px 8px}
-#tip[hidden]{display:none}
+#info{display:none}
+body.tablet #info{display:flex;flex-direction:column;position:fixed;inset:0;padding:max(28px,env(safe-area-inset-top,0px)) 32px 28px;color:var(--ink);font:15px/1.55 var(--mono);overflow:hidden}
+body.invert #info{color:#000}
+#info h1{font:500 34px/1.15 var(--ui);margin:0 0 14px;letter-spacing:.01em}
+#info .k{margin:0 0 10px}
+#info p{margin:0}
+#info .dim{opacity:.5}
+#shape{flex:1;min-height:0;width:100%;margin-top:18px}
 </style>
 </head>
 <body>
@@ -49,7 +52,7 @@ body.invert .bar{background:rgba(0,0,0,.75)}
   <div>
     <p class="k">Look</p>
     <div class="row" style="margin-top:0"><div class="seg" id="segRender"><button data-v="3d">3D spheres and tubes</button><button data-v="2d">2D flat</button></div></div>
-    <div class="row"><button class="btn" id="invertBtn">Invert</button><button class="btn" id="gridBtn">Grid</button><button class="btn" id="soundBtn">Sound</button><button class="btn" id="resetTurn" title="R">Reset turn</button></div>
+    <div class="row"><button class="btn" id="invertBtn">Invert</button><button class="btn" id="gridBtn">Grid</button><button class="btn" id="soundBtn">Sound</button><button class="btn" id="resetTurn" title="Turns the sphere display back to north up">Reset turn</button></div>
     <div id="sliders" style="margin-top:10px"></div>
   </div>
   <div class="sec">
@@ -65,11 +68,10 @@ body.invert .bar{background:rgba(0,0,0,.75)}
   </div>
 </aside>
 
-<!-- tablet -->
-<div id="tabBar"><div class="seg" id="segTabView"><button data-v="sphere">Globe</button><button data-v="frame">Map</button></div><button class="btn" id="tabSound">Sound</button></div>
+<!-- tablet: what is hovered on the sphere display -->
+<main id="info" aria-live="polite"><div id="infoText"></div><canvas id="shape"></canvas></main>
 
 <!-- while drawing -->
-<div id="tip" hidden></div>
 <div id="draw" role="toolbar" aria-label="Constellation"><button class="btn" id="undoBtn">Undo</button><button class="btn" id="finishBtn">Finish</button></div>
 
 <script src="/sphere-assets/vendor/satellite.min.js"></script>
@@ -77,9 +79,10 @@ body.invert .bar{background:rgba(0,0,0,.75)}
 import * as THREE from '/sphere-assets/vendor/three.module.min.js';
 
 /* Constellations: every active satellite in the public catalogue, moving on its real orbit. Visitors join satellites into
-   constellations; the orbits pull the shapes apart; a tap on a line eases it back to the shape as it was drawn.
-   Three pages from this one file, by path: /constellations-studio (every control), /constellations-display (the 1920x1080
-   equirect frame for the LED sphere), /constellations-tablet (where visitors draw). Pages in the same ?room= stay in step. */
+   constellations; the orbits pull the shapes apart; hovering a line eases it back to the shape as it was drawn.
+   Three pages from this one file, by path: /constellations-display (the 1920x1080 equirect frame for the LED sphere, and the
+   one visitors use: the mouse is on it), /constellations-tablet (an info screen for whatever is hovered on the display),
+   /constellations-studio (every control, and a mirror of the display). Pages in the same ?room= stay in step. */
 const $ = id => document.getElementById(id), Q = new URLSearchParams(location.search), TEST = location.hash === '#test';
 const MODE = Q.has('display') || /display/.test(location.pathname) ? 'display' : Q.has('tablet') || /tablet/.test(location.pathname) ? 'tablet' : 'studio';
 document.body.classList.add(MODE);
@@ -152,13 +155,13 @@ function turn(a, t){                                        // turn the sphere a
   for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) N.push(M[i*3]*R[j] + M[i*3 + 1]*R[3 + j] + M[i*3 + 2]*R[6 + j]);
   const r0 = nrm(N.slice(0, 3)), d = dot3(r0, N.slice(3, 6)), r1 = nrm(N.slice(3, 6).map((q, i) => q - d*r0[i])); R = [...r0, ...r1, ...cross3(r0, r1)];
 }
-const saveTurn = () => { try { localStorage.setItem(TURN, JSON.stringify(R)); } catch (e) {} };
+const saveTurn = () => { try { localStorage.setItem(TURN, JSON.stringify(R)); } catch (e) {} if (mq) mq.publish(TURNT, JSON.stringify(R.map(q => +q.toFixed(5))), {retain: true}); };
 const to3 = v => new THREE.Vector3(v[0], v[2], -v[1]);      // our (x east-of-Greenwich, y, z north) -> three's frame (matches the globe's uv)
 
 /* ---------- constellations ---------- */
 const ROOM = (Q.get('room') || '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
 const BASE = ROOM ? `sampling-sphere/v1/orbits/${ROOM}` : 'sampling-sphere/v1/orbits';
-const TOPIC = `${BASE}/constellations`, LOOK = `${BASE}/look`;
+const TOPIC = `${BASE}/constellations`, LOOK = `${BASE}/look`, TURNT = `${BASE}/turn`;   // turn: the display's, mirrored by the studio
 let cons = [], draft = null, reveal = null, hoverCon = null, mq = null, draftSent = 0, hoverSent = 0;
 let draftSet = new Set(), others = new Map(), remoteHover = new Map(), snap = null, hov = null;   // hov: the pointer on the sphere, {v, px, cx, cy}
 function starsNow(c, m){                                    // where each star is shown now, or eased back toward where it was when finished
@@ -290,13 +293,14 @@ try { for (const c of JSON.parse(localStorage.getItem(STORE) || '[]')) add(c, fa
 if (!Q.has('solo')) import('/sphere-assets/vendor/mqtt.esm.js').then(m => {
   const mqtt = m.default || m; mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', {connectTimeout: 30000, keepalive: 30});
   mq.on('connect', () => {
-    mq.subscribe(`${TOPIC}/c/+`); mq.subscribe(`${TOPIC}/draft/+`); mq.subscribe(`${TOPIC}/hover/+`); if (MODE !== 'studio') mq.subscribe(LOOK);
+    mq.subscribe(`${TOPIC}/c/+`); mq.subscribe(`${TOPIC}/draft/+`); mq.subscribe(`${TOPIC}/hover/+`); if (MODE !== 'studio') mq.subscribe(LOOK); mq.subscribe(TURNT);
     for (const c of cons) mq.publish(`${TOPIC}/c/${c.id}`, JSON.stringify(c), {retain: true, qos: 1});
     sendLook();
   });
   mq.on('message', (t, msg) => {
     const who = t.split('/').pop(), s = msg.toString();
     if (t === LOOK) { try { setLook(JSON.parse(s)); } catch (e) {} return; }
+    if (t === TURNT) { try { const r = JSON.parse(s); if (!drag && Array.isArray(r) && r.length === 9 && r.every(Number.isFinite)) { R = r; try { localStorage.setItem(TURN, s); } catch (e) {} } } catch (e) {} return; }
     if (t.includes('/hover/')) { if (who !== ME) { if (s && /^(c:[a-z0-9]{1,24}|[A-Z0-9 ]{1,9})$/.test(s)) remoteHover.set(who, {id: s, t: Date.now()}); else remoteHover.delete(who); } return; }
     let d = null; try { d = s ? JSON.parse(s) : null; } catch (e) { return; }
     if (t.includes('/draft/')) { if (who === ME) return; const c = d && clean({...d, id: 'd' + who.replace(/[^a-z0-9]/g, '').slice(0, 20)}); if (c) others.set(who, {d: c, t: Date.now()}); else others.delete(who); return; }
@@ -468,8 +472,7 @@ function step(dtReal){
   if (!use3d) draw2D(levels, lines);
   for (const m of [dotsMesh, tubes, joints]) m.visible = use3d;
   if (use3d) draw3D(levels, lines);
-  canvas.style.cursor = out.style.cursor = drag && drag.moved ? 'grabbing' : !hov ? '' : snap ? 'none' : onLine ? 'pointer' : 'grab';
-  showTip();
+  canvas.style.cursor = out.style.cursor = MODE === 'display' ? 'none' : '';   // on the display the ring is the cursor
   $('clock').textContent = new Date(simMs).toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
 }
 function draw(){
@@ -504,37 +507,68 @@ function dragTurn(e){                                       // the surface under
 }
 for (const el of [canvas, out]) {
   el.addEventListener('pointerdown', e => {
+    if (MODE !== 'display') return;                        // the studio only mirrors the display (it can zoom its globe)
     drag = {x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, moved: false}; el.setPointerCapture(e.pointerId);
-    if (e.pointerType === 'touch' && MODE !== 'display') hov = pointAt(e);   // touch: press and hold to see what is under the finger
+    if (e.pointerType === 'touch') hov = pointAt(e);
   });
   el.addEventListener('pointermove', e => {
-    if (e.pointerType !== 'touch' && MODE !== 'display') hov = pointAt(e);
+    if (MODE !== 'display') return;
+    if (e.pointerType !== 'touch') hov = pointAt(e);
     if (!drag) return; if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 5 && !drag.moved) { drag.moved = true; drag.lx = drag.x; drag.ly = drag.y; if (e.pointerType === 'touch') hov = null; }
     if (drag.moved) dragTurn(e);
   });
-  el.addEventListener('pointerup', e => { if (drag && !drag.moved && MODE !== 'display') tap(pointAt(e)); if (drag && drag.moved) saveTurn(); if (e.pointerType === 'touch') hov = null; drag = null; });
+  el.addEventListener('pointerup', e => { if (drag && !drag.moved) tap(pointAt(e)); if (drag && drag.moved) saveTurn(); if (e.pointerType === 'touch') hov = null; drag = null; });
   el.addEventListener('pointercancel', () => { drag = null; hov = null; });
   el.addEventListener('pointerleave', () => { if (!drag) hov = null; });
   el.addEventListener('wheel', e => { if (view === 'sphere') { orb.dist = Math.max(1.6, Math.min(8, orb.dist*Math.exp(e.deltaY*0.001))); e.preventDefault(); } }, {passive: false});
 }
 const resetTurn = () => { R = [1, 0, 0, 0, 1, 0, 0, 0, 1]; saveTurn(); };
-addEventListener('keydown', e => { if (e.target.tagName !== 'INPUT' && (e.key === 'r' || e.key === 'R') && !e.metaKey && !e.ctrlKey) resetTurn(); });
+if (MODE === 'display') addEventListener('keydown', e => { if ((e.key === 'r' || e.key === 'R') && !e.metaKey && !e.ctrlKey) resetTurn(); });
 
-/* ---------- what is under the pointer: the satellite's own catalogue numbers, or when a shape was drawn ---------- */
+/* ---------- tablet: the catalogue's own numbers for what is hovered on the display, or a shape as drawn and as it is now ---------- */
 const utc = ms => new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 const ago = ms => { const m = Math.max(0, Math.round(ms/60000)); return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m/60)} h ${String(m%60).padStart(2, '0')} min ago` : `${Math.floor(m/1440)} d ${Math.floor(m%1440/60)} h ago`; };
-let tipText = '';
-function showTip(){
-  const tip = $('tip'); let t = '';
-  if (hov && !drag && MODE !== 'display') {
-    if (snap) { const o = snap, ep = (o.rec.jdsatepoch - 2440587.5)*86400000;
-      t = `${o.name}\nNORAD ${o.id} · ${o.cls}\nperigee ${Math.round(o.peri).toLocaleString('en-US')} km · apogee ${Math.round(o.apo).toLocaleString('en-US')} km\nperiod ${o.per.toFixed(1)} min · inclination ${o.inc.toFixed(1)}°\norbit measured ${utc(ep)}`; }
-    else if (hoverCon) { const c = hoverCon, at = c.sim || c.at;
-      t = `as drawn ${utc(at)}\n${ago(simMs - at)} · ${c.stars.length} satellites`; }
-  }
-  if (t !== tipText) { tipText = t; tip.textContent = t; tip.hidden = !t; }
-  if (t) { const x = Math.min(hov.cx + 18, innerWidth - tip.offsetWidth - 8), y = hov.cy + 18 + tip.offsetHeight > innerHeight ? hov.cy - 18 - tip.offsetHeight : hov.cy + 18;
-    tip.style.transform = `translate(${Math.round(x)}px,${Math.round(y)}px)`; }
+const esc = t => String(t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const km = v => Math.round(v).toLocaleString('en-US') + ' km', deg = (v, p, n) => `${Math.abs(v/D2R).toFixed(1)}°${v >= 0 ? p : n}`;
+let infoKey = '';
+function info(){
+  if (P.speed === 1) simMs = Date.now(); else { const now = performance.now(); simMs += (now - lastReal)*P.speed; lastReal = now; }
+  let h = null; for (const v of remoteHover.values()) if (!h || v.t > h.t) h = v;
+  let html = '', con = null;
+  if (h && !h.id.startsWith('c:')) { const o = byId.get(h.id);
+    if (o) { const st = eci(o, simMs), L = earthLL(o, simMs), ep = (o.rec.jdsatepoch - 2440587.5)*86400000, n = cons.filter(c => c.stars.includes(o.id)).length;
+      html = `<p class="k">Satellite</p><h1>${esc(o.name)}</h1><p>NORAD ${o.id} · ${o.cls}</p>`
+        + (st && L ? `<p>now ${km(Math.hypot(st.position.x, st.position.y, st.position.z) - RE)} up, over ${deg(L[1], 'N', 'S')} ${deg(((L[0] + 3*PI)%TAU) - PI, 'E', 'W')}</p>` : '')
+        + `<p>perigee ${km(o.peri)} · apogee ${km(o.apo)}</p><p>one orbit ${o.per.toFixed(1)} min · inclination ${o.inc.toFixed(1)}°</p>`
+        + `<p class="dim">orbit measured ${utc(ep)} (${ago(Date.now() - ep)})</p>`
+        + `<p class="dim">in ${n} constellation${n === 1 ? '' : 's'} · ${meta.source || ''}</p>`; } }
+  else if (h) { con = cons.find(c => c.id === h.id.slice(2));
+    if (con) { const at = con.sim || con.at, len = U => con.edges.reduce((t, [i, j]) => t + (U[i] && U[j] ? ang(U[i], U[j]) : 0), 0);
+      const now = con.stars.map(id => { const o = byId.get(id), L = o && earthLL(o, simMs); return L ? unit(...L) : null; }), was = con.orig ? con.orig.map(q => unit(...q)) : null;
+      html = `<p class="k">Constellation</p><h1>as drawn ${utc(at)}</h1><p>${ago(simMs - at)} · ${con.stars.length} satellites · ${con.edges.length} lines</p>`
+        + (was ? `<p>lines now ${(len(now)/Math.max(1e-6, len(was))).toFixed(2)}× their drawn length</p>` : '')
+        + `<p class="dim">${con.stars.map(id => esc(byId.get(id) ? byId.get(id).name : id)).join(' · ')}</p>`;
+      drawShape(con, was, now); } }
+  if (!html) { const d = [...others.values()].pop();
+    html = `<p class="k">Constellations</p><h1>${d ? `drawing · ${d.d.stars.length} satellites` : 'hover a satellite or a line on the sphere'}</h1>`
+      + `<p class="dim">${sats.length.toLocaleString('en-US')} satellites · ${cons.length.toLocaleString('en-US')} constellations in this room</p>`; }
+  const key = html + (con ? con.id : ''); if (key !== infoKey) { infoKey = key; $('infoText').innerHTML = html; }
+  $('shape').style.visibility = con ? 'visible' : 'hidden';
+}
+function drawShape(c, was, now){                            // the shape as drawn (full) and where its satellites are now (faint), seen from straight above it
+  const cv = $('shape'), r = cv.getBoundingClientRect(), dpr = Math.min(devicePixelRatio, 2);
+  if (cv.width !== Math.round(r.width*dpr) || cv.height !== Math.round(r.height*dpr)) { cv.width = Math.round(r.width*dpr); cv.height = Math.round(r.height*dpr); }
+  const g = cv.getContext('2d'), Wc = cv.width, Hc = cv.height; g.clearRect(0, 0, Wc, Hc); if (!Wc || !Hc) return;
+  const base = was || now, ctr = nrm(base.filter(Boolean).reduce((s, u) => [s[0] + u[0], s[1] + u[1], s[2] + u[2]], [0, 0, 0]));
+  const e = nrm(Math.abs(ctr[2]) < 0.99 ? cross3([0, 0, 1], ctr) : [1, 0, 0]), n = cross3(ctr, e), pr = u => [dot3(u, e), dot3(u, n)];
+  const shapes = [[now, 0.35, 1.5], ...(was ? [[was, 1, 2.5]] : [])], all = [];
+  for (const [U] of shapes) for (const u of U) if (u) all.push(pr(u));
+  const xs = all.map(q => q[0]), ys = all.map(q => q[1]), span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 0.02);
+  const k = Math.min(Wc, Hc)*0.82/span, mx = (Math.max(...xs) + Math.min(...xs))/2, my = (Math.max(...ys) + Math.min(...ys))/2;
+  const P2 = u => { const [x, y] = pr(u); return [Wc/2 + (x - mx)*k, Hc/2 - (y - my)*k]; };
+  for (const [U, lv, w] of shapes) { g.strokeStyle = g.fillStyle = grey(lv); g.lineWidth = w*dpr; g.lineCap = g.lineJoin = 'round';
+    for (const [i, j] of c.edges) if (U[i] && U[j]) { g.beginPath(); arcPts(U[i], U[j], 0.5*D2R).forEach((u, m) => { const [x, y] = P2(u); m ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); }
+    for (const u of U) if (u) { const [x, y] = P2(u); g.beginPath(); g.arc(x, y, (w + 2)*dpr, 0, TAU); g.fill(); } }
 }
 
 /* ---------- controls ---------- */
@@ -542,9 +576,9 @@ const segSync = (id, v) => document.querySelectorAll(`#${id} button`).forEach(b 
 const seg = (id, f) => $(id).addEventListener('click', e => { const b = e.target.closest('button'); if (b) { f(b.dataset.v); } });
 function syncLook(){
   document.body.classList.toggle('invert', P.invert);
-  segSync('segRender', P.render); segSync('segSpeed', P.speed); segSync('segView', view); segSync('segTabView', view);
+  segSync('segRender', P.render); segSync('segSpeed', P.speed); segSync('segView', view);
   $('invertBtn').setAttribute('aria-pressed', String(P.invert)); $('gridBtn').setAttribute('aria-pressed', String(P.grid));
-  $('soundBtn').setAttribute('aria-pressed', String(soundOn)); $('tabSound').setAttribute('aria-pressed', String(soundOn));
+  $('soundBtn').setAttribute('aria-pressed', String(soundOn));
   for (const [k] of SLIDERS) { const l = $('s-' + k); if (l) { l.querySelector('input').value = P[k]; l.querySelector('output').textContent = P[k]; } }
   try { localStorage.setItem('constellations-look', JSON.stringify(P)); } catch (e) {}
 }
@@ -556,24 +590,22 @@ for (const [k, label, lo, hi, st] of SLIDERS) {
 seg('segRender', v => look('render', v));
 seg('segSpeed', v => look('speed', +v));
 seg('segView', v => { view = v; syncLook(); });
-seg('segTabView', v => { view = v; syncLook(); });
 $('invertBtn').onclick = () => look('invert', !P.invert);
 $('gridBtn').onclick = () => look('grid', !P.grid);
 const toggleSound = () => { soundOn = !soundOn; if (soundOn) audio(); else if (ac) ac.suspend(); syncLook(); };
-$('resetTurn').onclick = resetTurn; $('soundBtn').onclick = toggleSound; $('tabSound').onclick = toggleSound;
+$('resetTurn').onclick = resetTurn; $('soundBtn').onclick = toggleSound;
 // room links
 $('room').value = ROOM; $('room').onchange = e => { const r = e.target.value.replace(/[^a-z0-9-]/gi, '').slice(0, 24); const u = new URL(location.href); if (r) u.searchParams.set('room', r); else u.searchParams.delete('room'); location.href = u; };
 const roomQ = ROOM ? `?room=${ROOM}` : '';
 $('openDisplay').href = `/constellations-display${roomQ}`; $('openTablet').href = `/constellations-tablet${roomQ}`;
-if (MODE === 'display') { addEventListener('keydown', e => { if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.().catch(() => {}); });
-  addEventListener('dblclick', () => document.documentElement.requestFullscreen?.().catch(() => {})); }
+if (MODE === 'display') { addEventListener('keydown', e => { if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.().catch(() => {}); }); }
 
 apply(await load(true));
 setInterval(async () => { const c = await load(false); if (c) apply(c); }, 30*60*1000);   // stay near real time
 $('consN').textContent = `${cons.length.toLocaleString('en-US')} constellation${cons.length === 1 ? '' : 's'} in this room`;
 syncLook();
-window.__con = {sats, P, step, draw, tap, finish, undo, cons: () => cons, draft: () => draft, reveal: c => { reveal = c; }, opened: () => reveal, setView: v => { view = v; syncLook(); }, look, setHover: p => { hov = p; }, sound: () => soundOn, turn, R: () => R, tip: () => tipText, cons1: () => cons[cons.length - 1], stars: c => starsNow(c, c.m || 0), project: v => { const q = to3(v).project(cam); return [(q.x + 1)/2*innerWidth, (1 - q.y)/2*innerHeight]; }};
-if (!TEST) loop(); else step(0);
+window.__con = {sats, P, step, draw, tap, finish, undo, cons: () => cons, draft: () => draft, reveal: c => { reveal = c; }, opened: () => reveal, setView: v => { view = v; syncLook(); }, look, setHover: p => { hov = p; }, remote: (who, id) => id ? remoteHover.set(who, {id, t: Date.now()}) : remoteHover.delete(who), sound: () => soundOn, turn, R: () => R, info, cons1: () => cons[cons.length - 1], stars: c => starsNow(c, c.m || 0), project: v => { const q = to3(v).project(cam); return [(q.x + 1)/2*innerWidth, (1 - q.y)/2*innerHeight]; }};
+if (MODE === 'tablet') { if (!TEST) setInterval(info, 250); info(); } else if (!TEST) loop(); else step(0);
 </script>
 </body>
 </html>
