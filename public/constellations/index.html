@@ -68,7 +68,7 @@ figcaption{font-size:12px;opacity:.6;margin-top:8px}
   <div>
     <p class="k">Look</p>
     <div class="row" style="margin-top:0"><div class="seg" id="segRender"><button data-v="3d">3D spheres and tubes</button><button data-v="2d">2D flat</button></div></div>
-    <div class="row"><button class="btn" id="invertBtn">Invert</button><button class="btn" id="gridBtn">Grid</button><button class="btn" id="soundBtn">Sound</button><button class="btn" id="resetTurn" title="Turns the sphere back to north up (R)">Reset turn</button></div>
+    <div class="row"><button class="btn" id="invertBtn">Invert</button><button class="btn" id="gridBtn">Grid</button><button class="btn" id="trailBtn">Image trails</button><button class="btn" id="soundBtn">Sound</button><button class="btn" id="resetTurn" title="Turns the sphere back to north up (R)">Reset turn</button></div>
     <div id="sliders" style="margin-top:10px"></div>
   </div>
   <div class="sec">
@@ -110,12 +110,12 @@ const ME = Math.random().toString(36).slice(2, 10);
 THREE.ColorManagement.enabled = false;                      // grey levels go to the screen exactly as set
 
 /* ---------- look: set in the studio, followed by the display and the tablet ---------- */
-const DEF = {render: '3d', invert: false, dot: 2, line: 1, dotRest: 1, lineRest: 0.5, grid: false, speed: 1};
+const DEF = {render: '3d', invert: false, dot: 2, line: 2, dotRest: 1, lineRest: 0.5, grid: false, speed: 1, trail: true, imgLevel: 0.7};
 const P = {...DEF};
 try { Object.assign(P, JSON.parse(localStorage.getItem('constellations-look') || '{}')); } catch (e) {}
 if (Q.get('speed')) P.speed = +Q.get('speed');
 const SLIDERS = [['dot', 'Dot size (LED px)', 1, 12, 0.5], ['line', 'Line thickness (LED px)', 0.5, 8, 0.25],
-  ['dotRest', 'Dot brightness at rest', 0.1, 1, 0.01], ['lineRest', 'Line brightness at rest', 0.1, 1, 0.01]];
+  ['dotRest', 'Dot brightness at rest', 0.1, 1, 0.01], ['lineRest', 'Line brightness at rest', 0.1, 1, 0.01], ['imgLevel', 'Image trail brightness', 0.1, 1, 0.01]];
 const ink = v => P.invert ? 1 - v : v;                      // a level (1 = full) as a grey on the current background
 const grey = v => { const c = Math.round(ink(v)*255); return `rgb(${c},${c},${c})`; };
 const rad = px => px/2*PI/H;                                // LED pixels (diameter) -> angular radius
@@ -417,6 +417,7 @@ function polyline(pts){                                     // unit vectors -> f
 }
 function draw2D(levels, lines){
   ox.fillStyle = grey(0); ox.fillRect(0, 0, W, H);
+  if (P.trail && trailSats.length) { ox.imageSmoothingEnabled = true; ox.drawImage(trailFrame2D(), 0, 0, W, H); }
   if (P.grid) { ox.lineWidth = 1; for (const [pts, b] of gridLines()) { ox.strokeStyle = grey(b); polyline(pts); } }
   ox.lineWidth = P.line; ox.lineJoin = ox.lineCap = 'round';
   for (const [pts, b] of lines) { ox.strokeStyle = grey(b); polyline(pts); }
@@ -483,6 +484,67 @@ function draw3D(levels, lines){
   for (const m of [dotsMesh, tubes, joints]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
 }
 
+/* ---------- image trails: today's public NASA imagery, shown only where one of the daily imagers' swaths has passed since 00:00 UTC ----------
+   The whole-Earth picture is stitched from a handful of satellites. Each one's swath is followed on its real orbit; inside it, that
+   satellite's own image for the day (NASA GIBS, corrected reflectance) shows in grey. Passes NASA has not delivered yet stay black. */
+const IMAGERS = [[/^TERRA\b/, 'MODIS_Terra_CorrectedReflectance_TrueColor', 2330], [/^AQUA\b/, 'MODIS_Aqua_CorrectedReflectance_TrueColor', 2330],
+  [/SUOMI NPP/, 'VIIRS_SNPP_CorrectedReflectance_TrueColor', 3040], [/^NOAA[ -]20\b/, 'VIIRS_NOAA20_CorrectedReflectance_TrueColor', 3040],
+  [/^NOAA[ -]21\b/, 'VIIRS_NOAA21_CorrectedReflectance_TrueColor', 3040]];
+const TW = 2048, TH = 1024, TSTEP = 20000;                  // trail map size (Earth-fixed equirect) and the orbit step, ms
+const trail = document.createElement('canvas'); trail.width = TW; trail.height = TH; const tctx = trail.getContext('2d', {willReadFrequently: true});
+const tmp = document.createElement('canvas'); tmp.width = TW; tmp.height = TH; const tmpx = tmp.getContext('2d');
+let trailDay = '', trailSats = [], trailDirty = false, trailComp = 0, trailFetched = 0;
+const trailTex = new THREE.CanvasTexture(trail); trailTex.colorSpace = THREE.NoColorSpace; trailTex.anisotropy = 8;
+const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 128, 64), new THREE.MeshBasicMaterial({map: trailTex})); earth.visible = false; scene.add(earth);
+const gibsDay = (layer, day) => `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=${layer}&STYLES=&CRS=EPSG:4326&BBOX=-90,-180,90,180&WIDTH=${TW}&HEIGHT=${TH}&FORMAT=image/png&TRANSPARENT=true&TIME=${day}`;
+function trailImages(){                                     // GIBS keeps adding today's passes, so ask again now and then
+  trailFetched = Date.now();
+  for (const t of trailSats) { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => { t.img = im; trailDirty = true; }; im.onerror = () => { t.failed = true; }; im.src = gibsDay(t.layer, trailDay) + `&_=${Math.floor(trailFetched/1800000)}`; }
+}
+function trailReset(day){
+  trailDay = day; trailSats = [];
+  for (const [re, layer, swath] of IMAGERS) { const o = sats.find(q => re.test(q.name)); if (!o) continue;
+    const m = document.createElement('canvas'); m.width = TW; m.height = TH; const mx = m.getContext('2d'); mx.fillStyle = '#fff';
+    trailSats.push({o, layer, half: swath/2/RE, mask: m, mx, upTo: Date.parse(day + 'T00:00:00Z'), img: null}); }
+  trailImages(); trailDirty = true;
+}
+function swathDot(t, L){                                    // the swath around one point of the ground track, as it falls on the equirect map
+  const la = L[1], x = ((L[0]/TAU + 0.5)%1 + 1)%1*TW, y = (0.5 - la/PI)*TH, ry = t.half/PI*TH, rx = Math.min(TW/2, ry/Math.max(0.05, Math.cos(la)));
+  for (const k of [0, -TW, TW]) { if (x + k + rx < 0 || x + k - rx > TW) continue; t.mx.beginPath(); t.mx.ellipse(x + k, y, rx, ry, 0, 0, TAU); t.mx.fill(); }
+}
+function trailStep(){
+  if (!P.trail || MODE === 'tablet' || !sats.length) return;
+  const day = new Date(simMs).toISOString().slice(0, 10); if (day !== trailDay || trailSats.some(t => simMs < t.upTo - 60000)) trailReset(day);
+  if (Date.now() - trailFetched > 1800000) trailImages();
+  for (const t of trailSats) while (t.upTo + TSTEP <= simMs) { t.upTo += TSTEP; const L = earthLL(t.o, t.upTo); if (L) swathDot(t, L); trailDirty = true; }
+  const now = performance.now(); if (trailDirty && now - trailComp > 1000) { trailComp = now; trailDirty = false; trailCompose(); }
+}
+function trailCompose(){                                    // each image cut to its own swaths, together, then grey (and inverted with the look)
+  tctx.globalCompositeOperation = 'source-over'; tctx.clearRect(0, 0, TW, TH);
+  for (const t of trailSats) { if (!t.img) continue;
+    tmpx.globalCompositeOperation = 'source-over'; tmpx.clearRect(0, 0, TW, TH); tmpx.drawImage(t.img, 0, 0, TW, TH);
+    tmpx.globalCompositeOperation = 'destination-in'; tmpx.drawImage(t.mask, 0, 0); tctx.globalCompositeOperation = 'lighten'; tctx.drawImage(tmp, 0, 0); }
+  const id = tctx.getImageData(0, 0, TW, TH), d = id.data, k = P.imgLevel;
+  for (let i = 0; i < d.length; i += 4) { const a = d[i + 3]/255, v = (0.2126*d[i] + 0.7152*d[i + 1] + 0.0722*d[i + 2])/255*a*k, c = Math.round(ink(v)*255); d[i] = d[i + 1] = d[i + 2] = c; d[i + 3] = 255; }
+  tctx.globalCompositeOperation = 'source-over'; tctx.putImageData(id, 0, 0); trailTex.needsUpdate = true; trailRemapKey = '';
+}
+const C3 = new THREE.Matrix4();
+function earthTurn(){                                       // the same turn as everything else, in three's frame: (x, y, z) -> (x, z, -y)
+  const r = R; C3.set(r[0], r[2], -r[1], 0, r[6], r[8], -r[7], 0, -r[3], -r[5], r[4], 0, 0, 0, 0, 1); earth.quaternion.setFromRotationMatrix(C3);
+}
+// 2D: the Earth-fixed trail map, resampled into the turned frame (only when the turn or the map changes)
+const rmap = document.createElement('canvas'); rmap.width = W/2; rmap.height = H/2; const rmx = rmap.getContext('2d'); let trailRemapKey = '';
+function trailFrame2D(){
+  const key = R.map(q => q.toFixed(4)).join(); if (key === trailRemapKey) return rmap; trailRemapKey = key;
+  const src = tctx.getImageData(0, 0, TW, TH).data, out2 = rmx.createImageData(rmap.width, rmap.height), d = out2.data, w = rmap.width, h = rmap.height;
+  for (let j = 0; j < h; j++) { const la = (0.5 - (j + 0.5)/h)*PI, cl = Math.cos(la), sl = Math.sin(la);
+    for (let i = 0; i < w; i++) { const lo = ((i + 0.5)/w - 0.5)*TAU, v0 = cl*Math.cos(lo), v1 = cl*Math.sin(lo), v2 = sl;
+      const u0 = R[0]*v0 + R[3]*v1 + R[6]*v2, u1 = R[1]*v0 + R[4]*v1 + R[7]*v2, u2 = R[2]*v0 + R[5]*v1 + R[8]*v2;   // Earth-fixed = R^T * shown
+      const x = Math.min(TW - 1, Math.floor(((Math.atan2(u1, u0)/TAU + 0.5)%1 + 1)%1*TW)), y = Math.min(TH - 1, Math.max(0, Math.floor((0.5 - Math.asin(Math.max(-1, Math.min(1, u2)))/PI)*TH)));
+      const a = (y*TW + x)*4, b = (j*w + i)*4; d[b] = src[a]; d[b + 1] = src[a + 1]; d[b + 2] = src[a + 2]; d[b + 3] = 255; } }
+  rmx.putImageData(out2, 0, 0); return rmap;
+}
+
 /* ---------- each frame ---------- */
 let view = MODE === 'display' ? 'frame' : 'sphere';
 function frameLevels(){                                     // brightness of every dot: at rest, or full when hovered, in a drawing, or hovered elsewhere
@@ -505,6 +567,7 @@ function step(dtReal){
   const onLine = hov && !draft && !drag ? hitCon(hov.v, lineReach(hov)) : null;   // over a finished line: its first shape, and a click keeps it open
   hoverCon = onLine; snap = hov && !onLine && !drag ? nearestDot(hov.v, SNAP) : null;
   if (MODE !== 'tablet') sendHover();                      // the tablet shows what the display or the studio hovers
+  trailStep();
   const levels = frameLevels(), use3d = P.render === '3d', toFrame = view === 'frame';
   document.body.classList.toggle('show-map', !use3d && toFrame);
   const lines = lineList(use3d ? 2.5*D2R : 1.5*D2R).concat(rings());
@@ -519,10 +582,12 @@ function draw(){
   scene.background = COL.setScalar(bg).clone(); globeMat.color.setScalar(bg);
   if (view === 'frame') {
     if (!use3d) return;                                     // the 2D canvas is on screen
-    globe.visible = false; cubeCam.update(renderer, scene);
+    globe.visible = false; earth.visible = P.trail; earthTurn(); earth.scale.setScalar(1.5); earth.material.side = THREE.BackSide;   // seen from the centre, behind the dots
+    cubeCam.update(renderer, scene);
     renderer.render(unwrapScene, unwrapCam); return;
   }
-  globe.visible = true; globe.scale.setScalar(use3d ? 0.997 : 1);
+  earth.visible = use3d && P.trail; earthTurn(); earth.scale.setScalar(0.997); earth.material.side = THREE.FrontSide;
+  globe.visible = !earth.visible; globe.scale.setScalar(use3d ? 0.997 : 1);
   globeMat.map = use3d ? null : tex; globeMat.color.setScalar(use3d ? bg : 1); globeMat.needsUpdate = true; if (!use3d) tex.needsUpdate = true;
   cam.position.set(orb.dist, 0, 0); cam.lookAt(0, 0, 0);
   renderer.render(scene, cam);
@@ -674,7 +739,7 @@ const seg = (id, f) => $(id).addEventListener('click', e => { const b = e.target
 function syncLook(){
   document.body.classList.toggle('invert', P.invert);
   segSync('segRender', P.render); segSync('segSpeed', P.speed); segSync('segView', view);
-  $('invertBtn').setAttribute('aria-pressed', String(P.invert)); $('gridBtn').setAttribute('aria-pressed', String(P.grid));
+  $('invertBtn').setAttribute('aria-pressed', String(P.invert)); $('trailBtn').setAttribute('aria-pressed', String(P.trail)); trailDirty = true; $('gridBtn').setAttribute('aria-pressed', String(P.grid));
   $('soundBtn').setAttribute('aria-pressed', String(soundOn));
   for (const [k] of SLIDERS) { const l = $('s-' + k); if (l) { l.querySelector('input').value = P[k]; l.querySelector('output').textContent = P[k]; } }
   try { localStorage.setItem('constellations-look', JSON.stringify(P)); } catch (e) {}
@@ -688,7 +753,7 @@ seg('segRender', v => look('render', v));
 seg('segSpeed', v => look('speed', +v));
 seg('segView', v => { view = v; syncLook(); });
 $('invertBtn').onclick = () => look('invert', !P.invert);
-$('gridBtn').onclick = () => look('grid', !P.grid);
+$('gridBtn').onclick = () => look('grid', !P.grid); $('trailBtn').onclick = () => look('trail', !P.trail);
 const toggleSound = () => { soundOn = !soundOn; if (soundOn) audio(); else if (ac) ac.suspend(); syncLook(); };
 $('resetTurn').onclick = resetTurn; $('soundBtn').onclick = toggleSound;
 // room links
@@ -701,7 +766,7 @@ apply(await load(true));
 setInterval(async () => { const c = await load(false); if (c) apply(c); }, 30*60*1000);   // stay near real time
 $('consN').textContent = `${cons.length.toLocaleString('en-US')} constellation${cons.length === 1 ? '' : 's'} in this room`;
 syncLook();
-window.__con = {sats, P, step, draw, tap, finish, undo, cons: () => cons, draft: () => draft, reveal: c => { reveal = c; }, opened: () => reveal, setView: v => { view = v; syncLook(); }, look, setHover: p => { hov = p; }, addCon: c => add(c, false), remote: (who, id) => id ? remoteHover.set(who, {id, t: Date.now()}) : remoteHover.delete(who), sound: () => soundOn, audio: () => ({plucked, state: ac && ac.state, strings: conStrings.length}), turn, R: () => R, info, cons1: () => cons[cons.length - 1], stars: c => starsNow(c, c.m || 0), project: v => { const q = to3(v).project(cam); return [(q.x + 1)/2*innerWidth, (1 - q.y)/2*innerHeight]; }};
+window.__con = {sats, P, step, draw, tap, finish, undo, cons: () => cons, draft: () => draft, reveal: c => { reveal = c; }, opened: () => reveal, setView: v => { view = v; syncLook(); }, look, setHover: p => { hov = p; }, addCon: c => add(c, false), trailReset: () => trailReset(new Date(simMs).toISOString().slice(0, 10)), trail: () => ({day: trailDay, sats: trailSats.map(t => [t.o.name, !!t.img, t.failed || false, new Date(t.upTo).toISOString()]), trailOn: P.trail}), remote: (who, id) => id ? remoteHover.set(who, {id, t: Date.now()}) : remoteHover.delete(who), sound: () => soundOn, audio: () => ({plucked, state: ac && ac.state, strings: conStrings.length}), turn, R: () => R, info, cons1: () => cons[cons.length - 1], stars: c => starsNow(c, c.m || 0), project: v => { const q = to3(v).project(cam); return [(q.x + 1)/2*innerWidth, (1 - q.y)/2*innerHeight]; }};
 if (MODE === 'tablet') { if (!TEST) setInterval(info, 250); info(); } else if (!TEST) loop(); else step(0);
 </script>
 </body>
