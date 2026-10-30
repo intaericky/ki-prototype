@@ -69,6 +69,8 @@ figcaption{font-size:12px;opacity:.6;margin-top:8px}
     <p class="k">Look</p>
     <div class="row" style="margin-top:0"><div class="seg" id="segRender"><button data-v="3d">3D spheres and tubes</button><button data-v="2d">2D flat</button></div></div>
     <div class="row"><button class="btn" id="invertBtn">Invert</button><button class="btn" id="gridBtn">Grid</button><button class="btn" id="trailBtn">Image trails</button><button class="btn" id="soundBtn">Sound</button><button class="btn" id="resetTurn" title="Turns the sphere back to north up (R)">Reset turn</button></div>
+    <div class="row"><div class="seg" id="segTrail"><button data-v="day">Whole day</button><button data-v="recent">Last orbit</button><button data-v="edge">Outlines</button><button data-v="single">One at a time</button></div></div>
+    <div class="row"><button class="btn" id="markBtn">Mark imagers</button><button class="btn" id="haloBtn">Dot halo</button></div>
     <div id="sliders" style="margin-top:10px"></div>
   </div>
   <div class="sec">
@@ -110,7 +112,7 @@ const ME = Math.random().toString(36).slice(2, 10);
 THREE.ColorManagement.enabled = false;                      // grey levels go to the screen exactly as set
 
 /* ---------- look: set in the studio, followed by the display and the tablet ---------- */
-const DEF = {render: '3d', invert: false, dot: 2, line: 2, dotRest: 1, lineRest: 0.5, grid: false, speed: 1, trail: true, imgLevel: 0.7};
+const DEF = {render: '3d', invert: false, dot: 2, line: 2, dotRest: 1, lineRest: 0.5, grid: false, speed: 1, trail: true, imgLevel: 0.7, trailStyle: 'day', markImagers: true, halo: true};
 const P = {...DEF};
 try { Object.assign(P, JSON.parse(localStorage.getItem('constellations-look') || '{}')); } catch (e) {}
 if (Q.get('speed')) P.speed = +Q.get('speed');
@@ -304,7 +306,7 @@ function sendLook(){ if (MODE !== 'studio' || !mq) return; clearTimeout(lookTime
 function setLook(d){
   if (!d || typeof d !== 'object') return;
   for (const k in DEF) if (k in d && typeof d[k] === typeof DEF[k] && (typeof d[k] !== 'number' || Number.isFinite(d[k]))) P[k] = d[k];
-  if (!['3d', '2d'].includes(P.render)) P.render = '3d';
+  if (!['3d', '2d'].includes(P.render)) P.render = '3d'; if (!['day', 'recent', 'edge', 'single'].includes(P.trailStyle)) P.trailStyle = 'day';
   syncLook();
 }
 $('clearBtn').onclick = () => {
@@ -423,6 +425,8 @@ function draw2D(levels, lines){
   for (const [pts, b] of lines) { ox.strokeStyle = grey(b); polyline(pts); }
   // dots: widened by 1/cos(latitude) so they come out round and equal everywhere on the sphere, snapped to whole pixels
   const ry = Math.max(1, P.dot), kx = W/(2*H);
+  if (P.halo && P.trail) { ox.fillStyle = grey(0); const hy = ry + 2;                       // a dark margin so dots read over the images
+    for (const o of sats) { if (isNaN(o.x)) continue; const la = (0.5 - o.y/H)*PI, hx = Math.min(W, hy*kx/Math.max(0.02, Math.cos(la))); ox.fillRect(Math.round(o.x - hx/2), Math.round(o.y - hy/2), Math.round(hx), hy); } }
   for (let i = 0; i < sats.length; i++) { const o = sats[i]; if (isNaN(o.x)) continue;
     const la = (0.5 - o.y/H)*PI, rx = Math.max(1, Math.min(W, ry*kx/Math.max(0.02, Math.cos(la))));
     ox.fillStyle = grey(levels[i]);
@@ -440,7 +444,9 @@ const MAXD = 40000, MAXT = 60000;
 const dotsMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), flat(), MAXD);
 const tubes = new THREE.InstancedMesh(new THREE.CylinderGeometry(1, 1, 1, 8, 1, true), flat(), MAXT);
 const joints = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), flat(), MAXT);
-for (const m of [dotsMesh, tubes, joints]) { m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.setColorAt(0, new THREE.Color()); m.instanceColor.setUsage(THREE.DynamicDrawUsage); m.frustumCulled = false; m.count = 0; scene.add(m); }
+const halos = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshBasicMaterial({color: 0x000000, depthWrite: false}), MAXD);
+halos.instanceMatrix.setUsage(THREE.DynamicDrawUsage); halos.frustumCulled = false; halos.count = 0; halos.renderOrder = 1; scene.add(halos);
+for (const m of [dotsMesh, tubes, joints]) { m.renderOrder = 2; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.setColorAt(0, new THREE.Color()); m.instanceColor.setUsage(THREE.DynamicDrawUsage); m.frustumCulled = false; m.count = 0; scene.add(m); }
 const tex = new THREE.CanvasTexture(out); tex.colorSpace = THREE.NoColorSpace; tex.anisotropy = 8;
 const globeMat = new THREE.MeshBasicMaterial({color: 0x000000});
 const globe = new THREE.Mesh(new THREE.SphereGeometry(1, 128, 64), globeMat); scene.add(globe);
@@ -471,6 +477,9 @@ function draw3D(levels, lines){
   for (let i = 0; i < sats.length && n < MAXD; i++) { const o = sats[i]; if (!o.v) continue;
     M4.compose(V1.set(o.v[0], o.v[2], -o.v[1]), QT.identity(), SC.setScalar(r)); dotsMesh.setMatrixAt(n, M4); dotsMesh.setColorAt(n, COL.setScalar(ink(levels[i]))); n++; }
   dotsMesh.count = n;
+  let hn = 0; const hr = r + rad(2);
+  if (P.halo && P.trail) for (let i = 0; i < sats.length && hn < MAXD; i++) { const o = sats[i]; if (!o.v) continue; M4.compose(V1.set(o.v[0], o.v[2], -o.v[1]), QT.identity(), SC.setScalar(hr)); halos.setMatrixAt(hn++, M4); }
+  halos.count = hn; halos.instanceMatrix.needsUpdate = true; halos.material.color.setScalar(ink(0));
   let k = 0;
   for (const [pts, b, w] of lines) { COL.setScalar(ink(b)); const t = w ? rad(w) : t0;
     for (let i = 0; i < pts.length && k < MAXT; i++) {
@@ -493,7 +502,8 @@ const IMAGERS = [[/^TERRA\b/, 'MODIS_Terra_CorrectedReflectance_TrueColor', 2330
 const TW = 2048, TH = 1024, TSTEP = 20000;                  // trail map size (Earth-fixed equirect) and the orbit step, ms
 const trail = document.createElement('canvas'); trail.width = TW; trail.height = TH; const tctx = trail.getContext('2d', {willReadFrequently: true});
 const tmp = document.createElement('canvas'); tmp.width = TW; tmp.height = TH; const tmpx = tmp.getContext('2d');
-let trailDay = '', trailSats = [], trailDirty = false, trailComp = 0, trailFetched = 0;
+let trailDay = '', trailSats = [], trailDirty = false, trailComp = 0, trailFetched = 0, trailStyleWas = '', trailOne = 0, trailDecayAt = 0;
+const TAU_RECENT = 100*60000;                               // 'Last orbit': a swath fades over about one orbit (~100 min)
 const trailTex = new THREE.CanvasTexture(trail); trailTex.colorSpace = THREE.NoColorSpace; trailTex.anisotropy = 8;
 const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 128, 64), new THREE.MeshBasicMaterial({map: trailTex})); earth.visible = false; scene.add(earth);
 const gibsDay = (layer, day) => `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=${layer}&STYLES=&CRS=EPSG:4326&BBOX=-90,-180,90,180&WIDTH=${TW}&HEIGHT=${TH}&FORMAT=image/png&TRANSPARENT=true&TIME=${day}`;
@@ -505,7 +515,9 @@ function trailReset(day){
   trailDay = day; trailSats = [];
   for (const [re, layer, swath] of IMAGERS) { const o = sats.find(q => re.test(q.name)); if (!o) continue;
     const m = document.createElement('canvas'); m.width = TW; m.height = TH; const mx = m.getContext('2d'); mx.fillStyle = '#fff';
-    trailSats.push({o, layer, half: swath/2/RE, mask: m, mx, upTo: Date.parse(day + 'T00:00:00Z'), img: null}); }
+    const start = P.trailStyle === 'recent' ? Math.max(Date.parse(day + 'T00:00:00Z'), simMs - 3*TAU_RECENT) : Date.parse(day + 'T00:00:00Z');
+    trailSats.push({o, layer, half: swath/2/RE, mask: m, mx, upTo: start, img: null}); }
+  trailDecayAt = trailSats.length ? trailSats[0].upTo : simMs;
   trailImages(); trailDirty = true;
 }
 function swathDot(t, L){                                    // the swath around one point of the ground track, as it falls on the equirect map
@@ -516,12 +528,34 @@ function trailStep(){
   if (!P.trail || MODE === 'tablet' || !sats.length) return;
   const day = new Date(simMs).toISOString().slice(0, 10); if (day !== trailDay || trailSats.some(t => simMs < t.upTo - 60000)) trailReset(day);
   if (Date.now() - trailFetched > 1800000) trailImages();
-  for (const t of trailSats) while (t.upTo + TSTEP <= simMs) { t.upTo += TSTEP; const L = earthLL(t.o, t.upTo); if (L) swathDot(t, L); trailDirty = true; }
+  const t0 = trailSats.length ? trailSats[0].upTo : simMs;  // all satellites step through time together, so fading treats them alike
+  for (let at = t0 + TSTEP; at <= simMs; at += TSTEP) {
+    for (const t of trailSats) { t.upTo = at; const L = earthLL(t.o, at); if (L) swathDot(t, L); }
+    trailDirty = true; if (P.trailStyle === 'recent' && at - trailDecayAt >= TAU_RECENT/24) fadeMasks(at); }
+  if (P.trailStyle === 'single') { const k = Math.floor(Date.now()/10000)%Math.max(1, trailSats.length); if (k !== trailOne) { trailOne = k; trailDirty = true; } }
   const now = performance.now(); if (trailDirty && now - trailComp > 1000) { trailComp = now; trailDirty = false; trailCompose(); }
+}
+function fadeMasks(at){                                     // 'Last orbit': older swath fades, so each satellite's newest pass stands out
+  const f = Math.exp(-(at - trailDecayAt)/TAU_RECENT); trailDecayAt = at;
+  for (const t of trailSats) { t.mx.globalCompositeOperation = 'destination-out'; t.mx.fillStyle = `rgba(0,0,0,${1 - f})`; t.mx.fillRect(0, 0, TW, TH); t.mx.globalCompositeOperation = 'source-over'; }
+}
+const trailShown = () => P.trailStyle === 'single' ? trailSats.filter((t, i) => i === trailOne) : trailSats;
+function trailLines(step){                                  // the imagers marked with a ring; 'Outlines' also draws each swath's two edges over the last 30 minutes
+  if (!P.trail) return [];
+  const out = [];
+  for (const t of trailShown()) { const o = t.o; if (!o.v) continue;
+    if (P.markImagers) out.push(ring(o.v));
+    if (P.trailStyle !== 'edge') continue;
+    const L = [], R2 = [];
+    for (let m = 30; m >= 0; m -= 1) { const a = earthLL(o, simMs - m*60000), b = earthLL(o, simMs - (m - 0.5)*60000); if (!a || !b) continue;
+      const p = unit(...a), q = unit(...b), n = nrm(cross3(p, q)), c = Math.cos(t.half), sn = Math.sin(t.half);
+      L.push(rot([p[0]*c + n[0]*sn, p[1]*c + n[1]*sn, p[2]*c + n[2]*sn])); R2.push(rot([p[0]*c - n[0]*sn, p[1]*c - n[1]*sn, p[2]*c - n[2]*sn])); }
+    out.push([L, 1, 1], [R2, 1, 1]); }
+  return out;
 }
 function trailCompose(){                                    // each image cut to its own swaths, together, then grey (and inverted with the look)
   tctx.globalCompositeOperation = 'source-over'; tctx.clearRect(0, 0, TW, TH);
-  for (const t of trailSats) { if (!t.img) continue;
+  for (const t of trailShown()) { if (!t.img) continue;
     tmpx.globalCompositeOperation = 'source-over'; tmpx.clearRect(0, 0, TW, TH); tmpx.drawImage(t.img, 0, 0, TW, TH);
     tmpx.globalCompositeOperation = 'destination-in'; tmpx.drawImage(t.mask, 0, 0); tctx.globalCompositeOperation = 'lighten'; tctx.drawImage(tmp, 0, 0); }
   const id = tctx.getImageData(0, 0, TW, TH), d = id.data, k = P.imgLevel;
@@ -570,9 +604,9 @@ function step(dtReal){
   trailStep();
   const levels = frameLevels(), use3d = P.render === '3d', toFrame = view === 'frame';
   document.body.classList.toggle('show-map', !use3d && toFrame);
-  const lines = lineList(use3d ? 2.5*D2R : 1.5*D2R).concat(rings());
+  const lines = lineList(use3d ? 2.5*D2R : 1.5*D2R).concat(rings(), trailLines());
   if (!use3d) draw2D(levels, lines);
-  for (const m of [dotsMesh, tubes, joints]) m.visible = use3d;
+  for (const m of [dotsMesh, tubes, joints, halos]) m.visible = use3d;
   if (use3d) draw3D(levels, lines);
   canvas.style.cursor = out.style.cursor = MODE === 'display' ? 'none' : '';   // on the display the ring is the cursor
   $('clock').textContent = new Date(simMs).toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
@@ -739,7 +773,9 @@ const seg = (id, f) => $(id).addEventListener('click', e => { const b = e.target
 function syncLook(){
   document.body.classList.toggle('invert', P.invert);
   segSync('segRender', P.render); segSync('segSpeed', P.speed); segSync('segView', view);
-  $('invertBtn').setAttribute('aria-pressed', String(P.invert)); $('trailBtn').setAttribute('aria-pressed', String(P.trail)); trailDirty = true; $('gridBtn').setAttribute('aria-pressed', String(P.grid));
+  $('invertBtn').setAttribute('aria-pressed', String(P.invert)); $('trailBtn').setAttribute('aria-pressed', String(P.trail)); trailDirty = true; segSync('segTrail', P.trailStyle);
+  $('markBtn').setAttribute('aria-pressed', String(P.markImagers)); $('haloBtn').setAttribute('aria-pressed', String(P.halo));
+  if (P.trailStyle !== trailStyleWas) { trailStyleWas = P.trailStyle; trailDay = ''; }   // masks are rebuilt for the new style $('gridBtn').setAttribute('aria-pressed', String(P.grid));
   $('soundBtn').setAttribute('aria-pressed', String(soundOn));
   for (const [k] of SLIDERS) { const l = $('s-' + k); if (l) { l.querySelector('input').value = P[k]; l.querySelector('output').textContent = P[k]; } }
   try { localStorage.setItem('constellations-look', JSON.stringify(P)); } catch (e) {}
@@ -749,7 +785,8 @@ for (const [k, label, lo, hi, st] of SLIDERS) {
   const l = document.createElement('label'); l.id = 's-' + k; l.innerHTML = `<span>${label}</span><output></output><input type="range" min="${lo}" max="${hi}" step="${st}">`;
   l.querySelector('input').oninput = e => look(k, +e.target.value); $('sliders').append(l);
 }
-seg('segRender', v => look('render', v));
+seg('segRender', v => look('render', v)); seg('segTrail', v => look('trailStyle', v));
+$('markBtn').onclick = () => look('markImagers', !P.markImagers); $('haloBtn').onclick = () => look('halo', !P.halo);
 seg('segSpeed', v => look('speed', +v));
 seg('segView', v => { view = v; syncLook(); });
 $('invertBtn').onclick = () => look('invert', !P.invert);
