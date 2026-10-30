@@ -34,6 +34,22 @@ body.invert #info{color:#000}
 #info p{margin:0}
 #info .dim{opacity:.5}
 #shape{flex:1;min-height:0;width:100%;margin-top:18px}
+#infoText.grow{flex:1;min-height:0;display:flex}
+.sat{display:flex;gap:36px;flex:1;min-height:0;width:100%}
+.sat .txt{flex:0 0 min(46%,520px);overflow:hidden}
+.obs{margin-top:14px}
+.obs p{margin:0 0 2px}
+figure{flex:1;margin:0;display:flex;flex-direction:column;min-width:0;min-height:0}
+figure .im{position:relative;flex:1;min-height:0;border:1px solid rgba(255,255,255,.18)}
+figure img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;filter:grayscale(1)}
+figure .im.on::after{content:'';position:absolute;left:50%;top:50%;width:14px;height:14px;margin:-8px 0 0 -8px;border:1px solid #fff;border-radius:50%}
+figure .none{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;opacity:.5;text-align:center;padding:20px}
+figcaption{font-size:12px;opacity:.6;margin-top:8px}
+.mems{display:flex;gap:14px;flex-wrap:wrap;margin-top:16px}
+.mem{width:150px;font-size:11px;line-height:1.4}
+.mem .th{position:relative;width:150px;height:100px;border:1px solid rgba(255,255,255,.18);margin-bottom:5px}
+.mem .th img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:grayscale(1)}
+.mem .th span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;opacity:.4}
 </style>
 </head>
 <body>
@@ -64,6 +80,7 @@ body.invert #info{color:#000}
     <p class="k">Data</p>
     <p class="small" id="status">Loading the catalogue…</p>
     <p class="small" id="relay">Relay: connecting…</p>
+    <p class="small" id="soundState">Sound: waiting for a click or key on this page</p>
     <p class="small" id="consN"></p>
     <div class="row"><button class="btn" id="clearBtn">Clear all constellations</button></div>
   </div>
@@ -329,11 +346,21 @@ function audio(){
     if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)();
       const comp = ac.createDynamicsCompressor(); comp.threshold.value = -20; comp.ratio.value = 8;
       master = ac.createGain(); master.gain.value = 0.7; master.connect(comp); comp.connect(ac.destination); }
-    if (ac.state === 'suspended') ac.resume();
-  } catch (e) {}
+    if (ac.state !== 'running') ac.resume().then(() => { soundState(); if (!chimed) { chimed = true; setTimeout(() => pluck(440, 0.5, 'MEO', 0.5), 60); } }).catch(soundState);
+    else if (!chimed) { chimed = true; pluck(440, 0.5, 'MEO', 0.5); }   // one soft note: sound is on
+  } catch (e) { soundErr = e.message; }
+  soundState();
 }
+let chimed = false, soundErr = '';
+function soundState(){                                     // the studio says where sound stands, so a silent room can be explained
+  const el = $('soundState'); if (!el) return;
+  el.textContent = !soundOn ? 'Sound: off' : soundErr ? `Sound: failed (${soundErr})` : !ac ? 'Sound: waiting for a click or key on this page'
+    : ac.state === 'running' ? `Sound: on · ${plucked} notes so far · ${conStrings.length} lines listening` : `Sound: ${ac.state}, click the page`;
+}
+setInterval(soundState, 1000);
 addEventListener('pointerdown', audio, {capture: true}); addEventListener('keydown', audio, {capture: true});   // browsers start sound only after a click or key on the page
-function pluck(freq, along, cls, vel){
+function pluck(freq, along, cls, vel){ try { pluck1(freq, along, cls, vel); } catch (e) { soundErr = e.message; } }   // a failing note never stops the sphere
+function pluck1(freq, along, cls, vel){
   if (!ac || !soundOn || ac.state !== 'running' || voices > 40 || plucksThisFrame > 10) return;
   plucksThisFrame++; voices++; plucked++;
   const t = ac.currentTime, dec = cls === 'LEO' ? 0.8 : cls === 'MEO' ? 2.6 : 3.6, f = freq;
@@ -542,7 +569,51 @@ const utc = ms => new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + ' 
 const ago = ms => { const m = Math.max(0, Math.round(ms/60000)); return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m/60)} h ${String(m%60).padStart(2, '0')} min ago` : `${Math.floor(m/1440)} d ${Math.floor(m%1440/60)} h ago`; };
 const esc = t => String(t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const km = v => Math.round(v).toLocaleString('en-US') + ' km', deg = (v, p, n) => `${Math.abs(v/D2R).toFixed(1)}°${v >= 0 ? p : n}`;
-let infoKey = '';
+/* what each satellite observes: its instruments from the WMO OSCAR-based table (the satellite eye's), and for the imagers NASA GIBS
+   publishes per satellite, that satellite's own imagery of the box under it. Everything else says plainly that nothing public is seen. */
+let EYE = null;
+if (MODE === 'tablet') import('/sphere-eye/instruments.js').then(m => { EYE = m; infoKey = ''; }).catch(() => {});
+const instrOf = o => { if (!EYE) return null; for (const [re, list] of EYE.RULES) if (re.test(o.name)) return list; return []; };
+const GIBS = [   // [name, GIBS layer, instrument, cadence]: only layers made from that one satellite's own instrument
+  [/^TERRA\b/, 'MODIS_Terra_CorrectedReflectance_TrueColor', 'MODIS', 'day'], [/^AQUA\b/, 'MODIS_Aqua_CorrectedReflectance_TrueColor', 'MODIS', 'day'],
+  [/SUOMI NPP/, 'VIIRS_SNPP_CorrectedReflectance_TrueColor', 'VIIRS', 'day'], [/^NOAA[ -]20\b/, 'VIIRS_NOAA20_CorrectedReflectance_TrueColor', 'VIIRS', 'day'],
+  [/^NOAA[ -]21\b/, 'VIIRS_NOAA21_CorrectedReflectance_TrueColor', 'VIIRS', 'day'],
+  [/^GOES[ -]19\b/, 'GOES-East_ABI_Band2_Red_Visible_1km', 'ABI', '10min'], [/^GOES[ -]18\b/, 'GOES-West_ABI_Band2_Red_Visible_1km', 'ABI', '10min'],
+  [/HIMAWARI[- ]9/, 'Himawari_AHI_Band3_Red_Visible_1km', 'AHI', '10min']];
+const gibsOf = o => GIBS.find(g => g[0].test(o.name)) || null;
+const views = new Map();                                    // key -> {status, url, when, frac, box}
+function viewOf(o, center){                                 // the satellite's own imagery of a box its swath wide, centred under where it is
+  const g = gibsOf(o); if (!g) return null;
+  const geo = g[3] === '10min', side = geo ? 7000 : (EYE && EYE.INSTR[g[2]] && EYE.INSTR[g[2]].swath) || 2300;
+  const la = Math.max(-80, Math.min(80, Math.round(center[1]/D2R))), lo = Math.round((((center[0]/D2R) + 540)%360) - 180);
+  const hl = side/2/111.32, hw = Math.min(90, hl/Math.max(0.2, Math.cos(la*D2R)));
+  let lo0 = lo - hw, lo1 = lo + hw; if (lo0 < -180) { lo1 -= lo0 + 180; lo0 = -180; } if (lo1 > 180) { lo0 -= lo1 - 180; lo1 = 180; }
+  const box = [Math.max(-90, la - hl), lo0, Math.min(90, la + hl), lo1], key = g[1] + box.map(v => v.toFixed(1)).join();
+  let v = views.get(key); if (v) return v;
+  v = {status: 'loading', layer: g[1], instr: g[2], side, box}; views.set(key, v);
+  const day = d => new Date(Date.now() - d*86400000).toISOString().slice(0, 10);
+  const times = geo ? [new Date(Math.floor((Date.now() - 40*60000)/600000)*600000).toISOString().slice(0, 17) + '00Z'] : [day(0), day(1)];
+  const W2 = 720, H2 = Math.max(240, Math.min(1080, Math.round(W2*(box[2] - box[0])/(box[3] - box[1]))));
+  const tryT = i => {
+    const url = `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=${g[1]}&STYLES=&CRS=EPSG:4326&BBOX=${box.map(q => q.toFixed(3)).join(',')}&WIDTH=${W2}&HEIGHT=${H2}&FORMAT=image/png&TRANSPARENT=true&TIME=${times[i]}`;
+    const im = new Image(); im.crossOrigin = 'anonymous';
+    im.onload = () => { let frac = null;
+      try { const c = document.createElement('canvas'); c.width = 90; c.height = Math.round(90*H2/W2); const x = c.getContext('2d'); x.drawImage(im, 0, 0, c.width, c.height);
+        const d = x.getImageData(0, 0, c.width, c.height).data; let k = 0; for (let j = 3; j < d.length; j += 4) if (d[j] > 0 && (d[j - 1] || d[j - 2] || d[j - 3])) k++; frac = k/(d.length/4); } catch (e) {}
+      if (frac !== null && frac < 0.02 && i + 1 < times.length) return tryT(i + 1);   // nothing yet today: the day before
+      Object.assign(v, {status: 'ok', url, when: times[i], frac}); infoKey = ''; };
+    im.onerror = () => { if (i + 1 < times.length) return tryT(i + 1); v.status = 'fail'; infoKey = ''; };
+    im.src = url; };
+  tryT(0); return v;
+}
+function observes(o){                                       // [kind, html]: kind 'img' (public imagery), 'inst' (instruments, no imagery here), 'none'
+  const list = instrOf(o); if (list === null) return ['none', '<p class="dim">loading the instrument table…</p>'];
+  const real = list.filter(k => !['TASKED', 'OFF', 'UNKNOWN'].includes(k));
+  const rows = list.map(k => { const I = EYE.INSTR[k] || {}; return `<p>${esc(k === 'TASKED' || k === 'OFF' || k === 'UNKNOWN' ? '' : k)}${k === 'TASKED' || k === 'OFF' || k === 'UNKNOWN' ? '' : ' · '}<span class="dim">${esc(I.spec || '')}${I.swath ? ` · ${km(I.swath)} swath` : ''}</span></p>`; }).join('');
+  if (!list.length) return ['none', '<p class="dim">no Earth-observing instrument listed for it in WMO OSCAR (as tabled here)</p>'];
+  return [gibsOf(o) ? 'img' : real.length ? 'inst' : 'none', rows];
+}
+let infoKey = '', hoverView = null;
 function info(){
   if (P.speed === 1) simMs = Date.now(); else { const now = performance.now(); simMs += (now - lastReal)*P.speed; lastReal = now; }
   let h = null; for (const v of remoteHover.values()) if (!h || v.t > h.t) h = v;
@@ -553,20 +624,30 @@ function info(){
         + (st && L ? `<p>now ${km(Math.hypot(st.position.x, st.position.y, st.position.z) - RE)} up, over ${deg(L[1], 'N', 'S')} ${deg(((L[0] + 3*PI)%TAU) - PI, 'E', 'W')}</p>` : '')
         + `<p>perigee ${km(o.peri)} · apogee ${km(o.apo)}</p><p>one orbit ${o.per.toFixed(1)} min · inclination ${o.inc.toFixed(1)}°</p>`
         + `<p class="dim">orbit measured ${utc(ep)} (${ago(Date.now() - ep)})</p>`
-        + `<p class="dim">in ${n} constellation${n === 1 ? '' : 's'} · ${meta.source || ''}</p>`; } }
+        + `<p class="dim">in ${n} constellation${n === 1 ? '' : 's'} · ${meta.source || ''}</p>`;
+      if (!hoverView || hoverView.id !== o.id) hoverView = {id: o.id, center: L || [0, 0]};   // the box stays where it was first hovered
+      const [kind, rows] = observes(o), v = kind === 'img' ? viewOf(o, hoverView.center) : null;
+      const fig = v ? (v.status === 'ok' ? `<img src="${v.url}" alt="">` : `<div class="none">${v.status === 'loading' ? 'asking NASA GIBS…' : 'NASA GIBS did not answer'}</div>`)
+        : `<div class="none">${kind === 'inst' ? 'its instruments measure, but NASA GIBS publishes no image made only from this satellite' : 'no public Earth observation'}</div>`;
+      const cap = v && v.status === 'ok' ? `NASA GIBS · ${v.layer} · ${v.when}${v.frac !== null ? ` · ${Math.round(v.frac*100)}% of this ${km(v.side)} box observed` : ''} · centre: under it when hovered` : 'WMO OSCAR instruments; NASA GIBS imagery';
+      html = `<div class="sat"><div class="txt">${html}<div class="obs"><p class="k">Observes</p>${rows}</div></div><figure><div class="im${v && v.status === 'ok' ? ' on' : ''}">${fig}</div><figcaption>${esc(cap)}</figcaption></figure></div>`; } }
   else if (h) { con = cons.find(c => c.id === h.id.slice(2));
     if (con) { const at = con.sim || con.at, len = U => con.edges.reduce((t, [i, j]) => t + (U[i] && U[j] ? ang(U[i], U[j]) : 0), 0);
       const now = con.stars.map(id => { const o = byId.get(id), L = o && earthLL(o, simMs); return L ? unit(...L) : null; }), was = con.orig ? con.orig.map(q => unit(...q)) : null;
       html = `<p class="k">Constellation</p><h1>as drawn ${utc(at)}</h1><p>${ago(simMs - at)} · ${con.stars.length} satellites · ${con.edges.length} lines</p>`
         + (was ? `<p>lines now ${(len(now)/Math.max(1e-6, len(was))).toFixed(2)}× their drawn length</p>` : '')
-        + `<p class="dim">${con.stars.map(id => esc(byId.get(id) ? byId.get(id).name : id)).join(' · ')}</p>`;
+        + (() => { let seen = 0, inst = 0; const cells = con.stars.map((id, i) => { const o = byId.get(id); if (!o) return '';
+            const [kind] = observes(o), U = now[i], v = kind === 'img' && U ? viewOf(o, ll(U)) : null; if (kind === 'img') seen++; if (kind !== 'none') inst++;
+            return `<div class="mem"><div class="th">${v && v.status === 'ok' ? `<img src="${v.url}" alt="">` : `<span>${kind === 'img' ? '…' : kind === 'inst' ? 'measures, no image' : 'no public observation'}</span>`}</div>${esc(o.name)}<br><span class="dim">${esc((instrOf(o) || []).join(' · ') || 'no instruments')}</span></div>`; }).join('');
+          return `<p>${inst} of ${con.stars.length} carry Earth-observing instruments · ${seen} with public imagery</p><div class="mems">${cells}</div>`; })();
       drawShape(con, was, now); } }
   if (!html) { const d = [...others.values()].pop();
     html = `<p class="k">Constellations</p><h1>${d ? `drawing · ${d.d.stars.length} satellites` : 'hover a satellite or a line on the sphere'}</h1>`
       + `<p class="dim">${sats.length.toLocaleString('en-US')} satellites · ${cons.length.toLocaleString('en-US')} constellations</p>`
       + `<p class="dim">${relayOk ? 'connected' : 'not connected'} · room ${esc(ROOM || '(none)')}</p>`; }
-  const key = html + (con ? con.id : ''); if (key !== infoKey) { infoKey = key; $('infoText').innerHTML = html; }
-  $('shape').style.visibility = con ? 'visible' : 'hidden';
+  if (!h || /^[co]:/.test(h.id)) hoverView = null;
+  const key = html + (con ? con.id : ''); if (key !== infoKey) { infoKey = key; $('infoText').innerHTML = html; $('infoText').className = html.startsWith('<div class="sat"') ? 'grow' : ''; }
+  $('shape').style.display = con ? '' : 'none';
 }
 function drawShape(c, was, now){                            // the shape as drawn (full) and where its satellites are now (faint), seen from straight above it
   const cv = $('shape'), r = cv.getBoundingClientRect(), dpr = Math.min(devicePixelRatio, 2);
@@ -617,7 +698,7 @@ apply(await load(true));
 setInterval(async () => { const c = await load(false); if (c) apply(c); }, 30*60*1000);   // stay near real time
 $('consN').textContent = `${cons.length.toLocaleString('en-US')} constellation${cons.length === 1 ? '' : 's'} in this room`;
 syncLook();
-window.__con = {sats, P, step, draw, tap, finish, undo, cons: () => cons, draft: () => draft, reveal: c => { reveal = c; }, opened: () => reveal, setView: v => { view = v; syncLook(); }, look, setHover: p => { hov = p; }, remote: (who, id) => id ? remoteHover.set(who, {id, t: Date.now()}) : remoteHover.delete(who), sound: () => soundOn, audio: () => ({plucked, state: ac && ac.state, strings: conStrings.length}), turn, R: () => R, info, cons1: () => cons[cons.length - 1], stars: c => starsNow(c, c.m || 0), project: v => { const q = to3(v).project(cam); return [(q.x + 1)/2*innerWidth, (1 - q.y)/2*innerHeight]; }};
+window.__con = {sats, P, step, draw, tap, finish, undo, cons: () => cons, draft: () => draft, reveal: c => { reveal = c; }, opened: () => reveal, setView: v => { view = v; syncLook(); }, look, setHover: p => { hov = p; }, addCon: c => add(c, false), remote: (who, id) => id ? remoteHover.set(who, {id, t: Date.now()}) : remoteHover.delete(who), sound: () => soundOn, audio: () => ({plucked, state: ac && ac.state, strings: conStrings.length}), turn, R: () => R, info, cons1: () => cons[cons.length - 1], stars: c => starsNow(c, c.m || 0), project: v => { const q = to3(v).project(cam); return [(q.x + 1)/2*innerWidth, (1 - q.y)/2*innerHeight]; }};
 if (MODE === 'tablet') { if (!TEST) setInterval(info, 250); info(); } else if (!TEST) loop(); else step(0);
 </script>
 </body>
