@@ -358,7 +358,10 @@ function soundState(){                                     // the studio says wh
     : ac.state === 'running' ? `Sound: on · ${plucked} notes so far · ${conStrings.length} lines listening` : `Sound: ${ac.state}, click the page`;
 }
 setInterval(soundState, 1000);
-addEventListener('pointerdown', audio, {capture: true}); addEventListener('keydown', audio, {capture: true});   // browsers start sound only after a click or key on the page
+// Safari only opens the output for a sound started inside a full click (or tap, or key), so each of those also plays one silent sample
+let unlocked = false;
+function unlock(){ audio(); if (!ac || unlocked) return; try { const b = ac.createBuffer(1, 1, 22050), src = ac.createBufferSource(); src.buffer = b; src.connect(ac.destination); src.start(0); if (ac.state === 'running') unlocked = true; } catch (e) {} }
+for (const ev of ['pointerdown', 'mousedown', 'click', 'touchend', 'keydown']) addEventListener(ev, unlock, {capture: true});   // browsers start sound only after a click or key on the page
 function pluck(freq, along, cls, vel){ try { pluck1(freq, along, cls, vel); } catch (e) { soundErr = e.message; } }   // a failing note never stops the sphere
 function pluck1(freq, along, cls, vel){
   if (!ac || !soundOn || ac.state !== 'running' || voices > 40 || plucksThisFrame > 10) return;
