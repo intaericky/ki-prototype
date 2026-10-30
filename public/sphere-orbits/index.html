@@ -33,7 +33,7 @@ input[type=search]{width:100%;box-sizing:border-box;background:#000;color:var(--
 <header class="bar">
   <nav class="seg" aria-label="Scene"><a href="/sphere-studio">Main studio</a><a href="/sphere-eye">Satellite eye</a><a href="/sphere-orbits" aria-current="page">Orbits</a></nav>
   <div class="seg" id="segView"><button data-v="sphere">Sphere</button><button data-v="frame">360 frame</button></div>
-  <div class="seg" id="segLines" title="What each line is"><button data-v="planes">Orbits</button><button data-v="tracks">Ground tracks</button><button data-v="none">No lines</button></div>
+  <div class="seg" id="segLines" title="Optional lines"><button data-v="none">Dots only</button><button data-v="planes">Orbit lines</button><button data-v="tracks">Ground tracks</button></div>
   <div class="seg" id="segFrame" title="Hold the Earth still, or hold the stars still"><button data-v="earth">Earth still</button><button data-v="stars">Stars still</button></div>
   <div class="seg" id="segSpeed"><button data-v="1">Real time</button><button data-v="60">×60</button><button data-v="600">×600</button><button data-v="3600">×3600</button></div>
   <span id="clock"></span>
@@ -102,7 +102,7 @@ async function load(){
 }
 
 /* ---------- time ---------- */
-let speed = +(Q.get('speed') || 1), simMs = Date.now(), lastReal = performance.now();
+let speed = +(Q.get('speed') || 60), simMs = Date.now(), lastReal = performance.now();
 const jdOf = ms => ms/86400000 + 2440587.5;
 function eci(o, ms){                                       // TEME position (km) at a moment, or null
   const r = satellite.sgp4(o.rec, (jdOf(ms) - o.rec.jdsatepoch)*1440);
@@ -113,7 +113,7 @@ const X = lon => ((lon/TAU + 0.5) % 1 + 1) % 1*W, Y = lat => (0.5 - lat/PI)*H;
 
 /* ---------- state ---------- */
 const P = {gain: 0.06, dots: 1, dot: 2.2};
-let lines = Q.get('lines') || 'planes', frame = Q.get('frame') || 'earth', view = MODE === 'display' ? 'frame' : 'sphere';
+let lines = Q.get('lines') || 'none', frame = Q.get('frame') || 'earth', view = MODE === 'display' ? 'frame' : 'sphere';
 const show = {LEO: true, MEO: true, GEO: true, HEO: true};
 let find = '', picked = null, yaw = 0, version = 0;
 const visible = o => show[o.cls];
@@ -266,7 +266,7 @@ function note(){
   const what = lines === 'planes'
     ? 'Each line is one satellite\'s orbit, seen from the centre of the Earth: the plane it circles in, cut through the sphere.'
     : lines === 'tracks' ? 'Each line is the ground under one satellite for one full turn, half behind it and half ahead, as the Earth turns beneath.'
-    : 'Dots only: where each satellite is now.';
+    : 'Each dot is one satellite, moving exactly along its orbit (SGP4 from its latest published elements).';
   const fr = frame === 'earth' ? 'The Earth is held still.' : 'The stars are held still; the Earth would turn underneath.';
   $('note').textContent = `${what} ${fr} Every dot is a catalogued object. Satellites that states keep secret are not in this catalogue.`;
 }
