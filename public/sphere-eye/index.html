@@ -61,7 +61,7 @@ body.tablet .note,body.tablet #segView{display:none}
 <script src="/sphere-assets/vendor/satellite.min.js"></script>
 <script type="module">
 import * as THREE from '/sphere-assets/vendor/three.module.min.js';
-import {INSTR, RULES, GROUP_DEFAULT, GEO_FIXED} from './instruments.js';
+import {INSTR, RULES, GROUP_DEFAULT, GEO_FIXED} from '/sphere-eye/instruments.js';
 const $ = id => document.getElementById(id), PI = Math.PI, D2R = PI/180, RE = 6371, MU = 398600.4418, EARTH_KM2 = 510.1e6;
 const Q = new URLSearchParams(location.search);
 const MODE = Q.has('display') ? 'display' : Q.has('tablet') ? 'tablet' : 'studio';
@@ -107,7 +107,7 @@ function addSat(name, l1, l2, group){
 async function loadSats(){
   let data = null, from = 'live';
   try { const r = await fetch('/api/tle', {cache:'no-store'}); if (r.ok) { data = await r.json(); if (!data.sats || data.sats.length < 30) data = null; } } catch (e) {}
-  if (!data) { from = 'built-in'; data = await (await fetch('./fallback.json')).json(); }
+  if (!data) { from = 'built-in'; data = await (await fetch('/sphere-eye/fallback.json')).json(); }
   for (const s of data.sats) addSat(s.name, s.l1, s.l2, s.group);
   for (const [name, lon, re, key] of GEO_FIXED) if (!sats.some(s => re.test(s.name.toUpperCase()))) {
     const l = lon*D2R; sats.push({name, group:'weather', fixed:[Math.cos(l), Math.sin(l), 0], alt:35786, ins:[{key, ...INSTR[key]}], geo:true, along:[0, 0, 1], right:[0, 0, 0], vg:0}); }
