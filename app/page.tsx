@@ -6,6 +6,7 @@ const PAGES = [
       { href: "/sphere-display", title: "Sphere display", text: "Full-screen equirectangular frame for the LED sphere. Drag to rotate, F for full screen." },
       { href: "/sphere-tablet", title: "Tablet", text: "Full-screen world map forged by the swaths, with the satellite picker." },
       { href: "/sphere-studio", title: "Studio", text: "Every control: surface, light, material, export for Unreal, and live control of the other two pages." },
+      { href: "/sphere-orbits", title: "Orbits", text: "Every active satellite in the public catalogue, as its exact orbit. ?display for the sphere." },
       { href: "/sphere-eye", title: "Satellite eye", text: "Every Earth-observation satellite in real time, lighting only what it sees this instant. ?display for the sphere, ?tablet for the map." },
     ],
   },

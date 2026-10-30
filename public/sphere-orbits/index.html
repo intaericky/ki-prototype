@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sampling Sphere · Orbits</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/sphere-tests/tests.css">
+<style>
+#map{position:fixed;inset:0;width:100%;height:100%;display:none;touch-action:none}
+body.flat #map{display:block}
+body.flat #gl{display:none}
+.panel{width:290px}
+.sec{border-top:1px solid var(--faint);margin-top:10px;padding-top:10px}
+.k{font:10px/1 var(--ui);letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin:0 0 6px}
+.big{font:24px/1.1 var(--mono);color:var(--ink)}
+.small{font:11px/1.45 var(--ui);color:var(--mute);margin:4px 0 0}
+#clock{font:12px/1 var(--mono);color:var(--mute)}
+#classes{display:grid;gap:4px}
+#classes label{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;font:11px/1.3 var(--ui);cursor:pointer}
+#classes input{accent-color:#f2f1ee;margin:0}
+#classes span:last-child{font:11px var(--mono);color:var(--mute)}
+input[type=search]{width:100%;box-sizing:border-box;background:#000;color:var(--ink);border:1px solid var(--faint);font:12px var(--ui);padding:6px}
+#pick{font:11px/1.5 var(--ui)}
+#pick b{font-weight:500;color:var(--ink)}
+#pick .m{font:11px/1.5 var(--mono);color:var(--mute)}
+.note{right:330px}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="map" aria-label="Equirectangular frame of every orbit"></canvas>
+<header class="bar">
+  <nav class="seg" aria-label="Scene"><a href="/sphere-studio">Main studio</a><a href="/sphere-eye">Satellite eye</a><a href="/sphere-orbits" aria-current="page">Orbits</a></nav>
+  <div class="seg" id="segView"><button data-v="sphere">Sphere</button><button data-v="frame">360 frame</button></div>
+  <div class="seg" id="segLines" title="What each line is"><button data-v="planes">Orbits</button><button data-v="tracks">Ground tracks</button><button data-v="none">No lines</button></div>
+  <div class="seg" id="segFrame" title="Hold the Earth still, or hold the stars still"><button data-v="earth">Earth still</button><button data-v="stars">Stars still</button></div>
+  <div class="seg" id="segSpeed"><button data-v="1">Real time</button><button data-v="60">×60</button><button data-v="600">×600</button><button data-v="3600">×3600</button></div>
+  <span id="clock"></span>
+  <span class="spacer"></span>
+  <button class="btn" id="displayBtn">Display mode (F)</button>
+</header>
+<aside class="panel" id="panel">
+  <div>
+    <p class="k">In the catalogue</p>
+    <div class="big" id="count">–</div>
+    <p class="small" id="status">Loading the catalogue…</p>
+  </div>
+  <div class="sec">
+    <p class="k">Orbit</p>
+    <div id="classes"></div>
+  </div>
+  <div class="sec">
+    <p class="k">Find</p>
+    <input type="search" id="find" placeholder="Name, e.g. STARLINK, GPS, ISS" aria-label="Highlight satellites by name">
+    <p class="small" id="findN"></p>
+  </div>
+  <div class="sec">
+    <p class="k">Picked</p>
+    <div id="pick"><p class="small">Tap a dot.</p></div>
+  </div>
+  <div class="sec">
+    <p class="k">Lines</p>
+    <div id="sliders"></div>
+  </div>
+</aside>
+<p class="note" id="note"></p>
+<script src="/sphere-assets/vendor/satellite.min.js"></script>
+<script type="module">
+import * as THREE from '/sphere-assets/vendor/three.module.min.js';
+
+const $ = id => document.getElementById(id), Q = new URLSearchParams(location.search), TEST = location.hash === '#test';
+const MODE = Q.has('display') ? 'display' : 'studio';
+const PI = Math.PI, TAU = 2*PI, RE = 6378.137, MU = 398600.4418, D2R = PI/180;
+const W = 2048, H = 1024;                                   // equirect frame, stretched to the LED's 1920x1080
+
+/* ---------- the catalogue ---------- */
+const CLASSES = [
+  ['LEO', 'Low (apogee under 2,000 km)'],
+  ['MEO', 'Medium (navigation, 2,000 to 35,000 km)'],
+  ['GEO', 'Geostationary (one turn a day)'],
+  ['HEO', 'Highly elliptical (e > 0.25)'],
+];
+let sats = [], meta = {};
+function classify(rec){
+  const n = rec.no/60, a = Math.cbrt(MU/(n*n)), e = rec.ecco;   // rec.no: rad/min
+  const per = TAU/rec.no, apo = a*(1 + e) - RE, peri = a*(1 - e) - RE;
+  const cls = e > 0.25 ? 'HEO' : Math.abs(per - 1436.1) < 40 && e < 0.05 ? 'GEO' : apo < 2000 ? 'LEO' : 'MEO';
+  return {per, apo, peri, inc: rec.inclo/D2R, ecc: e, cls};
+}
+async function load(){
+  let data = null, from = 'live';
+  try { const r = await fetch('/api/orbits', {cache:'no-store'}); if (r.ok) { data = await r.json(); if (!data.sats || data.sats.length < 100) data = null; } } catch (e) {}
+  if (!data) { from = 'built-in'; const f = await (await fetch('/sphere-eye/fallback.json')).json(); data = {fetched: f.source, source: 'built-in sample', sats: f.sats.map(s => [s.name, s.l1, s.l2])}; }
+  for (const [name, l1, l2] of data.sats) {
+    let rec; try { rec = satellite.twoline2satrec(l1, l2); } catch (e) { continue; } if (!rec || rec.error || !rec.no) continue;
+    const o = {name: name.replace(/^0 /, ''), id: l1.slice(2, 7).trim(), rec, ...classify(rec), x: NaN, y: 0, hi: false};
+    if (o.peri < 80) continue;                              // already falling in
+    sats.push(o);
+  }
+  meta = {from, fetched: data.fetched, source: data.source};
+}
+
+/* ---------- time ---------- */
+let speed = +(Q.get('speed') || 1), simMs = Date.now(), lastReal = performance.now();
+const jdOf = ms => ms/86400000 + 2440587.5;
+function eci(o, ms){                                       // TEME position (km) at a moment, or null
+  const r = satellite.sgp4(o.rec, (jdOf(ms) - o.rec.jdsatepoch)*1440);
+  return r && r.position && !isNaN(r.position.x) ? r : null;
+}
+const lonOf = p => Math.atan2(p.y, p.x), latOf = p => Math.atan2(p.z, Math.hypot(p.x, p.y));
+const X = lon => ((lon/TAU + 0.5) % 1 + 1) % 1*W, Y = lat => (0.5 - lat/PI)*H;
+
+/* ---------- state ---------- */
+const P = {gain: 0.06, dots: 1, dot: 2.2};
+let lines = Q.get('lines') || 'planes', frame = Q.get('frame') || 'earth', view = MODE === 'display' ? 'frame' : 'sphere';
+const show = {LEO: true, MEO: true, GEO: true, HEO: true};
+let find = '', picked = null, yaw = 0, version = 0;
+const visible = o => show[o.cls];
+
+/* ---------- lines: drawn into a layer a slice at a time, then swapped in ---------- */
+let layer = null, layerT = 0, layerKind = 'none', job = null;
+function polyline(x, pts, a){                              // pts: [lon, lat]..., broken where it wraps
+  x.strokeStyle = `rgba(255,255,255,${Math.min(1, a).toFixed(3)})`; x.beginPath();
+  let px = null, py = 0;
+  for (const [lo, la] of pts) {
+    const cx = X(lo), cy = Y(la);
+    if (px === null) x.moveTo(cx, cy);
+    else if (Math.abs(cx - px) > W/2) {                    // crosses the seam: finish the segment off the edge, start it again from the other side
+      const k = cx < px ? W : -W; x.lineTo(cx + k, cy); x.moveTo(px - k, py); x.lineTo(cx, cy);
+    } else x.lineTo(cx, cy);
+    px = cx; py = cy;
+  }
+  x.stroke();
+}
+function drawPlane(x, o, t, a){                            // the orbit seen from the Earth's centre: the great circle of its plane
+  const s = eci(o, t); if (!s) return;
+  const r = s.position, v = s.velocity, rn = Math.hypot(r.x, r.y, r.z);
+  const u = [r.x/rn, r.y/rn, r.z/rn];
+  let h = [r.y*v.z - r.z*v.y, r.z*v.x - r.x*v.z, r.x*v.y - r.y*v.x]; const hn = Math.hypot(...h); h = h.map(c => c/hn);
+  const w = [h[1]*u[2] - h[2]*u[1], h[2]*u[0] - h[0]*u[2], h[0]*u[1] - h[1]*u[0]];
+  const pts = [];
+  for (let i = 0; i <= 256; i++) { const q = i/256*TAU, c = Math.cos(q), sn = Math.sin(q);
+    const p = {x: c*u[0] + sn*w[0], y: c*u[1] + sn*w[1], z: c*u[2] + sn*w[2]}; pts.push([lonOf(p), latOf(p)]); }
+  polyline(x, pts, a);
+}
+function drawTrack(x, o, t, a){                            // one full revolution under the satellite, half behind it and half ahead, on the turning Earth
+  const per = Math.min(o.per, 1440)*60000, N = o.cls === 'LEO' ? 180 : 360, pts = [];
+  for (let i = 0; i <= N; i++) { const tm = t + (i/N - 0.5)*per, s = eci(o, tm); if (!s) continue;
+    pts.push([lonOf(s.position) - satellite.gstime(jdOf(tm)), latOf(s.position)]); }
+  polyline(x, pts, a);
+}
+function startJob(){
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d'); x.globalCompositeOperation = 'lighter'; x.lineWidth = 1; x.lineJoin = 'round';
+  const list = lines === 'none' ? [] : sats.filter(visible).sort((a, b) => a.hi - b.hi);
+  job = {c, x, i: 0, t: simMs, kind: lines, list, v: version};
+}
+function runJob(ms){
+  if (!job) return;
+  const end = performance.now() + ms, any = sats.some(o => o.hi);
+  while (job.i < job.list.length && performance.now() < end) {
+    const o = job.list[job.i++], g = job.kind === 'tracks' ? P.gain*0.5 : P.gain, a = o.hi ? 0.9 : any ? g*0.35 : g;
+    if (job.kind === 'planes') drawPlane(job.x, o, job.t, a); else drawTrack(job.x, o, job.t, a);
+  }
+  if (job.i >= job.list.length) { layer = job.c; layerT = job.t; layerKind = job.kind; job = null; }
+}
+function stale(){                                          // when the drawn lines no longer match the moment or the settings
+  if (!layer || layerKind !== lines) return true;
+  const dt = Math.abs(simMs - layerT)/1000;
+  return lines === 'planes' ? dt > 6*3600 : lines === 'tracks' ? dt > 120 : false;
+}
+const touch = () => { version++; };
+
+/* ---------- the frame ---------- */
+const out = $('map'); out.width = W; out.height = H; const ox = out.getContext('2d');
+function gmstNow(){ return satellite.gstime(jdOf(simMs)); }
+function render(){
+  const g = gmstNow();
+  // where the layer's lines sit now: planes are fixed to the stars, tracks to the Earth
+  const base = frame === 'earth' ? -g : 0;
+  const lshift = layerKind === 'planes' ? base : layerKind === 'tracks' ? base + g : 0;
+  ox.globalCompositeOperation = 'source-over'; ox.fillStyle = '#000'; ox.fillRect(0, 0, W, H);
+  if (layer) { const s = Math.round((((lshift + yaw)/TAU*W) % W + W) % W); ox.drawImage(layer, s, 0); ox.drawImage(layer, s - W, 0); }
+  if (P.dots) {
+    const any = sats.some(o => o.hi), r = P.dot;
+    for (const o of sats) {
+      if (!visible(o)) { o.x = NaN; continue; }
+      const s = eci(o, simMs); if (!s) { o.x = NaN; continue; }
+      const lo = lonOf(s.position) + base + yaw;
+      o.x = X(lo); o.y = Y(latOf(s.position));
+      ox.fillStyle = o.hi || !any ? '#fff' : 'rgba(255,255,255,.45)';
+      ox.fillRect(o.x - r/2, o.y - r/2, r, r);
+    }
+    if (picked && !isNaN(picked.x)) { ox.strokeStyle = '#fff'; ox.lineWidth = 1.5; ox.strokeRect(picked.x - 7, picked.y - 7, 14, 14); }
+  }
+}
+
+/* ---------- sphere preview ---------- */
+const canvas = $('gl'), renderer = new THREE.WebGLRenderer({canvas, antialias: true, preserveDrawingBuffer: TEST});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(32, 1, 0.1, 100); cam.position.set(0, 0, 4.2);
+const tex = new THREE.CanvasTexture(out); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+const globe = new THREE.Mesh(new THREE.SphereGeometry(1, 128, 64), new THREE.MeshBasicMaterial({map: tex})); scene.add(globe);
+let orb = {yaw: 0, pitch: 0.25};
+function size(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); cam.aspect = w/h; cam.updateProjectionMatrix(); }
+addEventListener('resize', size); size();
+
+/* ---------- interaction ---------- */
+let drag = null;
+function pickAt(cx, cy){                                   // nearest dot to a frame pixel
+  let best = null, bd = 18*18;
+  for (const o of sats) { if (isNaN(o.x)) continue; let dx = Math.abs(o.x - cx); dx = Math.min(dx, W - dx); const d = dx*dx + (o.y - cy)**2; if (d < bd) { bd = d; best = o; } }
+  setPick(best);
+}
+function framePoint(e){                                    // pointer -> frame pixel, in either view
+  if (view === 'frame') { const r = out.getBoundingClientRect(); return [(e.clientX - r.left)/r.width*W, (e.clientY - r.top)/r.height*H]; }
+  const v = new THREE.Vector2(e.clientX/innerWidth*2 - 1, -e.clientY/innerHeight*2 + 1), rc = new THREE.Raycaster(); rc.setFromCamera(v, cam);
+  const hit = rc.intersectObject(globe)[0]; return hit ? [hit.uv.x*W, (1 - hit.uv.y)*H] : null;
+}
+for (const el of [canvas, out]) {
+  el.addEventListener('pointerdown', e => { drag = {x: e.clientX, y: e.clientY, yaw, oy: orb.yaw, op: orb.pitch, moved: false}; el.setPointerCapture(e.pointerId); });
+  el.addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    if (view === 'sphere') { orb.yaw = drag.oy - dx*0.006; orb.pitch = Math.max(-1.4, Math.min(1.4, drag.op + dy*0.006)); }
+    else { yaw = drag.yaw + dx*TAU/innerWidth; try { if (MODE === 'display') localStorage.setItem('orbits-yaw', yaw); } catch (err) {} } });
+  el.addEventListener('pointerup', e => { if (drag && !drag.moved) { const p = framePoint(e); if (p) pickAt(...p); } drag = null; });
+}
+if (MODE === 'display') try { yaw = +(localStorage.getItem('orbits-yaw') || 0) || 0; } catch (e) {}
+
+const fmt = n => Math.round(n).toLocaleString('en-US');
+function setPick(o){
+  if (picked && !find) picked.hi = false;
+  picked = o; if (o && !find) o.hi = true;
+  $('pick').innerHTML = o ? `<b>${o.name}</b><div class="m">NORAD ${o.id}<br>${fmt(o.peri)} to ${fmt(o.apo)} km<br>inclination ${o.inc.toFixed(1)}°<br>one turn every ${o.per < 120 ? o.per.toFixed(1) + ' min' : (o.per/60).toFixed(2) + ' h'}<br>elements from ${epochStr(o)}</div>` : '<p class="small">Tap a dot.</p>';
+  touch();
+}
+function epochStr(o){ const d = new Date((o.rec.jdsatepoch - 2440587.5)*86400000); return d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'; }
+function setFind(q){
+  find = q.trim().toUpperCase(); let n = 0;
+  for (const o of sats) { o.hi = !!find && o.name.toUpperCase().includes(find); n += o.hi; }
+  if (!find && picked) picked.hi = true;
+  $('findN').textContent = find ? `${fmt(n)} match` : '';
+  touch();
+}
+$('find').addEventListener('input', e => setFind(e.target.value));
+
+const segSync = (id, v) => document.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === String(v))));
+const seg = (id, f) => $(id).addEventListener('click', e => { const b = e.target.closest('button'); if (b) { f(b.dataset.v); segSync(id, b.dataset.v); } });
+seg('segView', v => { view = v; document.body.classList.toggle('flat', v === 'frame'); });
+seg('segLines', v => { lines = v; touch(); note(); });
+seg('segFrame', v => { frame = v; note(); });
+seg('segSpeed', v => { setSpeed(+v); });
+function setSpeed(v){ speed = v; if (v === 1) simMs = Date.now(); segSync('segSpeed', v); }
+segSync('segView', view); segSync('segLines', lines); segSync('segFrame', frame); segSync('segSpeed', speed);
+document.body.classList.toggle('flat', view === 'frame');
+
+const SL = [['gain', 'Line strength', 0.02, 1, 0.01], ['dot', 'Dot size', 1, 6, 0.1]];
+for (const [k, label, lo, hi, st] of SL) {
+  const l = document.createElement('label'); l.innerHTML = `<span>${label}</span><output>${P[k]}</output><input type="range" min="${lo}" max="${hi}" step="${st}" value="${P[k]}">`;
+  const inp = l.querySelector('input'), o = l.querySelector('output');
+  inp.oninput = () => { P[k] = +inp.value; o.textContent = inp.value; if (k === 'gain') touch(); };
+  $('sliders').append(l);
+}
+
+function note(){
+  const what = lines === 'planes'
+    ? 'Each line is one satellite\'s orbit, seen from the centre of the Earth: the plane it circles in, cut through the sphere.'
+    : lines === 'tracks' ? 'Each line is the ground under one satellite for one full turn, half behind it and half ahead, as the Earth turns beneath.'
+    : 'Dots only: where each satellite is now.';
+  const fr = frame === 'earth' ? 'The Earth is held still.' : 'The stars are held still; the Earth would turn underneath.';
+  $('note').textContent = `${what} ${fr} Every dot is a catalogued object. Satellites that states keep secret are not in this catalogue.`;
+}
+
+const setDisplay = on => { document.body.classList.toggle('display', on); if (on) { view = 'frame'; document.body.classList.add('flat'); segSync('segView', view); document.documentElement.requestFullscreen?.().catch(() => {}); } else if (document.fullscreenElement) document.exitFullscreen(); };
+$('displayBtn').onclick = () => setDisplay(!document.body.classList.contains('display'));
+addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && e.target.tagName !== 'INPUT') setDisplay(!document.body.classList.contains('display')); });
+let uiT = 0; addEventListener('pointermove', () => { if (!document.body.classList.contains('display')) return; document.body.classList.add('ui-on'); clearTimeout(uiT); uiT = setTimeout(() => document.body.classList.remove('ui-on'), 2500); });
+
+/* ---------- loop ---------- */
+let lastV = -1;
+function step(dtReal){
+  if (speed === 1) simMs = Date.now(); else simMs += dtReal*1000*speed;
+  if (!job && (stale() || lastV !== version)) { lastV = version; startJob(); }
+  else if (job && job.v !== version) { lastV = version; startJob(); }
+  runJob(TEST ? 1e9 : 10);
+  render();
+  $('clock').textContent = new Date(simMs).toISOString().slice(0, 19).replace('T', ' ') + ' UTC' + (job ? `  ·  drawing ${Math.round(job.i/Math.max(1, job.list.length)*100)}%` : '');
+}
+function draw3(){
+  if (view !== 'sphere') return;
+  tex.needsUpdate = true;
+  const cp = Math.cos(orb.pitch); cam.position.set(4.2*cp*Math.sin(orb.yaw), 4.2*Math.sin(orb.pitch), 4.2*cp*Math.cos(orb.yaw)); cam.lookAt(0, 0, 0);
+  renderer.render(scene, cam);
+}
+function loop(){ const now = performance.now(), dt = Math.min(0.25, (now - lastReal)/1000); lastReal = now; step(dt); draw3(); requestAnimationFrame(loop); }
+
+await load();
+if (MODE === 'display') setDisplay(true);
+const counts = {}; for (const o of sats) counts[o.cls] = (counts[o.cls] || 0) + 1;
+$('count').textContent = fmt(sats.length);
+$('status').textContent = meta.from === 'live' ? `${meta.source}, fetched ${String(meta.fetched).slice(0, 16).replace('T', ' ')} UTC` : `Live catalogue unavailable; showing a ${sats.length}-satellite sample.`;
+for (const [k, label] of CLASSES) {
+  const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" checked><span>${label}</span><span>${fmt(counts[k] || 0)}</span>`;
+  l.querySelector('input').onchange = e => { show[k] = e.target.checked; touch(); };
+  $('classes').append(l);
+}
+note();
+if (Q.get('find')) { $('find').value = Q.get('find'); setFind(Q.get('find')); }
+window.__orb = {sats, P, setSpeed, step, render, draw3, setPick, setFind, set: (k, v) => { if (k === 'lines') lines = v; if (k === 'frame') frame = v; if (k === 'view') { view = v; document.body.classList.toggle('flat', v === 'frame'); } touch(); }, job: () => job};
+if (!TEST) loop(); else { step(0); }
+</script>
+</body>
+</html>
