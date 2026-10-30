@@ -59,7 +59,7 @@ button,select{-webkit-tap-highlight-color:transparent}
 #carvePanel[data-tab=material] .grp-carve,#carvePanel[data-tab=material] .grp-light{display:none!important}
 #spacingRow{flex-wrap:wrap;gap:6px;margin-bottom:10px} #spacingRow .small{font:11px/1.3 var(--ui);color:var(--ink);width:100%}
 body.mode-tool .erode-only,body:not(.mode-tool) .tool-only{display:none!important}
-body.mode-glow .noglow-only,body:not(.mode-glow) .glow-only,body:not(.mode-pix) .pix-only{display:none!important}
+body.mode-glow .noglow-only,body:not(.mode-glow) .glow-only,body:not(.mode-pix) .pix-only,body:not(.mode-rib) .rib-only,body:not(.mode-layers) .layers-only{display:none!important}
 #sliders label{display:grid;grid-template-columns:1fr auto;gap:2px 8px;font:11px/1.3 var(--ui);color:var(--ink)}
 #sliders output{font:11px/1.3 var(--mono);color:var(--mute);font-variant-numeric:tabular-nums}
 #sliders input{grid-column:1/-1;width:100%;accent-color:#f2f1ee}
@@ -144,7 +144,7 @@ body.page-sphere.ui-on #carvePanel{display:block}
   <div class="bar top">
     <div class="group"><span class="label">Surface</span>
       <div class="seg" id="segStyle">
-        <button data-v="3">Afterglow</button><button data-v="4">Pixels</button><button data-v="0">Cut</button><button data-v="1">Build</button><button data-v="2">Erosion (earlier)</button>
+        <button data-v="3">Afterglow</button><button data-v="5">Ribbons</button><button data-v="4">Pixels</button><button data-v="0">Cut</button><button data-v="1">Build</button><button data-v="2">Erosion (earlier)</button>
       </div></div>
     <div class="group"><span class="label">View</span>
       <div class="seg" id="segView">
@@ -708,11 +708,11 @@ const svTrack = new THREE.LineSegments(svTrackGeo, lineMat(0.55)); svTrack.frust
 const SPEEDS = [1, 10, 60, 120, 600, 3600, 21600];
 const st = {regrow:10, follow:false, ms:T0, speed:4, paused:false, style:3, view:0, frame:0, tab:0, sel:0, gran:true, center:false, sub:20000};
 /* pages: 'studio' (everything), 'sphere' (only the equirect frame, full screen), 'tablet' (only the map). Settings can come from the URL:
-   ?style=afterglow|pixels|cut|build|erosion &frame=earth|sun|satellite &sat=TERRA &trail=6 &depth=223 &levels=even|orbit &speed=600 &loop=1 (days) &clock=1 */
+   ?style=afterglow|ribbons|pixels|cut|build|erosion &frame=earth|sun|satellite &sat=TERRA &trail=6 &depth=223 &levels=even|orbit &speed=600 &loop=1 (days) &clock=1 */
 const PAGE = window.PAGE || 'studio';
 const Q = new URLSearchParams(location.search);
 { const v = (k, list) => list.indexOf(Q.get(k)); let i;
-  if ((i = v('style', ['cut', 'build', 'erosion', 'afterglow', 'pixels'])) >= 0) st.style = i;
+  if ((i = v('style', ['cut', 'build', 'erosion', 'afterglow', 'pixels', 'ribbons'])) >= 0) st.style = i;
   if ((i = v('frame', ['earth', 'sun', 'satellite'])) >= 0) st.frame = i;
   if (Q.get('sat')) { i = SATS.findIndex(x => x[0].toLowerCase().replace(/[^a-z0-9]/g, '') === Q.get('sat').toLowerCase().replace(/[^a-z0-9]/g, '')); if (i >= 0) st.sel = i; }
   if (Q.get('speed')) { i = SPEEDS.indexOf(+Q.get('speed')); if (i >= 0) st.speed = i; } }
@@ -988,6 +988,103 @@ function pixUpload(){
   pixLo = PIXN; pixHi = 0;
 }
 
+/* ================= ribbons: each satellite one large curved sheet, the width of its swath, at its own level ================= */
+/* The last hours of each swath become a single smooth sheet: a shallow arch across (so it reads as a solid form, not a line),
+   lifted to its satellite's level (lowest orbit nearest the surface), so the twenty sheets physically stack and fold over one
+   another. The light on it is the afterglow: brightest where it is looking now, fading with age, and across it the instrument's
+   own profile. Big forms with soft gradients, which survive the sphere's coarse LEDs. */
+const RIBK = 11, RIBMAX = N*420;                          // columns across a sheet; segments in all
+const ribP = {arch:0.18, edge:0.5};
+const ribGeo = new THREE.InstancedBufferGeometry();
+{ const pos = [], idx = [];
+  for (let v = 0; v < 2; v++) for (let k = 0; k < RIBK; k++) pos.push(-1 + 2*k/(RIBK - 1), v, 0);
+  for (let k = 0; k < RIBK - 1; k++) idx.push(k, k + 1, RIBK + k + 1, k, RIBK + k + 1, RIBK + k);
+  ribGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3)); ribGeo.setIndex(idx); }
+const ribAttr = {};
+for (const k of ['aG0', 'aH0', 'aG1', 'aH1', 'aS']) { ribAttr[k] = new THREE.InstancedBufferAttribute(new Float32Array(RIBMAX*4), 4); ribAttr[k].setUsage(THREE.DynamicDrawUsage); ribGeo.setAttribute(k, ribAttr[k]); }
+ribGeo.instanceCount = 0;
+const ribU = {uNow:{value:0}, uTrail:{value:360}, uDecay:{value:3}, uLevel:pixU.uLevel, uSettle:pixU.uSettle, uArch:{value:0.18}, uEdge:{value:0.5}, uDecl:{value:0},
+  uSun:pixU.uSun, uSel:pixU.uSel, uFocus:pixU.uFocus, uGain:pixU.uGain, uGamma:pixU.uGamma, uInk:meshUniforms.uInk, uExpo:meshUniforms.uExpo,
+  uLAz:meshUniforms.uLAz, uLEl:meshUniforms.uLEl, uSheen:meshUniforms.uSheenG, uInside:{value:0}};
+const ribMat = new THREE.ShaderMaterial({uniforms:ribU, side:THREE.DoubleSide,
+  vertexShader:`uniform float uNow; uniform float uTrail; uniform float uLevel; uniform float uSettle; uniform float uArch; uniform float uSun; uniform float uInside;
+    attribute vec4 aG0; attribute vec4 aH0; attribute vec4 aG1; attribute vec4 aH1; attribute vec4 aS;
+    varying float vAge; varying float vU; varying vec3 vN; varying vec3 vR; varying float vSsl; varying vec3 vE; varying vec4 vS;
+    vec3 rz(vec3 v, float a){ float c = cos(a), s = sin(a); return vec3(c*v.x - s*v.y, s*v.x + c*v.y, v.z); }
+    void main(){
+      float v = position.y, u = position.x;
+      vec3 g = normalize(mix(aG0.xyz, aG1.xyz, v)), h = normalize(mix(aH0.xyz, aH1.xyz, v));
+      float tMin = mix(aG0.w, aG1.w, v), ssl = mix(aH0.w, aH1.w, v);
+      if (uSun > 0.5) { g = rz(g, -ssl); h = rz(h, -ssl); }
+      float age = (uNow - tMin)/uTrail, W = aS.z;
+      vec3 e = normalize(g*cos(u*W) + h*sin(u*W));                          // ground point under this vertex (earth-fixed)
+      float sgn = uInside > 0.5 ? -1.0 : 1.0;                               // the 360 camera is inside: layers mirrored inward
+      float lift = uLevel*aS.y*(1.0 - uSettle*clamp(age, 0.0, 1.0));
+      float arch = uArch*W*(1.0 - u*u);
+      float r = 1.0 + sgn*(lift + arch);
+      vec3 n3 = vec3(e.x, e.z, -e.y), h3 = vec3(h.x, h.z, -h.y);
+      // normal of the arch: tilted across the sheet by its slope
+      vec3 nE = normalize(n3 + sgn*(2.0*u*uArch)*(h3 - n3*dot(h3, n3)));
+      mat3 M = mat3(modelMatrix);
+      vN = normalize(M*nE); vR = normalize(M*n3); vAge = age; vU = u; vSsl = ssl; vE = e; vS = aS;
+      gl_Position = projectionMatrix*modelViewMatrix*vec4(n3*r, 1.0);
+    }`,
+  fragmentShader:`uniform float uNow; uniform float uTrail; uniform float uDecay; uniform float uEdge; uniform float uDecl; uniform float uSel; uniform float uFocus; uniform float uGain; uniform float uGamma;
+    uniform float uInk; uniform float uExpo; uniform float uLAz; uniform float uLEl; uniform float uSheen;
+    varying float vAge; varying float vU; varying vec3 vN; varying vec3 vR; varying float vSsl; varying vec3 vE; varying vec4 vS;
+    void main(){
+      if (vAge < 0.0 || vAge > 1.0) discard;
+      float ageMin = vAge*uTrail, fade = exp(-vAge*uDecay)*(1.0 - smoothstep(0.82, 1.0, vAge)), head = 1.2*exp(-ageMin/4.0);
+      float pr = floor(vS.w + 0.01), opt = vS.w - pr > 0.25 ? 1.0 : 0.0;
+      float c = vU, ac = abs(c), prof;
+      if (pr < 0.5) prof = 1.0 - 0.72*ac*ac; else if (pr < 1.5) prof = 0.82 + 0.18*(1.0 - ac*ac*ac*ac);
+      else if (pr < 2.5) prof = 0.35 + 0.65*(1.0 - (c*0.5 + 0.5)); else if (pr < 3.5) prof = ac < 0.17 ? 0.0 : 0.9;
+      else if (pr < 4.5) prof = 0.45 + 0.55*pow(ac, 6.0); else prof = 1.0;
+      if (prof <= 0.0) discard;                                              // SWOT: the gap beneath it is real
+      vec3 sun = vec3(cos(uDecl)*cos(vSsl), cos(uDecl)*sin(vSsl), sin(uDecl));
+      float sunF = opt > 0.5 ? smoothstep(-0.03, 0.12, dot(vE, sun)) : 1.0;
+      float gain = abs(vS.x - uSel) < 0.5 ? 1.0 : 1.0 - uFocus;
+      float b = (1.0 - exp(-1.6*uGain*fade*prof*sunF*(1.0 + head)))*gain;
+      float t = pow(clamp(b, 0.0, 1.0), uGamma);
+      if (t < 0.015) discard;
+      vec3 up = vec3(0.0, 1.0, 0.0) - vR*vR.y; float ul = length(up);
+      vec3 tUp = ul > 1e-3 ? up/ul : vec3(1.0, 0.0, 0.0), tSide = cross(vR, tUp);
+      vec3 L = normalize(sin(uLEl)*vR + cos(uLEl)*(cos(uLAz)*tUp + sin(uLAz)*tSide));
+      vec3 N = normalize(vN);
+      float shade = 1.0 + 1.1*(max(dot(N, L), 0.0) - max(dot(vR, L), 0.0));  // the arch turning toward the light reads lighter
+      float spec = pow(max(dot(N, normalize(L + vR)), 0.0), 50.0);
+      float rim = uEdge*smoothstep(0.9, 1.0, ac);                            // the sheet's edges catch a line of light
+      float val = uInk > 0.5 ? 1.0 - 0.9*t*(2.0 - shade) - 0.4*rim*t : t*shade + rim*t*0.6;
+      val += uSheen*spec*(uInk > 0.5 ? 0.25 : 0.1 + 0.8*t);
+      gl_FragColor = vec4(vec3(clamp(val*uExpo, 0.0, 1.0)), 1.0);
+    }`});
+const ribMesh = new THREE.Mesh(ribGeo, ribMat), ribCap = new THREE.Mesh(ribGeo, ribMat);
+ribMesh.frustumCulled = ribCap.frustumCulled = false; ribMesh.visible = ribCap.visible = false;
+ribMesh.onBeforeRender = () => { ribU.uInside.value = 0; }; ribCap.onBeforeRender = () => { ribU.uInside.value = 1; };
+content.add(ribMesh); capContent.add(ribCap);
+function buildRibbons(now){
+  const W = toolP.trail*3600000, dt = Math.max(30000, Math.ceil(W/360/10000)*10000);
+  const t0 = now - W, k0 = Math.floor(t0/dt) + 1, k1 = Math.floor(now/dt);
+  const A = ribAttr; let n = 0;
+  for (const [si, s] of sats.entries()) {
+    const T = [t0], pts = [groundAt(s, t0, false)];
+    for (let k = k0; k <= k1; k++) if (k*dt > t0 && k*dt < now) { T.push(k*dt); pts.push(groundAt(s, k*dt, true)); }
+    T.push(now); pts.push(groundAt(s, now, false));
+    const R = []; for (let j = 0; j < pts.length; j++) if (pts[j]) R.push([pts[j].geo, T[j], pts[j].F.ssl]);
+    const lvl = (s.rank + 1)/N, code = s.profile + (s.optical ? 0.5 : 0);
+    const H = R.map((r, j) => { const a = R[Math.max(0, j - 1)][0], b = R[Math.min(R.length - 1, j + 1)][0]; return norm(cross3(a, b)); });
+    for (let j = 0; j < R.length - 1 && n < RIBMAX; j++) {
+      const [g0, ta, s0] = R[j], [g1, tb, s1] = R[j + 1];
+      if (g0[0]*g1[0] + g0[1]*g1[1] + g0[2]*g1[2] < 0.9) continue;           // a gap in the data, not a jump across the globe
+      A.aG0.array.set([g0[0], g0[1], g0[2], (ta - T0)/60000], n*4); A.aH0.array.set([H[j][0], H[j][1], H[j][2], s0], n*4);
+      A.aG1.array.set([g1[0], g1[1], g1[2], (tb - T0)/60000], n*4); A.aH1.array.set([H[j + 1][0], H[j + 1][1], H[j + 1][2], s0 + wrap180((s1 - s0)/D2R)*D2R], n*4);
+      A.aS.array.set([si, lvl, s.halfW, code], n*4); n++;
+    }
+  }
+  ribGeo.instanceCount = n;
+  for (const k in A) { A[k].clearUpdateRanges(); A[k].addUpdateRange(0, n*4); A[k].needsUpdate = true; }
+}
+
 function stepSats(ms, record){
   const date = new Date(ms), gmst = satellite.gstime(date), sun = sunECI(ms);
   const sunGeo = rotZ(sun, -gmst), ssl = Math.atan2(sunGeo[1], sunGeo[0]), sunSol = rotZ(sunGeo, -ssl);
@@ -1066,10 +1163,12 @@ const SLIDERS = [
   ['spacing', 'Pixels: a row every', 30, 250, 5, pixP.spacing, v => v + ' km', v => pixP.spacing = v, 'pix'],
   ['psize', 'Pixel size', 0.3, 1.4, 0.01, pixP.size, v => v.toFixed(2) + '×', v => pixP.size = v, 'pix'],
   ['stretch', 'True footprint shape', 0, 1, 0.01, pixP.stretch, v => Math.round(v*100) + '%', v => pixP.stretch = v, 'pix'],
-  ['plevel', 'Layer height (lowest to highest orbit)', 0, 0.12, 0.001, pixP.level, v => (v*RE).toFixed(0) + ' km', v => pixP.level = v, 'pix'],
-  ['settle', 'Settle toward the surface as they age', 0, 1, 0.01, pixP.settle, v => Math.round(v*100) + '%', v => pixP.settle = v, 'pix'],
+  ['plevel', 'Layer height (lowest to highest orbit)', 0, 0.12, 0.001, pixP.level, v => (v*RE).toFixed(0) + ' km', v => pixP.level = v, 'layers'],
+  ['settle', 'Settle toward the surface as they age', 0, 1, 0.01, pixP.settle, v => Math.round(v*100) + '%', v => pixP.settle = v, 'layers'],
+  ['arch', 'Ribbon curvature', 0, 0.6, 0.01, ribP.arch, v => v.toFixed(2), v => ribP.arch = v, 'rib'],
+  ['redge', 'Ribbon edge light', 0, 1.5, 0.01, ribP.edge, v => v.toFixed(2), v => ribP.edge = v, 'rib'],
   ['drift', 'Drift as they age', 0, 1, 0.01, pixP.drift, v => v.toFixed(2), v => pixP.drift = v, 'pix'],
-  ['base', 'Afterglow underneath', 0, 1, 0.01, pixP.base, v => Math.round(v*100) + '%', v => pixP.base = v, 'pix'],
+  ['base', 'Afterglow underneath', 0, 1, 0.01, pixP.base, v => Math.round(v*100) + '%', v => pixP.base = v, 'layers'],
   ['psheen', 'Pixel sheen', 0, 2, 0.01, pixP.sheen, v => v.toFixed(2), v => pixP.sheen = v, 'pix'],
   ['gamma', 'Contrast', 0.5, 2.5, 0.01, glowP.gamma, v => v.toFixed(2), v => meshUniforms.uGGamma.value = glowP.gamma = v, 'glow'],
   ['lines', 'Granule lines (archive time slices)', 0, 1.5, 0.01, glowP.lines, v => v.toFixed(2), v => glowP.lines = v, 'glow'],
@@ -1162,7 +1261,7 @@ $('resetParams').onclick = () => {
     if (tab === 'light') { LOOK.lightMode = 0; LOOK.tone = 1; } applyLook(); saveLook(); syncLookUI(); } };
 $('linkParams').onclick = async () => {
   const p = new URLSearchParams();
-  p.set('style', ['cut', 'build', 'erosion', 'afterglow', 'pixels'][st.style]); p.set('frame', ['earth', 'sun', 'satellite'][st.frame]);
+  p.set('style', ['cut', 'build', 'erosion', 'afterglow', 'pixels', 'ribbons'][st.style]); p.set('frame', ['earth', 'sun', 'satellite'][st.frame]);
   if (st.frame === 2) p.set('sat', sats[st.sel].name);
   p.set('trail', +toolP.trail.toFixed(3)); p.set('depth', Math.round(toolP.depth*RE)); p.set('levels', toolP.spacing ? 'orbit' : 'even');
   p.set('relief', meshUniforms.uRelief.value); p.set('speed', SPEEDS[st.speed]); if (st.style === 3 && glowP.ink) p.set('ink', 'dark');
@@ -1206,7 +1305,8 @@ const STYLE_NOTES = [
   'Build: the same tools, adding instead of cutting, so each satellite stands up as its own layer.',
   'Erosion (earlier): every pass planes one more layer off and unseen ground grows back, so the surface remembers.',
   'Afterglow: the Earth exists here only as light from being looked at. Each satellite\'s last hours of swath glow brightest where it is looking now and fade with the age of the observation; across the swath the light follows how its instrument sees (a scanner sharpest straight down, a pushbroom even, radar to one side, a conical radiometer at its edges, SWOT with a gap beneath, a laser as a thread). Thin cross lines are the time slices the archive cuts the data into. Where satellites overlap, the light adds up; black is where no one is looking, and the faint drifting grain is what models fill in. Pick a satellite on the tablet to bring its layer forward.',
-  'Pixels: the same light, laid down as data actually arrives, in rows of pixels across each swath, enlarged so they can be seen. Each satellite\'s pixels float at its own level (lowest orbit nearest the surface); fresh ones are bright, older ones dim and settle. A scanner\'s pixels stretch toward its swath edges, as real MODIS and VIIRS footprints do; conical radiometers see in big footprints, lasers in small ones. Underneath, the afterglow.'];
+  'Pixels: the same light, laid down as data actually arrives, in rows of pixels across each swath, enlarged so they can be seen. Each satellite\'s pixels float at its own level (lowest orbit nearest the surface); fresh ones are bright, older ones dim and settle. A scanner\'s pixels stretch toward its swath edges, as real MODIS and VIIRS footprints do; conical radiometers see in big footprints, lasers in small ones. Underneath, the afterglow.',
+  'Ribbons: each satellite\'s last hours of swath as one large curved sheet, the width of what it sees, lifted to its own level (lowest orbit nearest the surface), so the sheets stack and fold over each other. The light on each is its afterglow: brightest where it is looking now, fading with the age of the observation, shaped across by its instrument. Big forms and soft gradients that hold up on the sphere\'s coarse LEDs.'];
 const VIEW_NOTES = [
   'Mesh: the white relief as it exists in 3D. Drag to orbit. Each point is lit from its own upper left, so the relief reads the same from every side of the physical sphere.',
   'On LED sphere: the mesh filmed by a 360 camera at its centre, unwrapped to an equirectangular frame, and wrapped back onto a plain sphere. Drag around it: what survives is the shading, not parallax.',
@@ -1372,13 +1472,17 @@ function prepareSurface(){
   else if (st.style >= 3 && PAGE !== 'tablet') { meshUniforms.uSign.value = 1; meshUniforms.uDark.value = 0; meshUniforms.uOccD.value = 0.01;
     stampGlow(st.ms, st.frame === 1); const G = glowMat.uniforms; G.uMem.value = acc[st.frame === 1 ? 1 : 0].texture; G.uTime.value = performance.now()/1000;
     pass(glowMat, heightRT);
-    const pix = st.style === 4; pixMesh.visible = pixCap.visible = pix; meshUniforms.uGlowBase.value = pix ? pixP.base : 1;
+    const pix = st.style === 4, rib = st.style === 5; pixMesh.visible = pixCap.visible = pix; ribMesh.visible = ribCap.visible = rib; meshUniforms.uGlowBase.value = pix || rib ? pixP.base : 1;
+    if (rib) { const P = pixU, R = ribU; R.uNow.value = (st.ms - T0)/60000; R.uTrail.value = toolP.trail*60; R.uDecay.value = glowP.fade; R.uArch.value = ribP.arch; R.uEdge.value = ribP.edge;
+      R.uDecl.value = Math.asin(Math.max(-1, Math.min(1, info.sunGeo ? info.sunGeo[2] : 0)));
+      P.uLevel.value = pixP.level; P.uSettle.value = pixP.settle; P.uSun.value = st.frame === 1 ? 1 : 0; P.uSel.value = st.sel; P.uFocus.value = glowP.focus; P.uGain.value = glowP.gain; P.uGamma.value = glowP.gamma;
+      buildRibbons(st.ms); }
     if (pix) { const P = pixU; P.uNow.value = (st.ms - T0)/60000; P.uTrail.value = toolP.trail*60; P.uDecay.value = glowP.fade; P.uSize.value = pixP.spacing/RE*0.5*pixP.size;
       P.uLevel.value = pixP.level; P.uSettle.value = pixP.settle; P.uDrift.value = pixP.drift; P.uStretch.value = pixP.stretch; P.uSun.value = st.frame === 1 ? 1 : 0; P.uSel.value = st.sel;
       P.uFocus.value = glowP.focus; P.uGain.value = glowP.gain; P.uGamma.value = glowP.gamma; P.uSheen.value = pixP.sheen; pixUpload(); } }
   else if (PAGE !== 'tablet') { meshUniforms.uSign.value = st.style === 1 ? 1 : -1; meshUniforms.uDark.value = st.style === 1 ? 0 : 0.6/toolP.depth; meshUniforms.uOccD.value = toolP.depth*0.6; stampTools(st.ms, st.frame === 1); }
-  document.body.classList.toggle('mode-tool', st.style !== 2); document.body.classList.toggle('mode-glow', st.style >= 3); document.body.classList.toggle('mode-pix', st.style === 4);
-  meshUniforms.uGlow.value = st.style >= 3 ? 1 : 0; if (st.style !== 4) pixMesh.visible = pixCap.visible = false;
+  document.body.classList.toggle('mode-tool', st.style !== 2); document.body.classList.toggle('mode-glow', st.style >= 3); document.body.classList.toggle('mode-pix', st.style === 4); document.body.classList.toggle('mode-rib', st.style === 5); document.body.classList.toggle('mode-layers', st.style === 4 || st.style === 5);
+  meshUniforms.uGlow.value = st.style >= 3 ? 1 : 0; if (st.style !== 4) pixMesh.visible = pixCap.visible = false; if (st.style !== 5) ribMesh.visible = ribCap.visible = false;
 }
 function drawScreen(dtReal){
   const fs = sats[st.sel];
@@ -1578,7 +1682,7 @@ const stamp = ms => new Date(ms).toISOString().slice(0, 16).replace(/[-:]/g, '')
 function metaJSON(startMs, n){
   const frameName = ['Earth-fixed', 'Sun-fixed', 'Satellite (maps stay Earth-fixed)'][st.frame];
   return JSON.stringify({
-    project:'Sampling Sphere Studio', surface:['Cut', 'Build', 'Erosion', 'Afterglow', 'Pixels'][st.style], frame:frameName,
+    project:'Sampling Sphere Studio', surface:['Cut', 'Build', 'Erosion', 'Afterglow', 'Pixels', 'Ribbons'][st.style], frame:frameName,
     start_utc:new Date(startMs).toISOString(), frames:n, minutes_per_frame:n > 1 ? EXP.step : 0,
     projection:'equirectangular, 2:1, north up, left edge 180°W, centre 0°; u=(lon+180)/360, v=(90-lat)/180',
     height:{format:'16-bit greyscale PNG', meaning:st.style === 1 || st.style >= 3 ? '0 = original surface, 1 = top of the highest layer' : '1 = original surface, 0 = bottom of the deepest layer',
@@ -1593,7 +1697,7 @@ async function runExport(progress){
   const w = Math.min(EXP.size, HI ? 4096 : 2048), kinds = EXP.map === 'all' ? ['shaded', 'height', 'normal'] : [EXP.map];
   const single = EXP.fmt === 'png', n = single ? 1 : Math.max(1, Math.min(3600, EXP.frames|0)), startMs = st.ms;
   exporting = true; expCancel = false;
-  const base = `sphere-${['cut', 'build', 'erosion', 'afterglow', 'pixels'][st.style]}-${stamp(startMs)}-${w}`;
+  const base = `sphere-${['cut', 'build', 'erosion', 'afterglow', 'pixels', 'ribbons'][st.style]}-${stamp(startMs)}-${w}`;
   try {
     let zip, gif, vid;
     if (EXP.fmt === 'seq' || (single && kinds.length > 1)) zip = zipWriter();
