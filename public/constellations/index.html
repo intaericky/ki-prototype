@@ -345,9 +345,9 @@ function audio(){
   try {
     if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)();
       const comp = ac.createDynamicsCompressor(); comp.threshold.value = -20; comp.ratio.value = 8;
-      master = ac.createGain(); master.gain.value = 0.7; master.connect(comp); comp.connect(ac.destination); }
-    if (ac.state !== 'running') ac.resume().then(() => { soundState(); if (!chimed) { chimed = true; setTimeout(() => pluck(440, 0.5, 'MEO', 0.5), 60); } }).catch(soundState);
-    else if (!chimed) { chimed = true; pluck(440, 0.5, 'MEO', 0.5); }   // one soft note: sound is on
+      master = ac.createGain(); master.gain.value = 1.6; master.connect(comp); comp.connect(ac.destination); }
+    if (ac.state !== 'running') ac.resume().then(() => { soundState(); if (!chimed) { chimed = true; setTimeout(() => pluck(660, 0.5, "MEO", 1), 60); } }).catch(soundState);
+    else if (!chimed) { chimed = true; pluck(660, 0.5, "MEO", 1); }   // one soft note: sound is on
   } catch (e) { soundErr = e.message; }
   soundState();
 }
