@@ -28,7 +28,11 @@ input[type=search]{width:100%;box-sizing:border-box;background:#000;color:var(--
 #drawbar{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:12px;align-items:center;padding:6px 8px 6px 14px;background:rgba(0,0,0,.7);border:1px solid var(--faint);z-index:4;font:12px/1.3 var(--ui);color:var(--ink);max-width:calc(100% - 32px);box-sizing:border-box}
 #drawbar #drawBtns{display:flex;gap:6px}
 #drawbar:not(.drawing) #drawBtns{display:none}
-#drawbar:not(.drawing){color:var(--mute);padding-right:14px}
+#drawbar #strBtns{display:none;gap:6px}
+#drawbar.strings #strBtns{display:flex}
+#drawbar .seg{flex:none}
+#drawbar:not(.drawing){color:var(--mute);padding-right:8px}
+#drawbar{padding-left:6px}
 #finishBtn{background:var(--ink);color:#000}
 body.display #drawbar{display:none}
 </style>
@@ -72,7 +76,7 @@ body.display #drawbar{display:none}
   </div>
 </aside>
 <p class="note" id="note"></p>
-<div id="drawbar" role="toolbar" aria-label="Constellation"><span id="drawMsg"></span><span id="drawBtns"><button class="btn" id="undoBtn">Undo</button><button class="btn" id="cancelBtn">Cancel</button><button class="btn" id="finishBtn">Finish</button></span></div>
+<div id="drawbar" role="toolbar" aria-label="Draw"><span class="seg" id="segTool"><button data-v="cons">Constellations</button><button data-v="strings">Strings</button></span><span id="drawMsg"></span><span id="strBtns"><button class="btn" id="soundBtn">Sound</button><button class="btn" id="clearStrBtn">Cut all</button></span><span id="drawBtns"><button class="btn" id="undoBtn">Undo</button><button class="btn" id="cancelBtn">Cancel</button><button class="btn" id="finishBtn">Finish</button></span></div>
 <script src="/sphere-assets/vendor/satellite.min.js"></script>
 <script type="module">
 import * as THREE from '/sphere-assets/vendor/three.module.min.js';
@@ -209,6 +213,7 @@ function render(){
       const s = eci(o, simMs); if (!s) { o.x = NaN; continue; }
       const lo = lonOf(s.position) + base + yaw, la = latOf(s.position);
       o.x = X(lo); o.y = Y(la);
+      if (strings.length) { const u = unit(lonOf(s.position) - g, la); if (o.u && (!any || o.hi)) crossings(o, o.u, u); o.u = u; } else o.u = null;
       const b = o.hi || !any ? 1 : 0.4;
       if (flat) {
         const rx = Math.max(1, Math.min(W, Math.round(ry*kx/Math.max(0.02, Math.cos(la)))));
@@ -269,11 +274,16 @@ function framePoint(e){                                    // pointer -> frame p
   const hit = rc.intersectObject(globe)[0]; return hit ? [hit.uv.x*W, (1 - hit.uv.y)*H] : null;
 }
 for (const el of [canvas, out]) {
-  el.addEventListener('pointerdown', e => { drag = {x: e.clientX, y: e.clientY, yaw, oy: orb.yaw, op: orb.pitch, moved: false}; el.setPointerCapture(e.pointerId); });
+  el.addEventListener('pointerdown', e => { drag = {x: e.clientX, y: e.clientY, yaw, oy: orb.yaw, op: orb.pitch, moved: false};
+    if (tool === 'strings') { const p = framePoint(e); if (p) { drag.str = p; strDrag = [p, p]; } }    // strings: a drag that starts on the sphere stretches a string
+    el.setPointerCapture(e.pointerId); });
   el.addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    if (drag.str) { const p = framePoint(e); if (p) strDrag = [drag.str, p]; return; }
     if (view === 'sphere') { orb.yaw = drag.oy - dx*0.006; orb.pitch = Math.max(-1.4, Math.min(1.4, drag.op + dy*0.006)); }
     else { yaw = drag.yaw + dx*TAU/innerWidth; try { if (MODE === 'display') localStorage.setItem('orbits-yaw', yaw); } catch (err) {} } });
-  el.addEventListener('pointerup', e => { if (drag && !drag.moved) { const p = framePoint(e); tap(p); } drag = null; });
+  el.addEventListener('pointerup', e => {
+    if (drag && drag.str) { if (drag.moved && strDrag) addString(...strDrag); else cutString(framePoint(e)); strDrag = null; drag = null; return; }
+    if (drag && !drag.moved && tool === 'cons') { const p = framePoint(e); tap(p); } drag = null; });
   el.addEventListener('pointermove', e => { hover = draft && !drag ? framePoint(e) : null; });
   el.addEventListener('pointerleave', () => { hover = null; });
 }
@@ -329,6 +339,10 @@ addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && e.tar
 let uiT = 0; addEventListener('pointermove', () => { if (!document.body.classList.contains('display')) return; document.body.classList.add('ui-on'); clearTimeout(uiT); uiT = setTimeout(() => document.body.classList.remove('ui-on'), 2500); });
 
 
+// the instrument's state (used by both sections below)
+const STR = 'sampling-sphere/v1/orbits/strings', SCALE = [0, 3, 5, 7, 10];
+let pluckCount = 0, tool = Q.get('tool') === 'strings' ? 'strings' : 'cons', strings = [], strDrag = null, soundOn = true, ac = null, master = null, voices = 0, plucksThisFrame = 0;
+
 /* ---------- constellations: join satellites into a shape, then watch the orbits pull it apart ---------- */
 // Shared through the same public relay as the other pages: every finished constellation is kept there (retained),
 // and a drawing in progress is broadcast so the sphere shows it as it is made.
@@ -376,6 +390,7 @@ function drawConstellations(flat){
     const P3 = starsNow(draft, 0), pen = P3[draft.pen];
     if (pen && hover) { const lo = (hover[0]/W - 0.5)*TAU, la = (0.5 - hover[1]/H)*PI; list.push([arc(pen, unit(lo, la)), 0.45]); }
   }
+  stringLines(list);
   if (flat) { ox.globalCompositeOperation = 'source-over'; ox.lineWidth = 1; for (const [pts, b] of list) polyline(ox, pts, b); return; }
   let v = 0;
   for (const [pts, b] of list) for (let i = 0; i < pts.length - 1 && v < MAXV - 2; i++) for (const [lo, la] of [pts[i], pts[i + 1]]) {
@@ -426,7 +441,10 @@ function finish(){
 function changed(){ draftSet = new Set(draft ? draft.stars : []); bar(); sendDraft(); }
 const ago = ms => { const m = Math.round(ms/60000); return m < 0 ? 'later than the clock shows' : m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 48*60 ? `${Math.floor(m/60)} h ${m % 60} min ago` : `${Math.round(m/1440)} days ago`; };
 function bar(){
-  const el = $('drawbar'); el.classList.toggle('drawing', !!draft);
+  const el = $('drawbar'); el.classList.toggle('drawing', !!draft); el.classList.toggle('strings', tool === 'strings'); segSync('segTool', tool);
+  if (tool === 'strings') { const n = strings.length;
+    $('drawMsg').textContent = n ? `${n} string${n === 1 ? '' : 's'} · every satellite that crosses one plays it · drag to add · tap one to cut it` : 'Drag across the sphere to stretch a string. Every satellite that crosses it will play it.';
+    $('soundBtn').setAttribute('aria-pressed', String(soundOn)); return; }
   if (draft) { const n = draft.stars.length, e = draft.edges.length;
     $('drawMsg').textContent = `${n} star${n === 1 ? '' : 's'}, ${e} line${e === 1 ? '' : 's'} · tap satellites to join them · tap the last one again to finish`;
     $('undoBtn').textContent = draft.hist.length ? 'Undo' : 'Cancel'; return; }
@@ -460,8 +478,9 @@ function sendDraft(){
 try { for (const c of JSON.parse(localStorage.getItem('orbits-constellations') || '[]')) add(c, false); } catch (e) {}
 if (!Q.has('solo')) import('/sphere-assets/vendor/mqtt.esm.js').then(m => {
   const mqtt = m.default || m; mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', {connectTimeout: 30000, keepalive: 30});
-  mq.on('connect', () => { mq.subscribe(`${TOPIC}/c/+`); mq.subscribe(`${TOPIC}/draft/+`); for (const c of cons) mq.publish(`${TOPIC}/c/${c.id}`, JSON.stringify(c), {retain: true, qos: 1}); });
+  mq.on('connect', () => { mq.subscribe(STR); mq.subscribe(`${TOPIC}/draft/+`); for (const c of cons) mq.publish(`${TOPIC}/c/${c.id}`, JSON.stringify(c), {retain: true, qos: 1}); });
   mq.on('message', (t, msg) => {
+    if (t === STR) { let d = null; try { d = JSON.parse(msg.toString()); } catch (e) { return; } setStrings(d, false); return; }
     const who = t.split('/').pop(); let d = null; try { d = msg.length ? JSON.parse(msg.toString()) : null; } catch (e) { return; }
     if (t.includes('/draft/')) { if (who === ME) return; const c = d && clean({...d, id: 'd' + who.replace(/[^a-z0-9]/g, '').slice(0, 20)}); if (c) others.set(who, {d: c, t: Date.now()}); else others.delete(who); return; }
     add(d, false);
@@ -469,9 +488,103 @@ if (!Q.has('solo')) import('/sphere-assets/vendor/mqtt.esm.js').then(m => {
 }).catch(() => {});
 setInterval(() => { const now = Date.now(); for (const [k, v] of others) if (now - v.t > 8000) others.delete(k); if (draft) sendDraft(); }, 2000);
 
+/* ---------- strings: the orbits as an instrument ---------- */
+// A string is a great-circle arc fixed to the Earth. Every satellite that crosses it plucks it: the shorter the string,
+// the higher the note; low orbits give a short pluck, higher orbits a longer ringing tone. Speed is tempo, the orbit
+// filters and the name search choose who plays. Strings are shared through the relay, so the instrument is one for everyone.
+const dot3 = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross3 = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+const nrm = v => { const l = Math.hypot(...v) || 1; return v.map(c => c/l); };
+function prep(st){
+  const A = unit(...st.a), B = unit(...st.b), len = Math.acos(Math.max(-1, Math.min(1, dot3(A, B))));
+  const k = Math.max(0, Math.min(14, Math.round((1 - len/PI)*14))), semis = 12*Math.floor(k/5) + SCALE[k % 5];
+  return {...st, A, B, n: nrm(cross3(A, B)), len, freq: 98*2**(semis/12), t: -1e9, at: 0.5, cls: 'LEO'};
+}
+const fromFrame = p => [(p[0]/W - 0.5)*TAU - gridShift, (0.5 - p[1]/H)*PI];   // frame pixel -> Earth longitude, latitude
+function addString(p, q){
+  const a = fromFrame(p), b = fromFrame(q), A = unit(...a), B = unit(...b), len = Math.acos(Math.max(-1, Math.min(1, dot3(A, B))));
+  if (len < 2*D2R || len > 178*D2R) return;
+  const st = prep({id: Date.now().toString(36) + ME.slice(0, 3), a: a.map(v => +v.toFixed(5)), b: b.map(v => +v.toFixed(5))});
+  strings.push(st); if (strings.length > 24) strings.shift();
+  audio(); saveStrings(); pluck(st, 0.5, 'LEO', 0.8);
+}
+function cutString(p){
+  if (!p) return; let best = -1, bd = 10*10;
+  strings.forEach((st, k) => { const e = arc(unit(st.a[0] + gridShift, st.a[1]), unit(st.b[0] + gridShift, st.b[1]));
+    for (let i = 0; i < e.length - 1; i++) { const ax = X(e[i][0]), ay = Y(e[i][1]), bx = X(e[i + 1][0]), by = Y(e[i + 1][1]); if (Math.abs(bx - ax) > W/2) continue;
+      const vx = bx - ax, vy = by - ay, t = Math.max(0, Math.min(1, ((p[0] - ax)*vx + (p[1] - ay)*vy)/(vx*vx + vy*vy || 1))), d = (ax + t*vx - p[0])**2 + (ay + t*vy - p[1])**2;
+      if (d < bd) { bd = d; best = k; } } });
+  if (best >= 0) { strings.splice(best, 1); saveStrings(); }
+}
+function crossings(o, u0, u1){
+  if (dot3(u0, u1) < 0.996) return;                         // a jump (new catalogue, speed change), not a crossing
+  for (const st of strings) {
+    const d0 = dot3(st.n, u0), d1 = dot3(st.n, u1); if ((d0 > 0) === (d1 > 0)) continue;
+    const t = d0/(d0 - d1), q = nrm([u0[0] + (u1[0] - u0[0])*t, u0[1] + (u1[1] - u0[1])*t, u0[2] + (u1[2] - u0[2])*t]);
+    if (dot3(cross3(st.A, q), st.n) < 0 || dot3(cross3(q, st.B), st.n) < 0) continue;
+    pluck(st, Math.acos(Math.max(-1, Math.min(1, dot3(st.A, q))))/st.len, o.cls, o.cls === 'LEO' ? 0.55 : 1);
+  }
+}
+function audio(){
+  if (!soundOn) return;
+  try {
+    if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)();
+      const comp = ac.createDynamicsCompressor(); comp.threshold.value = -20; comp.ratio.value = 8;
+      master = ac.createGain(); master.gain.value = 0.7; master.connect(comp); comp.connect(ac.destination); }
+    if (ac.state === 'suspended') ac.resume();
+  } catch (e) {}
+}
+addEventListener('pointerdown', audio, {capture: true});
+function pluck(st, along, cls, vel){
+  st.t = performance.now(); st.at = along; st.cls = cls; pluckCount++;
+  if (!ac || !soundOn || ac.state !== 'running' || voices > 40 || plucksThisFrame > 10) return;
+  plucksThisFrame++; voices++;
+  const t = ac.currentTime, dec = cls === 'LEO' ? 0.8 : cls === 'MEO' ? 2.6 : 3.6, f = st.freq;
+  const g = ac.createGain(), pan = ac.createStereoPanner(), lp = ac.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.setValueAtTime(f*10, t); lp.frequency.exponentialRampToValueAtTime(f*1.2, t + dec*0.6);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.16*vel, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dec);
+  pan.pan.value = Math.max(-1, Math.min(1, along*2 - 1));
+  lp.connect(g).connect(pan).connect(master);
+  const parts = cls === 'LEO' ? [[1, 'triangle', 1]] : [[1, 'sine', 1], [2.76, 'sine', 0.25], [5.4, 'sine', 0.08]];   // higher orbits ring like a bell
+  let left = parts.length;
+  for (const [m, type, a] of parts) { const o = ac.createOscillator(), og = ac.createGain(); o.type = type; o.frequency.value = f*m; og.gain.value = a;
+    o.connect(og).connect(lp); o.start(t); o.stop(t + dec + 0.05); o.onended = () => { if (--left === 0) { voices--; pan.disconnect(); } }; }
+}
+function stringLines(list){                                // each string, shaking for a moment where it was plucked
+  const now = performance.now();
+  for (const st of strings) {
+    const A = unit(st.a[0] + gridShift, st.a[1]), B = unit(st.b[0] + gridShift, st.b[1]), n = nrm(cross3(A, B));
+    const age = (now - st.t)/1000, env = Math.exp(-age/(st.cls === 'LEO' ? 0.35 : 1.2)), amp = 0.9*D2R*env;
+    const pts = [], N = Math.max(8, Math.ceil(st.len/(1*D2R)));
+    for (let i = 0; i <= N; i++) { const u = i/N, shape = u < st.at ? u/st.at : (1 - u)/(1 - st.at || 1), d = amp*shape*Math.cos(age*TAU*6);
+      const p = slerp(A, B, u); pts.push(ll(nrm([p[0] + n[0]*d, p[1] + n[1]*d, p[2] + n[2]*d]))); }
+    list.push([pts, 0.4 + 0.6*env]);
+  }
+  if (strDrag) list.push([arc(unit(...fromFrame(strDrag[0]).map((v, i) => i ? v : v + gridShift)), unit(...fromFrame(strDrag[1]).map((v, i) => i ? v : v + gridShift))), 0.7]);
+}
+function setStrings(arr, mine){
+  if (!Array.isArray(arr)) return;
+  const ok = arr.filter(st => st && typeof st.id === 'string' && /^[a-z0-9]{1,24}$/.test(st.id) && [st.a, st.b].every(q => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite))).slice(-24);
+  const old = new Map(strings.map(st => [st.id, st]));
+  strings = ok.map(st => old.get(st.id) || prep({id: st.id, a: st.a, b: st.b}));
+  if (mine) saveStrings(); else { try { localStorage.setItem('orbits-strings', JSON.stringify(ok)); } catch (e) {} }
+  bar();
+}
+function saveStrings(){
+  const data = strings.map(({id, a, b}) => ({id, a, b}));
+  try { localStorage.setItem('orbits-strings', JSON.stringify(data)); } catch (e) {}
+  if (mq) mq.publish(STR, JSON.stringify(data), {retain: true, qos: 1});
+  bar();
+}
+try { setStrings(JSON.parse(localStorage.getItem('orbits-strings') || '[]'), false); } catch (e) {}
+$('segTool').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; tool = b.dataset.v; if (tool === 'strings' && draft) cancelDraft(); reveal = null; bar(); });
+$('soundBtn').onclick = () => { soundOn = !soundOn; if (soundOn) audio(); else if (ac) ac.suspend(); bar(); };
+$('clearStrBtn').onclick = () => { strings = []; saveStrings(); };
+
 /* ---------- loop ---------- */
 let lastV = -1;
 function step(dtReal){
+  plucksThisFrame = 0;
   if (speed === 1) simMs = Date.now(); else simMs += dtReal*1000*speed;
   if (!job && (stale() || lastV !== version)) { lastV = version; startJob(); }
   else if (job && job.v !== version) { lastV = version; startJob(); }
@@ -514,7 +627,7 @@ $('gridBtn').onclick = () => { P.grid = !P.grid; syncGrid(); }; syncGrid();
 if (MODE === 'display') setDisplay(true);
 note(); bar();
 if (Q.get('find')) { $('find').value = Q.get('find'); setFind(Q.get('find')); }
-window.__orb = {sats, P, setSpeed, step, render, draw3, setPick, setFind, set: (k, v) => { if (k === 'lines') lines = v; if (k === 'frame') frame = v; if (k === 'view') { view = v; document.body.classList.toggle('flat', v === 'frame'); } touch(); }, job: () => job, tap, cons: () => cons, finish, draft: () => draft, reveal: c => { reveal = c; bar(); }};
+window.__orb = {sats, P, setSpeed, step, render, draw3, setPick, setFind, set: (k, v) => { if (k === 'lines') lines = v; if (k === 'frame') frame = v; if (k === 'view') { view = v; document.body.classList.toggle('flat', v === 'frame'); } touch(); }, job: () => job, tap, addString, strings: () => strings, plucks: () => pluckCount, setTool: v => { tool = v; bar(); }, cons: () => cons, finish, draft: () => draft, reveal: c => { reveal = c; bar(); }};
 if (!TEST) loop(); else { step(0); }
 </script>
 </body>
