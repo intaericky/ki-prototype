@@ -24,7 +24,13 @@ input[type=search]{width:100%;box-sizing:border-box;background:#000;color:var(--
 #pick{font:11px/1.5 var(--ui)}
 #pick b{font-weight:500;color:var(--ink)}
 #pick .m{font:11px/1.5 var(--mono);color:var(--mute)}
-.note{right:330px}
+.note{right:330px;bottom:44px}
+#drawbar{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:12px;align-items:center;padding:6px 8px 6px 14px;background:rgba(0,0,0,.7);border:1px solid var(--faint);z-index:4;font:12px/1.3 var(--ui);color:var(--ink);max-width:calc(100% - 32px);box-sizing:border-box}
+#drawbar #drawBtns{display:flex;gap:6px}
+#drawbar:not(.drawing) #drawBtns{display:none}
+#drawbar:not(.drawing){color:var(--mute);padding-right:14px}
+#finishBtn{background:var(--ink);color:#000}
+body.display #drawbar{display:none}
 </style>
 </head>
 <body>
@@ -66,6 +72,7 @@ input[type=search]{width:100%;box-sizing:border-box;background:#000;color:var(--
   </div>
 </aside>
 <p class="note" id="note"></p>
+<div id="drawbar" role="toolbar" aria-label="Constellation"><span id="drawMsg"></span><span id="drawBtns"><button class="btn" id="undoBtn">Undo</button><button class="btn" id="cancelBtn">Cancel</button><button class="btn" id="finishBtn">Finish</button></span></div>
 <script src="/sphere-assets/vendor/satellite.min.js"></script>
 <script type="module">
 import * as THREE from '/sphere-assets/vendor/three.module.min.js';
@@ -186,7 +193,7 @@ function render(){
   const lshift = layerKind === 'planes' ? base : layerKind === 'tracks' ? base + g : 0;
   ox.globalCompositeOperation = 'source-over'; ox.fillStyle = '#000'; ox.fillRect(0, 0, W, H);
   if (layer) { const s = Math.round((((lshift + yaw)/TAU*W) % W + W) % W); ox.drawImage(layer, s, 0); ox.drawImage(layer, s - W, 0); }
-  gridShift = base + yaw;
+  gridShift = base + g + yaw;                              // where Earth longitude 0 sits on the frame now
   if (P.grid && view === 'frame') {                        // latitude and longitude every 30 degrees, equator and prime meridian a little brighter
     ox.lineWidth = 1;
     for (let la = -60; la <= 60; la += 30) { ox.strokeStyle = la ? GRID : GRID0; const y = Math.round(Y(la*D2R)) + 0.5; ox.beginPath(); ox.moveTo(0, y); ox.lineTo(W, y); ox.stroke(); }
@@ -211,12 +218,13 @@ function render(){
       } else if (n < MAXP) {
         const L = lo + PI, c = Math.cos(la);                // same mapping as three's SphereGeometry uv
         ptPos[n*3] = -Math.cos(L)*c*1.002; ptPos[n*3 + 1] = Math.sin(la)*1.002; ptPos[n*3 + 2] = Math.sin(L)*c*1.002;
-        ptB[n] = o === picked ? 2 : b; n++;
+        ptB[n] = draftSet.has(o.id) ? 2 : b; n++;
       }
     }
-    if (flat && picked && !isNaN(picked.x)) { ox.strokeStyle = '#fff'; ox.lineWidth = 1; ox.strokeRect(Math.round(picked.x) - 7.5, Math.round(picked.y) - 7.5, 15, 15); }
+    if (flat) for (const id of draftSet) { const o = byId.get(id); if (o && !isNaN(o.x)) { ox.strokeStyle = '#fff'; ox.lineWidth = 1; ox.strokeRect(Math.round(o.x) - 6.5, Math.round(o.y) - 6.5, 13, 13); } }
     ptGeo.setDrawRange(0, n); ptGeo.attributes.position.needsUpdate = true; ptGeo.attributes.b.needsUpdate = true;
   } else ptGeo.setDrawRange(0, 0);
+  drawConstellations(view === 'frame');
 }
 
 /* ---------- sphere preview ---------- */
@@ -244,7 +252,7 @@ const grid = new THREE.Group(); scene.add(grid);
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(a, 3)); grid.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({color: col}))); };
   for (let la = -60; la <= 60; la += 30) { const p = []; for (let i = 0; i <= 360; i += 2) p.push(sp(i, la)); add(p, la ? GRID : GRID0); }
   for (let lo = -180; lo < 180; lo += 30) { const p = []; for (let la = -90; la <= 90; la += 2) p.push(sp(lo, la)); add(p, lo ? GRID : GRID0); } }
-let orb = {yaw: 0, pitch: 0.25};
+let orb = {yaw: PI/2, pitch: 0.25};                       // facing longitude 0, as the middle of the frame
 function size(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); cam.aspect = w/h; cam.updateProjectionMatrix(); }
 addEventListener('resize', size); size();
 
@@ -265,14 +273,15 @@ for (const el of [canvas, out]) {
   el.addEventListener('pointermove', e => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
     if (view === 'sphere') { orb.yaw = drag.oy - dx*0.006; orb.pitch = Math.max(-1.4, Math.min(1.4, drag.op + dy*0.006)); }
     else { yaw = drag.yaw + dx*TAU/innerWidth; try { if (MODE === 'display') localStorage.setItem('orbits-yaw', yaw); } catch (err) {} } });
-  el.addEventListener('pointerup', e => { if (drag && !drag.moved) { const p = framePoint(e); if (p) pickAt(...p); } drag = null; });
+  el.addEventListener('pointerup', e => { if (drag && !drag.moved) { const p = framePoint(e); tap(p); } drag = null; });
+  el.addEventListener('pointermove', e => { hover = draft && !drag ? framePoint(e) : null; });
+  el.addEventListener('pointerleave', () => { hover = null; });
 }
 if (MODE === 'display') try { yaw = +(localStorage.getItem('orbits-yaw') || 0) || 0; } catch (e) {}
 
 const fmt = n => Math.round(n).toLocaleString('en-US');
 function setPick(o){
-  if (picked && !find) picked.hi = false;
-  picked = o; if (o && !find) o.hi = true;
+  picked = o;
   $('pick').innerHTML = o ? `<b>${o.name}</b><div class="m">NORAD ${o.id}<br>${fmt(o.peri)} to ${fmt(o.apo)} km<br>inclination ${o.inc.toFixed(1)}°<br>one turn every ${o.per < 120 ? o.per.toFixed(1) + ' min' : (o.per/60).toFixed(2) + ' h'}<br>elements from ${epochStr(o)}</div>` : '<p class="small">Tap a dot.</p>';
   touch();
 }
@@ -280,7 +289,6 @@ function epochStr(o){ const d = new Date((o.rec.jdsatepoch - 2440587.5)*86400000
 function setFind(q){
   find = q.trim().toUpperCase(); let n = 0;
   for (const o of sats) { o.hi = !!find && o.name.toUpperCase().includes(find); n += o.hi; }
-  if (!find && picked) picked.hi = true;
   $('findN').textContent = find ? `${fmt(n)} match` : '';
   touch();
 }
@@ -315,8 +323,151 @@ function note(){
 
 const setDisplay = on => { document.body.classList.toggle('display', on); if (on) { view = 'frame'; document.body.classList.add('flat'); segSync('segView', view); document.documentElement.requestFullscreen?.().catch(() => {}); } else if (document.fullscreenElement) document.exitFullscreen(); };
 $('displayBtn').onclick = () => setDisplay(!document.body.classList.contains('display'));
+addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return;
+  if (draft && e.key === 'Escape') cancelDraft(); else if (draft && e.key === 'Backspace') { e.preventDefault(); undo(); } else if (draft && e.key === 'Enter') finish(); else if (reveal && e.key === 'Escape') reveal = null; });
 addEventListener('keydown', e => { if ((e.key === 'f' || e.key === 'F') && e.target.tagName !== 'INPUT') setDisplay(!document.body.classList.contains('display')); });
 let uiT = 0; addEventListener('pointermove', () => { if (!document.body.classList.contains('display')) return; document.body.classList.add('ui-on'); clearTimeout(uiT); uiT = setTimeout(() => document.body.classList.remove('ui-on'), 2500); });
+
+
+/* ---------- constellations: join satellites into a shape, then watch the orbits pull it apart ---------- */
+// Shared through the same public relay as the other pages: every finished constellation is kept there (retained),
+// and a drawing in progress is broadcast so the sphere shows it as it is made.
+const TOPIC = 'sampling-sphere/v1/orbits/constellations', ME = Math.random().toString(36).slice(2, 10);
+const byId = new Map();
+let cons = [], draft = null, reveal = null, revealM = 0, shown = null, hover = null, mq = null, draftSent = 0;
+let draftSet = new Set(), others = new Map();             // others: drafts being drawn elsewhere, id -> {d, t}
+const unit = (lo, la) => [Math.cos(la)*Math.cos(lo), Math.cos(la)*Math.sin(lo), Math.sin(la)];
+const ll = v => [Math.atan2(v[1], v[0]), Math.asin(Math.max(-1, Math.min(1, v[2])))];
+function slerp(a, b, t){
+  const d = Math.max(-1, Math.min(1, a[0]*b[0] + a[1]*b[1] + a[2]*b[2])), w = Math.acos(d);
+  if (w < 1e-6) return a.slice();
+  const s = Math.sin(w), ka = Math.sin((1 - t)*w)/s, kb = Math.sin(t*w)/s;
+  return [a[0]*ka + b[0]*kb, a[1]*ka + b[1]*kb, a[2]*ka + b[2]*kb];
+}
+function earthLL(o, ms){ const s = eci(o, ms); return s ? [lonOf(s.position) - satellite.gstime(jdOf(ms)), latOf(s.position)] : null; }
+function arc(a, b){                                        // great-circle arc between two unit vectors, as [lon, lat] points
+  const w = Math.acos(Math.max(-1, Math.min(1, a[0]*b[0] + a[1]*b[1] + a[2]*b[2]))), n = Math.max(2, Math.ceil(w/(1.5*D2R)) + 1), out = [];
+  for (let i = 0; i < n; i++) out.push(ll(slerp(a, b, i/(n - 1))));
+  return out;
+}
+// where each star of a constellation is drawn now: its satellite's place, or (while revealed) eased back to where it was when finished
+function starsNow(c, m){
+  return c.stars.map((id, i) => {
+    const o = byId.get(id), L = o && earthLL(o, simMs), now = L ? unit(L[0] + gridShift, L[1]) : null;
+    const was = c.orig ? unit(c.orig[i][0] + gridShift, c.orig[i][1]) : null;
+    if (!now) return was; if (!was || m <= 0) return now; return slerp(now, was, m);
+  });
+}
+function edgesOf(c, m){ const P3 = starsNow(c, m), out = []; for (const [i, j] of c.edges) if (P3[i] && P3[j]) out.push(arc(P3[i], P3[j])); return out; }
+
+// sphere view: one line buffer rebuilt each frame (a few thousand segments at most)
+const MAXV = 240000, cvPos = new Float32Array(MAXV*3), cvCol = new Float32Array(MAXV*3), cvGeo = new THREE.BufferGeometry();
+cvGeo.setAttribute('position', new THREE.BufferAttribute(cvPos, 3).setUsage(THREE.DynamicDrawUsage));
+cvGeo.setAttribute('color', new THREE.BufferAttribute(cvCol, 3).setUsage(THREE.DynamicDrawUsage));
+const conLines = new THREE.LineSegments(cvGeo, new THREE.LineBasicMaterial({vertexColors: true})); conLines.frustumCulled = false; scene.add(conLines);
+function drawConstellations(flat){
+  revealM += ((reveal ? 1 : 0) - revealM)*0.08; if (reveal) shown = reveal; else if (revealM < 0.002) { revealM = 0; shown = null; }
+  const list = [];                                          // [points, brightness]
+  for (const c of cons.slice(-300)) { const m = c === shown ? revealM : 0, b = c === shown ? 0.55 + 0.45*revealM : shown ? 0.28 : 0.55;
+    for (const e of edgesOf(c, m)) list.push([e, b]); }
+  for (const {d} of others.values()) for (const e of edgesOf(d, 0)) list.push([e, 0.9]);
+  if (draft) {
+    for (const e of edgesOf(draft, 0)) list.push([e, 1]);
+    const P3 = starsNow(draft, 0), pen = P3[draft.pen];
+    if (pen && hover) { const lo = (hover[0]/W - 0.5)*TAU, la = (0.5 - hover[1]/H)*PI; list.push([arc(pen, unit(lo, la)), 0.45]); }
+  }
+  if (flat) { ox.globalCompositeOperation = 'source-over'; ox.lineWidth = 1; for (const [pts, b] of list) polyline(ox, pts, b); return; }
+  let v = 0;
+  for (const [pts, b] of list) for (let i = 0; i < pts.length - 1 && v < MAXV - 2; i++) for (const [lo, la] of [pts[i], pts[i + 1]]) {
+    const c = Math.cos(la); cvPos[v*3] = Math.cos(lo)*c*1.0015; cvPos[v*3 + 1] = Math.sin(la)*1.0015; cvPos[v*3 + 2] = -Math.sin(lo)*c*1.0015;
+    cvCol[v*3] = cvCol[v*3 + 1] = cvCol[v*3 + 2] = b; v++; }
+  cvGeo.setDrawRange(0, v); cvGeo.attributes.position.needsUpdate = true; cvGeo.attributes.color.needsUpdate = true;
+}
+
+// taps: while drawing, every tap on a satellite joins it; otherwise a tap on a line shows that constellation's first shape
+function nearestDot(p, r){
+  if (!p) return null; let best = null, bd = r*r;
+  for (const o of sats) { if (isNaN(o.x)) continue; let dx = Math.abs(o.x - p[0]); dx = Math.min(dx, W - dx); const d = dx*dx + (o.y - p[1])**2; if (d < bd) { bd = d; best = o; } }
+  return best;
+}
+function hitCon(p, r){
+  if (!p) return null; let best = null, bd = r*r;
+  for (const c of cons.slice(-300)) for (const e of edgesOf(c, c === shown ? revealM : 0)) for (let i = 0; i < e.length - 1; i++) {
+    const ax = X(e[i][0]), ay = Y(e[i][1]), bx = X(e[i + 1][0]), by = Y(e[i + 1][1]); if (Math.abs(bx - ax) > W/2) continue;
+    const vx = bx - ax, vy = by - ay, t = Math.max(0, Math.min(1, ((p[0] - ax)*vx + (p[1] - ay)*vy)/(vx*vx + vy*vy || 1)));
+    const d = (ax + t*vx - p[0])**2 + (ay + t*vy - p[1])**2; if (d < bd) { bd = d; best = c; } }
+  return best;
+}
+function tap(p){
+  if (draft) { const o = nearestDot(p, 22); if (o) addStar(o); return; }
+  const c = hitCon(p, 9);
+  if (c) { reveal = reveal === c ? null : c; return bar(); }
+  if (reveal) { reveal = null; return bar(); }
+  const o = nearestDot(p, 22); if (o) { draft = {stars: [], edges: [], pen: -1, hist: []}; addStar(o); }
+}
+function addStar(o){
+  setPick(o);
+  const i = draft.stars.indexOf(o.id);
+  if (i >= 0 && i === draft.pen) return finish();         // tapping the star you are on again finishes
+  draft.hist.push(JSON.stringify([draft.stars, draft.edges, draft.pen]));
+  let j = i; if (j < 0) { if (draft.stars.length >= 40) return; draft.stars.push(o.id); j = draft.stars.length - 1; }
+  if (draft.pen >= 0 && !draft.edges.some(([a, b]) => (a === draft.pen && b === j) || (a === j && b === draft.pen))) draft.edges.push([draft.pen, j]);
+  draft.pen = j; changed();
+}
+function undo(){ if (!draft) return; const h = draft.hist.pop(); if (!h) return cancelDraft(); [draft.stars, draft.edges, draft.pen] = JSON.parse(h); if (!draft.stars.length) return cancelDraft(); changed(); }
+function cancelDraft(){ draft = null; hover = null; changed(); }
+function finish(){
+  if (!draft) return; if (!draft.edges.length) return cancelDraft();
+  const orig = draft.stars.map(id => { const o = byId.get(id), L = o && earthLL(o, simMs); return L ? [+L[0].toFixed(5), +L[1].toFixed(5)] : [0, 0]; });
+  const c = {id: Date.now().toString(36) + ME.slice(0, 4), at: Date.now(), sim: Math.round(simMs), stars: draft.stars.slice(), edges: draft.edges.map(e => e.slice()), orig};
+  draft = null; hover = null; add(c, true); changed();
+  reveal = null;
+}
+function changed(){ draftSet = new Set(draft ? draft.stars : []); bar(); sendDraft(); }
+const ago = ms => { const m = Math.round(ms/60000); return m < 0 ? 'later than the clock shows' : m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 48*60 ? `${Math.floor(m/60)} h ${m % 60} min ago` : `${Math.round(m/1440)} days ago`; };
+function bar(){
+  const el = $('drawbar'); el.classList.toggle('drawing', !!draft);
+  if (draft) { const n = draft.stars.length, e = draft.edges.length;
+    $('drawMsg').textContent = `${n} star${n === 1 ? '' : 's'}, ${e} line${e === 1 ? '' : 's'} · tap satellites to join them · tap the last one again to finish`;
+    $('undoBtn').textContent = draft.hist.length ? 'Undo' : 'Cancel'; return; }
+  if (reveal) { const P0 = starsNow(reveal, 1), P1 = starsNow(reveal, 0); let d = 0, k = 0;
+    P0.forEach((a, i) => { const b = P1[i]; if (a && b) { d += Math.acos(Math.max(-1, Math.min(1, a[0]*b[0] + a[1]*b[1] + a[2]*b[2]))); k++; } });
+    $('drawMsg').textContent = `The shape as it was drawn, ${ago(simMs - (reveal.sim || reveal.at))}. Its ${reveal.stars.length} satellites have since moved ${fmt(k ? d/k*RE : 0)} km apart from it on average. Tap anywhere to let go.`; return; }
+  $('drawMsg').textContent = cons.length ? `${fmt(cons.length)} constellation${cons.length === 1 ? '' : 's'} drawn so far · tap a line to see its first shape · tap a satellite to start your own` : 'Tap a satellite to start a constellation';
+}
+$('undoBtn').onclick = undo; $('cancelBtn').onclick = cancelDraft; $('finishBtn').onclick = finish;
+
+// keeping them: this browser, plus the shared relay (retained, so they are there for everyone who opens the page later)
+const clean = c => {                                       // anything from the relay is checked before use
+  if (!c || typeof c !== 'object' || typeof c.id !== 'string' || !/^[a-z0-9]{1,24}$/.test(c.id)) return null;
+  const n = Array.isArray(c.stars) ? c.stars.length : 0; if (n < 2 || n > 40) return null;
+  if (!c.stars.every(s => typeof s === 'string' && /^[A-Z0-9 ]{1,9}$/.test(s))) return null;
+  if (!Array.isArray(c.edges) || c.edges.length < 1 || c.edges.length > 120 || !c.edges.every(e => Array.isArray(e) && e.length === 2 && e.every(i => Number.isInteger(i) && i >= 0 && i < n))) return null;
+  if (c.orig !== undefined && (!Array.isArray(c.orig) || c.orig.length !== n || !c.orig.every(q => Array.isArray(q) && q.length === 2 && q.every(Number.isFinite)))) return null;
+  return {id: c.id, at: Number.isFinite(c.at) ? c.at : Date.now(), sim: Number.isFinite(c.sim) ? c.sim : 0, stars: c.stars.map(String), edges: c.edges.map(e => [e[0], e[1]]), orig: c.orig, pen: 0};
+};
+function add(c, mine){
+  c = clean(c); if (!c || cons.some(k => k.id === c.id)) return;
+  cons.push(c); cons.sort((a, b) => a.at - b.at); if (cons.length > 1000) cons.splice(0, cons.length - 1000);
+  try { localStorage.setItem('orbits-constellations', JSON.stringify(cons.slice(-500))); } catch (e) {}
+  if (mine && mq) mq.publish(`${TOPIC}/c/${c.id}`, JSON.stringify(c), {retain: true, qos: 1});
+  bar();
+}
+function sendDraft(){
+  if (!mq) return; const now = performance.now(); if (now - draftSent < 150 && draft) return; draftSent = now;
+  mq.publish(`${TOPIC}/draft/${ME}`, draft ? JSON.stringify({id: 'd' + ME, stars: draft.stars, edges: draft.edges, at: Date.now()}) : '');
+}
+try { for (const c of JSON.parse(localStorage.getItem('orbits-constellations') || '[]')) add(c, false); } catch (e) {}
+if (!Q.has('solo')) import('/sphere-assets/vendor/mqtt.esm.js').then(m => {
+  const mqtt = m.default || m; mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', {connectTimeout: 30000, keepalive: 30});
+  mq.on('connect', () => { mq.subscribe(`${TOPIC}/c/+`); mq.subscribe(`${TOPIC}/draft/+`); for (const c of cons) mq.publish(`${TOPIC}/c/${c.id}`, JSON.stringify(c), {retain: true, qos: 1}); });
+  mq.on('message', (t, msg) => {
+    const who = t.split('/').pop(); let d = null; try { d = msg.length ? JSON.parse(msg.toString()) : null; } catch (e) { return; }
+    if (t.includes('/draft/')) { if (who === ME) return; const c = d && clean({...d, id: 'd' + who.replace(/[^a-z0-9]/g, '').slice(0, 20)}); if (c) others.set(who, {d: c, t: Date.now()}); else others.delete(who); return; }
+    add(d, false);
+  });
+}).catch(() => {});
+setInterval(() => { const now = Date.now(); for (const [k, v] of others) if (now - v.t > 8000) others.delete(k); if (draft) sendDraft(); }, 2000);
 
 /* ---------- loop ---------- */
 let lastV = -1;
@@ -333,7 +484,7 @@ function draw3(){
   grid.visible = !!P.grid; grid.rotation.y = gridShift;
   tex.needsUpdate = true; ptMat.uniforms.uSize.value = P.dot*1.4*renderer.getPixelRatio();
   const cp = Math.cos(orb.pitch); cam.position.set(4.2*cp*Math.sin(orb.yaw), 4.2*Math.sin(orb.pitch), 4.2*cp*Math.cos(orb.yaw)); cam.lookAt(0, 0, 0);
-  renderer.render(scene, cam);
+  conLines.visible = true; renderer.render(scene, cam);
 }
 function loop(){ const now = performance.now(), dt = Math.min(0.25, (now - lastReal)/1000); lastReal = now; step(dt); draw3(); requestAnimationFrame(loop); }
 
@@ -346,6 +497,7 @@ for (const [k, label] of CLASSES) {
 function apply(cat){                                       // swap in a catalogue, keeping what was picked and searched
   const pid = picked && picked.id;
   sats.length = 0; sats.push(...cat.list); meta = cat.meta;
+  byId.clear(); for (const o of sats) byId.set(o.id, o);
   picked = null; if (pid) { const o = sats.find(s => s.id === pid); if (o) setPick(o); }
   setFind($('find').value);
   const counts = {}; for (const o of sats) counts[o.cls] = (counts[o.cls] || 0) + 1;
@@ -360,9 +512,9 @@ setInterval(async () => { const c = await load(false); if (c) apply(c); }, 30*60
 const syncGrid = () => $('gridBtn').setAttribute('aria-pressed', String(!!P.grid));
 $('gridBtn').onclick = () => { P.grid = !P.grid; syncGrid(); }; syncGrid();
 if (MODE === 'display') setDisplay(true);
-note();
+note(); bar();
 if (Q.get('find')) { $('find').value = Q.get('find'); setFind(Q.get('find')); }
-window.__orb = {sats, P, setSpeed, step, render, draw3, setPick, setFind, set: (k, v) => { if (k === 'lines') lines = v; if (k === 'frame') frame = v; if (k === 'view') { view = v; document.body.classList.toggle('flat', v === 'frame'); } touch(); }, job: () => job};
+window.__orb = {sats, P, setSpeed, step, render, draw3, setPick, setFind, set: (k, v) => { if (k === 'lines') lines = v; if (k === 'frame') frame = v; if (k === 'view') { view = v; document.body.classList.toggle('flat', v === 'frame'); } touch(); }, job: () => job, tap, cons: () => cons, finish, draft: () => draft, reveal: c => { reveal = c; bar(); }};
 if (!TEST) loop(); else { step(0); }
 </script>
 </body>
