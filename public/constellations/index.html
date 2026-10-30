@@ -29,6 +29,8 @@ body.tablet .bar,body.tablet .panel{display:none}
 body:not(.tablet) #tabBar{display:none}
 body.display{cursor:none}
 body.invert .bar{background:rgba(0,0,0,.75)}
+#tip{position:fixed;left:0;top:0;z-index:5;pointer-events:none;white-space:pre;font:11px/1.5 var(--mono);color:#fff;background:rgba(0,0,0,.72);padding:6px 8px}
+#tip[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -47,7 +49,7 @@ body.invert .bar{background:rgba(0,0,0,.75)}
   <div>
     <p class="k">Look</p>
     <div class="row" style="margin-top:0"><div class="seg" id="segRender"><button data-v="3d">3D spheres and tubes</button><button data-v="2d">2D flat</button></div></div>
-    <div class="row"><button class="btn" id="invertBtn">Invert</button><button class="btn" id="gridBtn">Grid</button><button class="btn" id="soundBtn">Sound</button></div>
+    <div class="row"><button class="btn" id="invertBtn">Invert</button><button class="btn" id="gridBtn">Grid</button><button class="btn" id="soundBtn">Sound</button><button class="btn" id="resetTurn" title="R">Reset turn</button></div>
     <div id="sliders" style="margin-top:10px"></div>
   </div>
   <div class="sec">
@@ -67,6 +69,7 @@ body.invert .bar{background:rgba(0,0,0,.75)}
 <div id="tabBar"><div class="seg" id="segTabView"><button data-v="sphere">Globe</button><button data-v="frame">Map</button></div><button class="btn" id="tabSound">Sound</button></div>
 
 <!-- while drawing -->
+<div id="tip" hidden></div>
 <div id="draw" role="toolbar" aria-label="Constellation"><button class="btn" id="undoBtn">Undo</button><button class="btn" id="finishBtn">Finish</button></div>
 
 <script src="/sphere-assets/vendor/satellite.min.js"></script>
@@ -86,7 +89,7 @@ const ME = Math.random().toString(36).slice(2, 10);
 THREE.ColorManagement.enabled = false;                      // grey levels go to the screen exactly as set
 
 /* ---------- look: set in the studio, followed by the display and the tablet ---------- */
-const DEF = {render: '3d', invert: false, dot: 3, line: 1.5, dotRest: 0.62, lineRest: 0.62, grid: true, speed: 1};
+const DEF = {render: '3d', invert: false, dot: 2, line: 1, dotRest: 1, lineRest: 0.5, grid: false, speed: 1};
 const P = {...DEF};
 try { Object.assign(P, JSON.parse(localStorage.getItem('constellations-look') || '{}')); } catch (e) {}
 if (Q.get('speed')) P.speed = +Q.get('speed');
@@ -101,7 +104,7 @@ let sats = [], meta = {};
 const byId = new Map();
 function classify(rec){
   const n = rec.no/60, a = Math.cbrt(MU/(n*n)), e = rec.ecco, per = TAU/rec.no, apo = a*(1 + e) - RE, peri = a*(1 - e) - RE;
-  return {per, peri, cls: e > 0.25 ? 'HEO' : Math.abs(per - 1436.1) < 40 && e < 0.05 ? 'GEO' : apo < 2000 ? 'LEO' : 'MEO'};
+  return {per, peri, apo, inc: rec.inclo/D2R, cls: e > 0.25 ? 'HEO' : Math.abs(per - 1436.1) < 40 && e < 0.05 ? 'GEO' : apo < 2000 ? 'LEO' : 'MEO'};
 }
 async function load(fallback){
   let data = null, from = 'live';
@@ -124,7 +127,12 @@ function apply(cat){
 }
 
 /* ---------- time and geometry ---------- */
-let simMs = Date.now(), lastReal = performance.now(), yaw = 0, gridShift = 0;
+let simMs = Date.now(), lastReal = performance.now();
+// the turn of the whole sphere (Earth-fixed -> as shown), a rotation matrix; dragging turns it freely, like the mesh itself
+let R = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+const TURN = `constellations-turn-${MODE}`;
+try { const t = JSON.parse(localStorage.getItem(TURN)); if (Array.isArray(t) && t.length === 9 && t.every(Number.isFinite)) R = t; } catch (e) {}
+const rot = v => [R[0]*v[0] + R[1]*v[1] + R[2]*v[2], R[3]*v[0] + R[4]*v[1] + R[5]*v[2], R[6]*v[0] + R[7]*v[1] + R[8]*v[2]];
 const jdOf = ms => ms/86400000 + 2440587.5;
 function eci(o, ms){ const r = satellite.sgp4(o.rec, (jdOf(ms) - o.rec.jdsatepoch)*1440); return r && r.position && !isNaN(r.position.x) ? r : null; }
 const lonOf = p => Math.atan2(p.y, p.x), latOf = p => Math.atan2(p.z, Math.hypot(p.x, p.y));
@@ -138,54 +146,83 @@ const ang = (a, b) => Math.acos(Math.max(-1, Math.min(1, dot3(a, b))));
 function slerp(a, b, t){ const w = ang(a, b); if (w < 1e-6) return a.slice(); const s = Math.sin(w), ka = Math.sin((1 - t)*w)/s, kb = Math.sin(t*w)/s; return [a[0]*ka + b[0]*kb, a[1]*ka + b[1]*kb, a[2]*ka + b[2]*kb]; }
 function earthLL(o, ms){ const s = eci(o, ms); return s ? [lonOf(s.position) - satellite.gstime(jdOf(ms)), latOf(s.position)] : null; }
 function arcPts(a, b, step){ const n = Math.max(2, Math.ceil(ang(a, b)/step) + 1), out = []; for (let i = 0; i < n; i++) out.push(slerp(a, b, i/(n - 1))); return out; }
+function turn(a, t){                                        // turn the sphere about an axis of the view (as shown) by t radians
+  const c = Math.cos(t), s = Math.sin(t), k = 1 - c, [x, y, z] = a;
+  const M = [c + x*x*k, x*y*k - z*s, x*z*k + y*s, y*x*k + z*s, c + y*y*k, y*z*k - x*s, z*x*k - y*s, z*y*k + x*s, c + z*z*k], N = [];
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) N.push(M[i*3]*R[j] + M[i*3 + 1]*R[3 + j] + M[i*3 + 2]*R[6 + j]);
+  const r0 = nrm(N.slice(0, 3)), d = dot3(r0, N.slice(3, 6)), r1 = nrm(N.slice(3, 6).map((q, i) => q - d*r0[i])); R = [...r0, ...r1, ...cross3(r0, r1)];
+}
+const saveTurn = () => { try { localStorage.setItem(TURN, JSON.stringify(R)); } catch (e) {} };
 const to3 = v => new THREE.Vector3(v[0], v[2], -v[1]);      // our (x east-of-Greenwich, y, z north) -> three's frame (matches the globe's uv)
 
 /* ---------- constellations ---------- */
 const ROOM = (Q.get('room') || '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
 const BASE = ROOM ? `sampling-sphere/v1/orbits/${ROOM}` : 'sampling-sphere/v1/orbits';
 const TOPIC = `${BASE}/constellations`, LOOK = `${BASE}/look`;
-let cons = [], draft = null, reveal = null, revealM = 0, shown = null, mq = null, draftSent = 0, hoverSent = 0;
-let draftSet = new Set(), others = new Map(), remoteHover = new Map(), snap = null, hoverP = null;
-function starsNow(c, m){                                    // where each star is drawn now, or eased back toward where it was when finished
+let cons = [], draft = null, reveal = null, hoverCon = null, mq = null, draftSent = 0, hoverSent = 0;
+let draftSet = new Set(), others = new Map(), remoteHover = new Map(), snap = null, hov = null;   // hov: the pointer on the sphere, {v, px, cx, cy}
+function starsNow(c, m){                                    // where each star is shown now, or eased back toward where it was when finished
   return c.stars.map((id, i) => {
-    const o = byId.get(id), L = o && earthLL(o, simMs), now = L ? unit(L[0] + gridShift, L[1]) : null;
-    const was = c.orig ? unit(c.orig[i][0] + gridShift, c.orig[i][1]) : null;
+    const o = byId.get(id), now = o && o.v ? o.v : null;
+    const was = c.orig ? rot(unit(c.orig[i][0], c.orig[i][1])) : null;
     if (!now) return was; if (!was || m <= 0) return now; return slerp(now, was, m);
   });
 }
 function edgesOf(c, m, step){ const S = starsNow(c, m), out = []; c.edges.forEach(([i, j], k) => { if (S[i] && S[j]) { const a = arcPts(S[i], S[j], step); a.k = k; out.push(a); } }); return out; }
-function lineList(step){                                    // every line to draw now: [unit-vector points, level]
-  revealM += ((reveal ? 1 : 0) - revealM)*0.08; if (reveal) shown = reveal; else if (revealM < 0.002) { revealM = 0; shown = null; }
+function opened(){                                          // shapes eased back to as drawn: tapped open here, hovered here, or hovered elsewhere
+  const s = new Set([reveal, hoverCon]);
+  for (const {id} of remoteHover.values()) if (id.startsWith('c:')) s.add(cons.find(c => c.id === id.slice(2)));
+  return s;
+}
+function lineList(step){                                    // every line to draw now: [unit-vector points as shown, level, width]
+  const act = opened();
+  for (const c of cons) { const t = act.has(c) ? 1 : 0; if (c.m || t) { c.m = (c.m || 0) + (t - (c.m || 0))*0.08; if (!t && c.m < 0.002) c.m = 0; } }
   const now = performance.now(), list = [];
   for (const c of cons.slice(-300)) {
-    const m = c === shown ? revealM : 0, base = c === shown ? P.lineRest + (1 - P.lineRest)*revealM : P.lineRest;
+    const m = c.m || 0, base = P.lineRest + (1 - P.lineRest)*m;
     for (const e of edgesOf(c, m, step)) list.push([e, Math.min(1, base + (c.hit && c.hit[e.k] ? (1 - base)*Math.exp(-(now - c.hit[e.k])/350) : 0))]);
   }
   for (const {d} of others.values()) for (const e of edgesOf(d, 0, step)) list.push([e, 1]);
   if (draft) {
     for (const e of edgesOf(draft, 0, step)) list.push([e, 1]);
     const S = starsNow(draft, 0), pen = S[draft.pen];
-    if (pen && snap && snap.id !== draft.stars[draft.pen]) { const L = earthLL(snap, simMs); if (L) list.push([arcPts(pen, unit(L[0] + gridShift, L[1]), step), (1 + P.lineRest)/2]); }
+    if (pen && snap && snap.v && snap.id !== draft.stars[draft.pen]) list.push([arcPts(pen, snap.v, step), (1 + P.lineRest)/2]);
   }
   return list;
 }
-function nearestDot(p, r){
-  if (!p) return null; let best = null, bd = r*r;
-  for (const o of sats) { if (isNaN(o.x)) continue; let dx = Math.abs(o.x - p[0]); dx = Math.min(dx, W - dx); const d = dx*dx + (o.y - p[1])**2; if (d < bd) { bd = d; best = o; } }
+function ring(v){                                           // a circle around a star, drawn on the sphere so it warps with it
+  const r = rad(Math.max(14, P.dot*4)), a = nrm(Math.abs(v[2]) < 0.9 ? cross3(v, [0, 0, 1]) : cross3(v, [1, 0, 0])), b = cross3(v, a), pts = [];
+  for (let i = 0; i <= 48; i++) { const f = i/48*TAU, c = Math.cos(f)*Math.sin(r), s = Math.sin(f)*Math.sin(r), k = Math.cos(r);
+    pts.push([v[0]*k + a[0]*c + b[0]*s, v[1]*k + a[1]*c + b[1]*s, v[2]*k + a[2]*c + b[2]*s]); }
+  return [pts, 1];
+}
+function rings(){
+  const ids = new Set(); if (snap) ids.add(snap.id); for (const {id} of remoteHover.values()) if (!id.startsWith('c:')) ids.add(id);
+  const out = []; for (const id of ids) { const o = byId.get(id); if (o && o.v) out.push(ring(o.v)); } return out;
+}
+// picking is done on the sphere, in angles, so it works the same in the globe and the frame at any zoom or turn
+function nearestDot(v, a){
+  if (!v) return null; let best = null, bd = Math.cos(a);
+  for (const o of sats) { if (!o.v) continue; const d = dot3(o.v, v); if (d > bd) { bd = d; best = o; } }
   return best;
 }
-function hitCon(p, r){
-  if (!p) return null; let best = null, bd = r*r;
-  for (const c of cons.slice(-300)) for (const e of edgesOf(c, c === shown ? revealM : 0, 1.5*D2R)) for (let i = 0; i < e.length - 1; i++) {
-    const [la0, lb0] = ll(e[i]), [la1, lb1] = ll(e[i + 1]), ax = X(la0), ay = Y(lb0), bx = X(la1), by = Y(lb1); if (Math.abs(bx - ax) > W/2) continue;
-    const vx = bx - ax, vy = by - ay, t = Math.max(0, Math.min(1, ((p[0] - ax)*vx + (p[1] - ay)*vy)/(vx*vx + vy*vy || 1)));
-    const d = (ax + t*vx - p[0])**2 + (ay + t*vy - p[1])**2; if (d < bd) { bd = d; best = c; } }
+function arcDist(p, A, B){
+  const n = cross3(A, B), l = Math.hypot(...n); if (l < 1e-9) return ang(p, A);
+  const u = n.map(c => c/l), s = dot3(p, u), q = nrm(p.map((c, i) => c - s*u[i]));
+  return dot3(cross3(A, q), u) >= 0 && dot3(cross3(q, B), u) >= 0 ? Math.asin(Math.min(1, Math.abs(s))) : Math.min(ang(p, A), ang(p, B));
+}
+function hitCon(v, a){
+  if (!v) return null; let best = null, bd = a;
+  for (const c of cons.slice(-300)) for (const m of c.m ? [0, c.m, 1] : [0]) { const S = starsNow(c, m);   // an opened shape answers where it is, was, and is easing
+    for (const [i, j] of c.edges) if (S[i] && S[j]) { const d = arcDist(v, S[i], S[j]); if (d < bd) { bd = d; best = c; } } }
   return best;
 }
-const SNAP = 40;                                            // frame pixels: how far the cursor reaches for the nearest satellite
-function tap(p){
+const SNAP = 40*PI/H;                                       // how far the cursor reaches for the nearest satellite: 40 LED px
+const lineReach = pt => Math.max(9*PI/H, 14*pt.px);        // a line answers within 14 screen pixels (or 9 LED px)
+function tap(pt){
+  if (!pt) return; const p = pt.v;
   if (draft) { const o = nearestDot(p, SNAP); if (o) addStar(o); return; }
-  const c = hitCon(p, 9);
+  const c = hitCon(p, lineReach(pt));
   if (c) { reveal = reveal === c ? null : c; if (reveal) { strum(c, 'now'); setTimeout(() => reveal === c && strum(c, 'then'), 1100); } return; }
   if (reveal) { reveal = null; return; }
   const o = nearestDot(p, SNAP); if (o) { draft = {stars: [], edges: [], pen: -1, hist: []}; addStar(o); }
@@ -235,7 +272,7 @@ function sendDraft(){
   mq.publish(`${TOPIC}/draft/${ME}`, draft ? JSON.stringify({id: 'd' + ME, stars: draft.stars, edges: draft.edges, at: Date.now()}) : '');
 }
 let hoverLast = '';
-function sendHover(){ const id = snap ? snap.id : ''; if (!mq || id === hoverLast) return; const now = performance.now(); if (now - hoverSent < 120) return; hoverSent = now; hoverLast = id; mq.publish(`${TOPIC}/hover/${ME}`, id); }
+function sendHover(){ const id = snap ? snap.id : hoverCon ? 'c:' + hoverCon.id : reveal ? 'c:' + reveal.id : ''; if (!mq || id === hoverLast) return; const now = performance.now(); if (now - hoverSent < 120) return; hoverSent = now; hoverLast = id; mq.publish(`${TOPIC}/hover/${ME}`, id); }
 let lookSent = 0, lookTimer = 0;
 function sendLook(){ if (MODE !== 'studio' || !mq) return; clearTimeout(lookTimer); lookTimer = setTimeout(() => mq.publish(LOOK, JSON.stringify(P), {retain: true, qos: 1}), 120); }
 function setLook(d){
@@ -260,14 +297,14 @@ if (!Q.has('solo')) import('/sphere-assets/vendor/mqtt.esm.js').then(m => {
   mq.on('message', (t, msg) => {
     const who = t.split('/').pop(), s = msg.toString();
     if (t === LOOK) { try { setLook(JSON.parse(s)); } catch (e) {} return; }
-    if (t.includes('/hover/')) { if (who !== ME) { if (s && /^[A-Z0-9 ]{1,9}$/.test(s)) remoteHover.set(who, {id: s, t: Date.now()}); else remoteHover.delete(who); } return; }
+    if (t.includes('/hover/')) { if (who !== ME) { if (s && /^(c:[a-z0-9]{1,24}|[A-Z0-9 ]{1,9})$/.test(s)) remoteHover.set(who, {id: s, t: Date.now()}); else remoteHover.delete(who); } return; }
     let d = null; try { d = s ? JSON.parse(s) : null; } catch (e) { return; }
     if (t.includes('/draft/')) { if (who === ME) return; const c = d && clean({...d, id: 'd' + who.replace(/[^a-z0-9]/g, '').slice(0, 20)}); if (c) others.set(who, {d: c, t: Date.now()}); else others.delete(who); return; }
     if (!d) { cons = cons.filter(c => c.id !== who); if (reveal && reveal.id === who) reveal = null; saveLocal(); return; }   // cleared
     add(d, false);
   });
 }).catch(() => {});
-setInterval(() => { const now = Date.now(); for (const M of [others, remoteHover]) for (const [k, v] of M) if (now - v.t > 8000) M.delete(k); if (draft) sendDraft(); }, 2000);
+setInterval(() => { const now = Date.now(); for (const M of [others, remoteHover]) for (const [k, v] of M) if (now - v.t > 8000) M.delete(k); if (draft) sendDraft(); if (mq && hoverLast) mq.publish(`${TOPIC}/hover/${ME}`, hoverLast); }, 2000);
 
 /* ---------- sound: every line is a string ---------- */
 // Pitch follows a line's length right now (shorter is higher), so as the orbits pull a shape apart its chord falls out of tune.
@@ -305,7 +342,7 @@ function strum(c, when, only){
     setTimeout(() => { pluck(pitch(L[k]), (n + 0.5)/Math.max(1, c.edges.length), 'MEO', 0.7); if (c.hit) c.hit[k] = performance.now(); }, n*70); });
 }
 function buildConStrings(){                                 // the lines of the newest shapes (and an opened one), fixed to the Earth
-  const out = [], list = cons.slice(-12); if (shown && !list.includes(shown)) list.push(shown);
+  const out = [], list = cons.slice(-12); for (const c of cons) if (c.m > 0 && !list.includes(c)) list.push(c);
   for (const c of list) {
     c.hit = c.hit || [];
     const U = c.stars.map(id => { const o = byId.get(id), L = o && earthLL(o, simMs); return L ? unit(...L) : null; });
@@ -338,9 +375,7 @@ function polyline(pts){                                     // unit vectors -> f
 }
 function draw2D(levels, lines){
   ox.fillStyle = grey(0); ox.fillRect(0, 0, W, H);
-  if (P.grid) { ox.lineWidth = 1;
-    for (let la = -60; la <= 60; la += 30) { ox.strokeStyle = grey(la ? 0.18 : 0.32); const y = Math.round(Y(la*D2R)) + 0.5; ox.beginPath(); ox.moveTo(0, y); ox.lineTo(W, y); ox.stroke(); }
-    for (let lo = -180; lo < 180; lo += 30) { ox.strokeStyle = grey(lo ? 0.18 : 0.32); const x = Math.round(X(lo*D2R + gridShift)) + 0.5; ox.beginPath(); ox.moveTo(x, 0); ox.lineTo(x, H); ox.stroke(); } }
+  if (P.grid) { ox.lineWidth = 1; for (const [pts, b] of gridLines()) { ox.strokeStyle = grey(b); polyline(pts); } }
   ox.lineWidth = P.line; ox.lineJoin = ox.lineCap = 'round';
   for (const [pts, b] of lines) { ox.strokeStyle = grey(b); polyline(pts); }
   // dots: widened by 1/cos(latitude) so they come out round and equal everywhere on the sphere, snapped to whole pixels
@@ -374,15 +409,15 @@ const unwrap = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMat
     void main(){ float lo = (vUv.x - 0.5)*6.2831853, la = (vUv.y - 0.5)*3.1415927;
       vec3 d = vec3(cos(la)*cos(lo), sin(la), -cos(la)*sin(lo)); gl_FragColor = vec4(textureCube(uCube, d).rgb, 1.0); }`}));
 const unwrapScene = new THREE.Scene(), unwrapCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1); unwrapScene.add(unwrap);
-let orb = {yaw: PI/2, pitch: 0.25, dist: 4.2};
+let orb = {dist: 4.2};                                     // the camera stays put on +x; the sphere itself turns
 function size(){ renderer.setSize(innerWidth, innerHeight, false); cam.aspect = innerWidth/innerHeight; cam.updateProjectionMatrix(); }
 addEventListener('resize', size); size();
 
 const M4 = new THREE.Matrix4(), QT = new THREE.Quaternion(), V1 = new THREE.Vector3(), V2 = new THREE.Vector3(), SC = new THREE.Vector3(), UPY = new THREE.Vector3(0, 1, 0), COL = new THREE.Color();
 function gridLines(){                                       // latitude and longitude every 30 degrees, as thin tubes (so they keep their width on the sphere)
   const out = [];
-  for (let la = -60; la <= 60; la += 30) { const p = []; for (let i = 0; i <= 360; i += 3) p.push(unit(i*D2R + yaw, la*D2R)); out.push([p, la ? 0.18 : 0.32, 0.5]); }
-  for (let lo = -180; lo < 180; lo += 30) { const p = []; for (let la = -90; la <= 90; la += 3) p.push(unit(lo*D2R + yaw, la*D2R)); out.push([p, lo ? 0.18 : 0.32, 0.5]); }
+  for (let la = -60; la <= 60; la += 30) { const p = []; for (let i = 0; i <= 360; i += 3) p.push(rot(unit(i*D2R, la*D2R))); out.push([p, la ? 0.18 : 0.32, 0.5]); }
+  for (let lo = -180; lo < 180; lo += 30) { const p = []; for (let la = -90; la <= 90; la += 3) p.push(rot(unit(lo*D2R, la*D2R))); out.push([p, lo ? 0.18 : 0.32, 0.5]); }
   return out;
 }
 function draw3D(levels, lines){
@@ -416,23 +451,25 @@ function frameLevels(){                                     // brightness of eve
 function step(dtReal){
   plucksThisFrame = 0;
   if (P.speed === 1) simMs = Date.now(); else simMs += dtReal*1000*P.speed;
-  const g = satellite.gstime(jdOf(simMs)); gridShift = yaw;
+  const g = satellite.gstime(jdOf(simMs));
   conStrings = soundOn && ac ? buildConStrings() : [];
   for (const o of sats) {                                   // positions now: frame pixels for picking and 2D, unit vectors for 3D and sound
     const s = eci(o, simMs); if (!s) { o.x = NaN; o.v = null; continue; }
     const lo = lonOf(s.position) - g, la = latOf(s.position);
-    o.x = X(lo + yaw); o.y = Y(la); o.v = unit(lo + yaw, la);
-    if (conStrings.length) { const u = unit(lo, la); if (o.u) crossings(o, o.u, u); o.u = u; } else o.u = null;
+    const u = unit(lo, la), v = rot(u), L = ll(v); o.x = X(L[0]); o.y = Y(L[1]); o.v = v;
+    if (conStrings.length) { if (o.u) crossings(o, o.u, u); o.u = u; } else o.u = null;
   }
-  const onLine = hoverP && !draft ? hitCon(hoverP, 9) : null;   // over a finished line a click opens it, so nothing snaps there
-  snap = hoverP && MODE !== 'display' && !onLine ? nearestDot(hoverP, SNAP) : null;
+  const onLine = hov && !draft && !drag ? hitCon(hov.v, lineReach(hov)) : null;   // over a finished line: its first shape, and a click keeps it open
+  hoverCon = onLine; snap = hov && !onLine && !drag ? nearestDot(hov.v, SNAP) : null;
   if (MODE === 'tablet' || MODE === 'studio') sendHover();
   const levels = frameLevels(), use3d = P.render === '3d', toFrame = view === 'frame';
   document.body.classList.toggle('show-map', !use3d && toFrame);
-  if (!use3d) draw2D(levels, lineList(1.5*D2R));
+  const lines = lineList(use3d ? 2.5*D2R : 1.5*D2R).concat(rings());
+  if (!use3d) draw2D(levels, lines);
   for (const m of [dotsMesh, tubes, joints]) m.visible = use3d;
-  if (use3d) draw3D(levels, lineList(2.5*D2R));
-  canvas.style.cursor = out.style.cursor = !hoverP ? '' : snap || onLine ? 'pointer' : 'grab';
+  if (use3d) draw3D(levels, lines);
+  canvas.style.cursor = out.style.cursor = drag && drag.moved ? 'grabbing' : !hov ? '' : snap ? 'none' : onLine ? 'pointer' : 'grab';
+  showTip();
   $('clock').textContent = new Date(simMs).toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
 }
 function draw(){
@@ -445,30 +482,60 @@ function draw(){
   }
   globe.visible = true; globe.scale.setScalar(use3d ? 0.997 : 1);
   globeMat.map = use3d ? null : tex; globeMat.color.setScalar(use3d ? bg : 1); globeMat.needsUpdate = true; if (!use3d) tex.needsUpdate = true;
-  const cp = Math.cos(orb.pitch); cam.position.set(orb.dist*cp*Math.sin(orb.yaw), orb.dist*Math.sin(orb.pitch), orb.dist*cp*Math.cos(orb.yaw)); cam.lookAt(0, 0, 0);
+  cam.position.set(orb.dist, 0, 0); cam.lookAt(0, 0, 0);
   renderer.render(scene, cam);
 }
 function loop(){ const now = performance.now(), dt = Math.min(0.25, (now - lastReal)/1000); lastReal = now; step(dt); draw(); requestAnimationFrame(loop); }
 
-/* ---------- pointer: drag turns the sphere, a click on a satellite draws ---------- */
+/* ---------- pointer: drag turns the sphere freely, a click on a satellite draws ---------- */
 let drag = null;
-function framePoint(e){
-  if (view === 'frame') { const r = (P.render === '2d' ? out : canvas).getBoundingClientRect(); return [(e.clientX - r.left)/r.width*W, (e.clientY - r.top)/r.height*H]; }
+function pointAt(e){                                        // the pointer on the sphere as shown: a unit vector, and the angle one screen pixel covers there
+  if (view === 'frame') { const r = (P.render === '2d' ? out : canvas).getBoundingClientRect();
+    return {v: unit(((e.clientX - r.left)/r.width - 0.5)*TAU, (0.5 - (e.clientY - r.top)/r.height)*PI), px: PI/r.height, cx: e.clientX, cy: e.clientY}; }
   const v = new THREE.Vector2(e.clientX/innerWidth*2 - 1, -e.clientY/innerHeight*2 + 1), rc = new THREE.Raycaster(); rc.setFromCamera(v, cam);
-  const hit = rc.intersectObject(globe)[0]; return hit ? [hit.uv.x*W, (1 - hit.uv.y)*H] : null;
+  const hit = rc.intersectObject(globe)[0]; if (!hit) return null; const p = hit.point.clone().normalize();
+  return {v: [p.x, -p.z, p.y], px: 2*(orb.dist - 1)*Math.tan(cam.fov/2*D2R)/innerHeight, cx: e.clientX, cy: e.clientY};
+}
+function dragTurn(e){                                       // the surface under the pointer follows it, in any direction
+  const dx = e.clientX - drag.lx, dy = e.clientY - drag.ly; drag.lx = e.clientX; drag.ly = e.clientY; if (!dx && !dy) return;
+  if (view === 'sphere') { const k = 2*(orb.dist - 1)*Math.tan(cam.fov/2*D2R)/innerHeight; turn(nrm([0, dy, dx]), Math.hypot(dx, dy)*k); return; }
+  const r = (P.render === '2d' ? out : canvas).getBoundingClientRect(), lo = ((e.clientX - r.left)/r.width - 0.5)*TAU;
+  turn([0, 0, 1], dx*TAU/r.width); turn([-Math.sin(lo), Math.cos(lo), 0], dy*PI/r.height);
 }
 for (const el of [canvas, out]) {
-  el.addEventListener('pointerdown', e => { drag = {x: e.clientX, y: e.clientY, yaw, oy: orb.yaw, op: orb.pitch, moved: false}; el.setPointerCapture(e.pointerId); });
+  el.addEventListener('pointerdown', e => {
+    drag = {x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, moved: false}; el.setPointerCapture(e.pointerId);
+    if (e.pointerType === 'touch' && MODE !== 'display') hov = pointAt(e);   // touch: press and hold to see what is under the finger
+  });
   el.addEventListener('pointermove', e => {
-    hoverP = e.pointerType === 'touch' ? null : framePoint(e);
-    if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true; if (!drag.moved) return;
-    if (view === 'sphere') { orb.yaw = drag.oy - dx*0.006; orb.pitch = Math.max(-1.4, Math.min(1.4, drag.op + dy*0.006)); }
-    else { yaw = drag.yaw + dx*TAU/innerWidth; try { if (MODE === 'display') localStorage.setItem('constellations-yaw', yaw); } catch (err) {} } });
-  el.addEventListener('pointerup', e => { if (drag && !drag.moved && MODE !== 'display') tap(framePoint(e)); drag = null; });
-  el.addEventListener('pointerleave', () => { hoverP = null; });
+    if (e.pointerType !== 'touch' && MODE !== 'display') hov = pointAt(e);
+    if (!drag) return; if (Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) > 5 && !drag.moved) { drag.moved = true; drag.lx = drag.x; drag.ly = drag.y; if (e.pointerType === 'touch') hov = null; }
+    if (drag.moved) dragTurn(e);
+  });
+  el.addEventListener('pointerup', e => { if (drag && !drag.moved && MODE !== 'display') tap(pointAt(e)); if (drag && drag.moved) saveTurn(); if (e.pointerType === 'touch') hov = null; drag = null; });
+  el.addEventListener('pointercancel', () => { drag = null; hov = null; });
+  el.addEventListener('pointerleave', () => { if (!drag) hov = null; });
   el.addEventListener('wheel', e => { if (view === 'sphere') { orb.dist = Math.max(1.6, Math.min(8, orb.dist*Math.exp(e.deltaY*0.001))); e.preventDefault(); } }, {passive: false});
 }
-if (MODE === 'display') try { yaw = +(localStorage.getItem('constellations-yaw') || 0) || 0; } catch (e) {}
+const resetTurn = () => { R = [1, 0, 0, 0, 1, 0, 0, 0, 1]; saveTurn(); };
+addEventListener('keydown', e => { if (e.target.tagName !== 'INPUT' && (e.key === 'r' || e.key === 'R') && !e.metaKey && !e.ctrlKey) resetTurn(); });
+
+/* ---------- what is under the pointer: the satellite's own catalogue numbers, or when a shape was drawn ---------- */
+const utc = ms => new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+const ago = ms => { const m = Math.max(0, Math.round(ms/60000)); return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m/60)} h ${String(m%60).padStart(2, '0')} min ago` : `${Math.floor(m/1440)} d ${Math.floor(m%1440/60)} h ago`; };
+let tipText = '';
+function showTip(){
+  const tip = $('tip'); let t = '';
+  if (hov && !drag && MODE !== 'display') {
+    if (snap) { const o = snap, ep = (o.rec.jdsatepoch - 2440587.5)*86400000;
+      t = `${o.name}\nNORAD ${o.id} · ${o.cls}\nperigee ${Math.round(o.peri).toLocaleString('en-US')} km · apogee ${Math.round(o.apo).toLocaleString('en-US')} km\nperiod ${o.per.toFixed(1)} min · inclination ${o.inc.toFixed(1)}°\norbit measured ${utc(ep)}`; }
+    else if (hoverCon) { const c = hoverCon, at = c.sim || c.at;
+      t = `as drawn ${utc(at)}\n${ago(simMs - at)} · ${c.stars.length} satellites`; }
+  }
+  if (t !== tipText) { tipText = t; tip.textContent = t; tip.hidden = !t; }
+  if (t) { const x = Math.min(hov.cx + 18, innerWidth - tip.offsetWidth - 8), y = hov.cy + 18 + tip.offsetHeight > innerHeight ? hov.cy - 18 - tip.offsetHeight : hov.cy + 18;
+    tip.style.transform = `translate(${Math.round(x)}px,${Math.round(y)}px)`; }
+}
 
 /* ---------- controls ---------- */
 const segSync = (id, v) => document.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === String(v))));
@@ -493,7 +560,7 @@ seg('segTabView', v => { view = v; syncLook(); });
 $('invertBtn').onclick = () => look('invert', !P.invert);
 $('gridBtn').onclick = () => look('grid', !P.grid);
 const toggleSound = () => { soundOn = !soundOn; if (soundOn) audio(); else if (ac) ac.suspend(); syncLook(); };
-$('soundBtn').onclick = toggleSound; $('tabSound').onclick = toggleSound;
+$('resetTurn').onclick = resetTurn; $('soundBtn').onclick = toggleSound; $('tabSound').onclick = toggleSound;
 // room links
 $('room').value = ROOM; $('room').onchange = e => { const r = e.target.value.replace(/[^a-z0-9-]/gi, '').slice(0, 24); const u = new URL(location.href); if (r) u.searchParams.set('room', r); else u.searchParams.delete('room'); location.href = u; };
 const roomQ = ROOM ? `?room=${ROOM}` : '';
@@ -505,7 +572,7 @@ apply(await load(true));
 setInterval(async () => { const c = await load(false); if (c) apply(c); }, 30*60*1000);   // stay near real time
 $('consN').textContent = `${cons.length.toLocaleString('en-US')} constellation${cons.length === 1 ? '' : 's'} in this room`;
 syncLook();
-window.__con = {sats, P, step, draw, tap, finish, undo, cons: () => cons, draft: () => draft, reveal: c => { reveal = c; }, setView: v => { view = v; syncLook(); }, look, setHover: p => { hoverP = p; }, sound: () => soundOn};
+window.__con = {sats, P, step, draw, tap, finish, undo, cons: () => cons, draft: () => draft, reveal: c => { reveal = c; }, opened: () => reveal, setView: v => { view = v; syncLook(); }, look, setHover: p => { hov = p; }, sound: () => soundOn, turn, R: () => R, tip: () => tipText, cons1: () => cons[cons.length - 1], stars: c => starsNow(c, c.m || 0), project: v => { const q = to3(v).project(cam); return [(q.x + 1)/2*innerWidth, (1 - q.y)/2*innerHeight]; }};
 if (!TEST) loop(); else step(0);
 </script>
 </body>
