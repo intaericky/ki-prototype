@@ -28,9 +28,10 @@ body.frame #gl{inset:0;margin:auto;width:min(100vw,177.78vh);height:min(56.25vw,
 </header>
 <details class="panel" id="panel" open>
   <summary>Sand and balls</summary>
-  <div class="row" style="margin:0 0 10px"><button class="btn" id="ballsOn">Balls</button><button class="btn" id="rimOn">Pushed-sand rim</button><label>Sand colour <input type="color" id="sandColor" value="#dedbd5"></label></div>
+  <div class="row" style="margin:0 0 10px"><button class="btn" id="ballsOn">Balls</button><button class="btn" id="imgOn">Satellite image</button><button class="btn" id="rimOn">Pushed-sand rim</button><label>Sand colour <input type="color" id="sandColor" value="#dedbd5"></label></div>
   <div id="sliders"></div>
   <div class="legend" id="legend">Loading orbits…</div>
+  <div class="legend" id="imgState"></div>
 </details>
 <p class="note">The satellites NASA publishes daily or scene imagery from, each as a metal ball as wide as its swath, rolling on its real orbit (SGP4, CelesTrak elements) over an Earth-fixed soft sphere. Each ball rests on whatever sand is under it, old grooves included, and presses its own groove from there. The sand never resets; it only settles back by itself over the hours set in the panel. 360 frame lays the whole sphere out as one 1920 × 1080 equirectangular frame for the LED sphere; Open display shows only that, F for full screen.</p>
 <script src="/sphere-assets/vendor/satellite.min.js"></script>
@@ -45,7 +46,7 @@ const LIST = [['TERRA', 'MODIS', 2330], ['AQUA', 'MODIS', 2330], ['SUOMI NPP', '
   ['LANDSAT 8', 'OLI', 185], ['LANDSAT 9', 'OLI-2', 185], ['SENTINEL-2A', 'MSI', 290], ['SENTINEL-2B', 'MSI', 290], ['SENTINEL-2C', 'MSI', 290]];
 const norm = n => n.toUpperCase().replace(/[- ]+/g, ' ').trim();
 
-const P = {speed: 600, sink: 0.35, scale: 1, rim: 0.25, rimOn: true, balls: true, settle: 6, metal: 0.25, light: 1.3, color: '#dedbd5', view: DISPLAY ? 'frame' : '3d'};
+const P = {speed: 600, sink: 0.35, scale: 1, rim: 0.25, rimOn: true, balls: true, img: false, settle: 6, metal: 0.25, light: 1.3, color: '#dedbd5', view: DISPLAY ? 'frame' : '3d'};
 for (const k in P) if (QS.has(k)) { const v = QS.get(k);                // every setting can come in the address (the display link carries them)
   if (typeof P[k] === 'number') { if (v !== '' && isFinite(+v)) P[k] = +v; }
   else if (typeof P[k] === 'boolean') P[k] = v !== '0';
@@ -130,17 +131,73 @@ const fcam = new THREE.OrthographicCamera();
 const sandF = new THREE.Mesh(sandGeo, new THREE.ShaderMaterial({uniforms: {...U, frame: {value: 1}}, vertexShader: SAND_V, fragmentShader: SAND_F, side: THREE.DoubleSide}));
 sandF.frustumCulled = false; fscene.add(sandF);
 const ballGeoF = new THREE.SphereGeometry(1, 64, 32), RUF = {value: P.metal}, ENVF = {value: envTex};
-const BALL_V = `${GLC} uniform mat4 uM; uniform float shift; varying vec3 vN, vC;
-  void main(){ vec3 p = (uM*vec4(position, 1.0)).xyz, c = uM[3].xyz; vN = mat3(uM)*position; vC = c;
+const BALL_V = `${GLC} uniform mat4 uM; uniform float shift; varying vec3 vN, vC; varying vec2 vUv, vH;
+  void main(){ vUv = uv; vec3 p = (uM*vec4(position, 1.0)).xyz, c = uM[3].xyz; vN = mat3(uM)*position; vC = c; vH = vec2(p.x, -p.z);
     float lc = atan(-c.z, c.x), d = atan(-p.z, p.x) - lc; d -= KTAU*floor((d + KPI)/KTAU);
     float r = length(p), la = asin(clamp(p.y/r, -1.0, 1.0));
     gl_Position = vec4(((lc + d)/KTAU + 0.5 + shift)*2.0 - 1.0, la/KPI*2.0, 0.5 - (r - 1.0), 1.0); }`;
-const BALL_F = `${GLC} uniform sampler2D env; uniform float rough; varying vec3 vN, vC;
-  void main(){ vec3 up = normalize(vC), e = eastOf(up), n0 = cross(up, e), z = normalize(up*0.5 + n0*0.87), n = cross(z, e), R = reflect(-up, normalize(vN)), r = vec3(dot(R, e), dot(R, n), dot(R, z));
+const BALL_F = `${GLC} uniform sampler2D env, map; uniform float rough, useMap, shift; varying vec3 vN, vC; varying vec2 vUv, vH;
+  void main(){
+    // a ball over a pole wraps all the way round; drop the stretched triangles across its seam (their longitude here does not match the screen's)
+    float dl = (gl_FragCoord.x/1920.0 - 0.5 - shift)*KTAU - atan(vH.y, vH.x); dl -= KTAU*floor((dl + KPI)/KTAU); if (abs(dl) > 0.35 && length(vH) > 0.02) discard; vec3 up = normalize(vC), e = eastOf(up), n0 = cross(up, e), z = normalize(up*0.5 + n0*0.87), n = cross(z, e), R = reflect(-up, normalize(vN)), r = vec3(dot(R, e), dot(R, n), dot(R, z));
     vec2 t = vec2(atan(r.y, r.x)/KTAU + 0.5, asin(clamp(r.z, -1.0, 1.0))/KPI + 0.5);
-    gl_FragColor = vec4(textureLod(env, t, rough*7.0).rgb*0.9, 1.0);
+    vec3 col = textureLod(env, t, rough*7.0).rgb*0.9;
+    if (useMap > 0.5) col = texture2D(map, vUv).rgb*(0.3 + 0.8*max(dot(normalize(vN), normalize(up*0.8 - e*0.45 + n0*0.5)), 0.0)) + col*0.06;
+    gl_FragColor = vec4(col, 1.0);
     #include <colorspace_fragment>
   }`;
+
+/* the satellite's own picture on its ball: the ball is never stamped into the sand with it; as it rolls, the strip of the ball touching the ground
+   takes on that satellite's own image (NASA GIBS corrected reflectance, the simulated day, else the day before) of the ground under it, and carries it
+   round as it keeps rolling. Black where that satellite has no picture (night, gaps). Landsat and Sentinel-2 have no single-satellite global layer, so they stay metal. */
+const GIBS = {'TERRA': 'MODIS_Terra_CorrectedReflectance_TrueColor', 'AQUA': 'MODIS_Aqua_CorrectedReflectance_TrueColor', 'SUOMI NPP': 'VIIRS_SNPP_CorrectedReflectance_TrueColor',
+  'NOAA 20': 'VIIRS_NOAA20_CorrectedReflectance_TrueColor', 'NOAA 21': 'VIIRS_NOAA21_CorrectedReflectance_TrueColor'};
+const BTW = 256, BTH = 128, BDIR = new Float32Array(BTW*BTH*3);          // each texel of a ball's picture, as a direction on the ball (the sphere's own uv)
+for (let j = 0, k = 0; j < BTH; j++) for (let i = 0; i < BTW; i++, k += 3) { const ph = (i + 0.5)/BTW*TAU, th = (1 - (j + 0.5)/BTH)*PI;
+  BDIR[k] = -Math.cos(ph)*Math.sin(th); BDIR[k + 1] = Math.cos(th); BDIR[k + 2] = Math.sin(ph)*Math.sin(th); }
+const IW = 2048, IH = 1024, imgs = new Map();
+const dayOf = ms => new Date(ms).toISOString().slice(0, 10);
+function getImg(layer, day){
+  const fresh = day === dayOf(Date.now()) ? Math.floor(Date.now()/1800000) : 0, key = `${layer}|${day}|${fresh}`;   // today's picture is still filling in: ask again every 30 min
+  let o = imgs.get(key); if (o) return o;
+  for (const [k, v] of imgs) if (k.startsWith(layer + '|' + day + '|') && v.state === 'ok') { o = {state: 'ok', px: v.px}; break; }   // keep showing the older copy meanwhile
+  o = o || {state: 'loading'}; imgs.set(key, o);
+  const im = new Image(); im.crossOrigin = 'anonymous';
+  im.onload = () => { try { const cv = document.createElement('canvas'); cv.width = IW; cv.height = IH; const g = cv.getContext('2d', {willReadFrequently: true});
+      g.drawImage(im, 0, 0, IW, IH); o.px = g.getImageData(0, 0, IW, IH).data; o.state = 'ok'; } catch (e) { o.state = 'failed'; } prune(); imgStatus(); };
+  im.onerror = () => { if (!o.px) o.state = 'failed'; imgStatus(); };
+  im.src = `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&LAYERS=${layer}&STYLES=&CRS=EPSG:4326&BBOX=-90,-180,90,180&WIDTH=${IW}&HEIGHT=${IH}&FORMAT=image/png&TRANSPARENT=true&TIME=${day}` + (fresh ? `&_=${fresh}` : '');
+  return o;
+}
+let wanted = new Set();
+function prune(){ for (const k of [...imgs.keys()]) if (!wanted.has(k) && imgs.size > 12) imgs.delete(k); }
+function imgsFor(b){                                        // the simulated day's picture and the day before's, never past today
+  const t = Math.min(simMs, Date.now()), a = getImg(b.layer, dayOf(t)), y = getImg(b.layer, dayOf(t - 86400e3));
+  wanted = new Set([...imgs.keys()].filter(k => imgs.get(k) === a || imgs.get(k) === y)); return [a.px, y.px];
+}
+function imgStatus(){
+  const el = $('imgState'); if (!P.img) { el.textContent = ''; return; }
+  const all = [...imgs.values()], ok = all.filter(o => o.state === 'ok').length, bad = all.filter(o => o.state === 'failed').length;
+  el.textContent = `Satellite images, NASA GIBS: ${ok} of ${all.length} loaded` + (bad ? `, ${bad} did not answer` : '') + '. Landsat and Sentinel-2 stay metal (no single-satellite global layer).';
+}
+function paint(b, c, t, rot){                               // c: centre direction, t: direction of travel, rot: how far it turned this step
+  const [A, Y] = imgsFor(b); if (!A && !Y) return;
+  const e = b.mesh.matrix.compose(b.mesh.position, b.mesh.quaternion, b.mesh.scale).elements, s = b.mesh.scale.x;
+  const xx = c.y*t.z - c.z*t.y, xy = c.z*t.x - c.x*t.z, xz = c.x*t.y - c.y*t.x;   // across the track
+  const slice = Math.sin(Math.min(PI/2, rot/2 + 0.03)), px = b.pix;
+  for (let k = 0, q = 0; k < BDIR.length; k += 3, q += 4) {
+    const dx = BDIR[k], dy = BDIR[k + 1], dz = BDIR[k + 2];
+    const p0 = (e[0]*dx + e[4]*dy + e[8]*dz)/s, p1 = (e[1]*dx + e[5]*dy + e[9]*dz)/s, p2 = (e[2]*dx + e[6]*dy + e[10]*dz)/s;
+    if (p0*c.x + p1*c.y + p2*c.z > 0) continue;              // only the underside touches the ground
+    const al = p0*t.x + p1*t.y + p2*t.z; if (al > slice || al < -slice) continue;   // and only the strip in contact now
+    const cr = p0*xx + p1*xy + p2*xz;
+    const gx = c.x + b.r*(al*t.x + cr*xx), gy = c.y + b.r*(al*t.y + cr*xy), gz = c.z + b.r*(al*t.z + cr*xz), gl = Math.hypot(gx, gy, gz);
+    const lo = Math.atan2(-gz, gx), la = Math.asin(gy/gl);
+    const ii = Math.min(IW - 1, Math.floor((lo/TAU + 0.5)*IW)), jj = Math.min(IH - 1, Math.floor((0.5 - la/PI)*IH)), o = (jj*IW + ii)*4;
+    const src = A && A[o + 3] > 0 ? A : Y && Y[o + 3] > 0 ? Y : null;
+    if (src) { px[q] = src[o]; px[q + 1] = src[o + 1]; px[q + 2] = src[o + 2]; } else { px[q] = px[q + 1] = px[q + 2] = 8; } }
+  b.tex.needsUpdate = true;
+}
 
 /* each ball: radius from its swath (an arc of swath km on the Earth is that much of the unit sphere) */
 function build(rows){
@@ -148,9 +205,12 @@ function build(rows){
   for (const [name, inst, swath] of LIST) { const row = rows.find(r => norm(r[0]) === norm(name)); if (!row) continue;
     let rec; try { rec = satellite.twoline2satrec(row[1], row[2]); } catch (e) { continue; }
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), ballMat); world.add(mesh);
-    const fm = [-1, 0, 1].map(s => { const m = new THREE.Mesh(ballGeoF, new THREE.ShaderMaterial({uniforms: {uM: {value: mesh.matrix}, shift: {value: s}, env: ENVF, rough: RUF},
+    const layer = GIBS[name] || null, pix = layer ? new Uint8Array(BTW*BTH*4).fill(40) : null, tex = layer ? new THREE.DataTexture(pix, BTW, BTH) : null, useMap = {value: 0};
+    if (tex) { tex.colorSpace = THREE.SRGBColorSpace; tex.magFilter = tex.minFilter = THREE.LinearFilter; tex.needsUpdate = true; }
+    const imgMat = tex ? new THREE.MeshStandardMaterial({map: tex, metalness: 0.1, roughness: 0.5, envMapIntensity: 0.5}) : null;
+    const fm = [-1, 0, 1].map(s => { const m = new THREE.Mesh(ballGeoF, new THREE.ShaderMaterial({uniforms: {uM: {value: mesh.matrix}, shift: {value: s}, env: ENVF, rough: RUF, map: {value: tex || envTex}, useMap},
       vertexShader: BALL_V, fragmentShader: BALL_F, side: THREE.DoubleSide})); m.frustumCulled = false; fscene.add(m); return m; });
-    balls.push({id: balls.length, seg: 0, name, inst, swath, rec, mesh, fm, last: null, stamped: null, L: null, e: 0, c: 0, cv: null}); }
+    balls.push({id: balls.length, seg: 0, layer, pix, tex, imgMat, useMap, name, inst, swath, rec, mesh, fm, last: null, stamped: null, L: null, e: 0, c: 0, cv: null}); }
   sizes();
   $('legend').innerHTML = balls.map(b => `<b>${b.name}</b> ${b.inst} · ${b.swath.toLocaleString('en-US')} km`).join('<br>') + (balls.length < LIST.length ? `<br>not in today's catalogue: ${LIST.filter(l => !balls.some(b => b.name === l[0])).map(l => l[0]).join(', ')}` : '');
 }
@@ -227,7 +287,8 @@ function advance(b, ms){                                    // press along the p
   b.cv = b.cv == null ? b.c : b.cv + (b.c - b.cv)*0.3;
   const c = to3(v), pos = c.clone().multiplyScalar(1 + b.cv);
   if (b.last) { const d = pos.clone().sub(b.last), len = d.length();
-    if (len > 1e-7 && len < 0.5) { AX.crossVectors(c, d).normalize(); Q.setFromAxisAngle(AX, len/b.r); b.mesh.quaternion.premultiply(Q); } }   // rolls without slipping
+    if (len > 1e-7 && len < 0.5) { AX.crossVectors(c, d).normalize(); Q.setFromAxisAngle(AX, len/b.r); b.mesh.quaternion.premultiply(Q);   // rolls without slipping
+      if (P.img && b.tex) paint(b, c, d.addScaledVector(c, -d.dot(c)).normalize(), len/b.r); } }
   b.mesh.position.copy(pos); b.last = pos;
 }
 function digSince(ms0){                                     // press every pass from ms0 to now at once, settling as it goes
@@ -262,15 +323,17 @@ function sync(){
   document.querySelectorAll('#segSpeed button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.v === P.speed)));
   document.querySelectorAll('#segView button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === P.view)));
   $('ballsOn').setAttribute('aria-pressed', String(P.balls)); $('ballsOn').textContent = 'Balls: ' + (P.balls ? 'on' : 'off');
-  for (const b of balls) { b.mesh.visible = P.balls; for (const m of b.fm) m.visible = P.balls; }
+  for (const b of balls) { b.mesh.visible = P.balls; for (const m of b.fm) m.visible = P.balls; if (b.tex) { b.mesh.material = P.img ? b.imgMat : ballMat; b.useMap.value = P.img ? 1 : 0; } }
+  $('imgOn').setAttribute('aria-pressed', String(P.img)); $('imgOn').textContent = 'Satellite image: ' + (P.img ? 'on' : 'off'); imgStatus();
   $('rimOn').setAttribute('aria-pressed', String(P.rimOn)); $('rimOn').textContent = 'Pushed-sand rim: ' + (P.rimOn ? 'on' : 'off');
-  const q = new URLSearchParams({display: '', speed: P.speed, sink: P.sink, scale: P.scale, rim: P.rim, rimOn: P.rimOn ? 1 : 0, balls: P.balls ? 1 : 0, settle: P.settle, metal: P.metal, light: P.light, color: P.color});
+  const q = new URLSearchParams({display: '', speed: P.speed, sink: P.sink, scale: P.scale, rim: P.rim, rimOn: P.rimOn ? 1 : 0, balls: P.balls ? 1 : 0, img: P.img ? 1 : 0, settle: P.settle, metal: P.metal, light: P.light, color: P.color});
   $('openDisplay').href = '/sphere-test-sand?' + q.toString().replace('display=&', 'display&');
 }
 $('segSpeed').onclick = e => { const b = e.target.closest('button'); if (!b) return; P.speed = +b.dataset.v; if (P.speed === 1) { simMs = Date.now(); for (const q of balls) q.stamped = null; } sync(); };
 $('segView').onclick = e => { const b = e.target.closest('button'); if (!b) return; P.view = b.dataset.v; size(); sync(); };
 $('rimOn').onclick = () => { P.rimOn = !P.rimOn; sync(); };
 $('ballsOn').onclick = () => { P.balls = !P.balls; sync(); };
+$('imgOn').onclick = () => { P.img = !P.img; sync(); };
 $('sandColor').value = P.color;
 $('sandColor').oninput = e => { P.color = e.target.value; U.uColor.value.set(P.color); sync(); };
 for (const [k, label, lo, hi, st] of SL) { const l = document.createElement('label'); l.innerHTML = `<span>${label}</span><output>${P[k]}</output><input type="range" min="${lo}" max="${hi}" step="${st}" value="${P[k]}">`;
@@ -282,6 +345,7 @@ addEventListener('keydown', e => {
   if (e.target.closest && e.target.closest('input')) return;
   if (e.key === 'f' || e.key === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen?.().catch(() => {}); }
   if (e.key === 'b' || e.key === 'B') { P.balls = !P.balls; sync(); }
+  if (e.key === 'i' || e.key === 'I') { P.img = !P.img; sync(); }
   if ((e.key === 'u' || e.key === 'U') && DISPLAY) document.body.classList.toggle('ui-on');
   if (e.key === 'v' || e.key === 'V') { P.view = P.view === 'frame' ? '3d' : 'frame'; size(); sync(); } });
 size(); sync();
