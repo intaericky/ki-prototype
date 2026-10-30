@@ -72,7 +72,7 @@ import * as THREE from '/sphere-assets/vendor/three.module.min.js';
 const $ = id => document.getElementById(id), Q = new URLSearchParams(location.search), TEST = location.hash === '#test';
 const MODE = Q.has('display') ? 'display' : 'studio';
 const PI = Math.PI, TAU = 2*PI, RE = 6378.137, MU = 398600.4418, D2R = PI/180;
-const W = 2048, H = 1024;                                   // equirect frame, stretched to the LED's 1920x1080
+const W = 1920, H = 1080;                                   // equirect frame at the LED's own resolution: one canvas pixel = one LED pixel
 
 /* ---------- the catalogue ---------- */
 const CLASSES = [
@@ -183,17 +183,30 @@ function render(){
   ox.globalCompositeOperation = 'source-over'; ox.fillStyle = '#000'; ox.fillRect(0, 0, W, H);
   if (layer) { const s = Math.round((((lshift + yaw)/TAU*W) % W + W) % W); ox.drawImage(layer, s, 0); ox.drawImage(layer, s - W, 0); }
   if (P.dots) {
-    const any = sats.some(o => o.hi), r = P.dot;
+    // flat frame: each dot is widened by 1/cos(latitude) so it comes out square and the same size everywhere on the sphere,
+    // and snapped to whole pixels so it stays sharp. The sphere view draws real points instead (below).
+    const any = sats.some(o => o.hi), flat = view === 'frame', ry = Math.max(1, Math.round(P.dot)), kx = W/(2*H);
+    let n = 0;
     for (const o of sats) {
       if (!visible(o)) { o.x = NaN; continue; }
       const s = eci(o, simMs); if (!s) { o.x = NaN; continue; }
-      const lo = lonOf(s.position) + base + yaw;
-      o.x = X(lo); o.y = Y(latOf(s.position));
-      ox.fillStyle = o.hi || !any ? '#fff' : 'rgba(255,255,255,.45)';
-      ox.fillRect(o.x - r/2, o.y - r/2, r, r);
+      const lo = lonOf(s.position) + base + yaw, la = latOf(s.position);
+      o.x = X(lo); o.y = Y(la);
+      const b = o.hi || !any ? 1 : 0.4;
+      if (flat) {
+        const rx = Math.max(1, Math.min(W, Math.round(ry*kx/Math.max(0.02, Math.cos(la)))));
+        ox.fillStyle = b === 1 ? '#fff' : '#666';
+        const x0 = Math.round(o.x - rx/2), y0 = Math.round(o.y - ry/2);
+        ox.fillRect(x0, y0, rx, ry); if (x0 + rx > W) ox.fillRect(x0 - W, y0, rx, ry); if (x0 < 0) ox.fillRect(x0 + W, y0, rx, ry);
+      } else if (n < MAXP) {
+        const L = lo + PI, c = Math.cos(la);                // same mapping as three's SphereGeometry uv
+        ptPos[n*3] = -Math.cos(L)*c*1.002; ptPos[n*3 + 1] = Math.sin(la)*1.002; ptPos[n*3 + 2] = Math.sin(L)*c*1.002;
+        ptB[n] = o === picked ? 2 : b; n++;
+      }
     }
-    if (picked && !isNaN(picked.x)) { ox.strokeStyle = '#fff'; ox.lineWidth = 1.5; ox.strokeRect(picked.x - 7, picked.y - 7, 14, 14); }
-  }
+    if (flat && picked && !isNaN(picked.x)) { ox.strokeStyle = '#fff'; ox.lineWidth = 1; ox.strokeRect(Math.round(picked.x) - 7.5, Math.round(picked.y) - 7.5, 15, 15); }
+    ptGeo.setDrawRange(0, n); ptGeo.attributes.position.needsUpdate = true; ptGeo.attributes.b.needsUpdate = true;
+  } else ptGeo.setDrawRange(0, 0);
 }
 
 /* ---------- sphere preview ---------- */
@@ -202,6 +215,19 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(32, 1, 0.1, 100); cam.position.set(0, 0, 4.2);
 const tex = new THREE.CanvasTexture(out); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
 const globe = new THREE.Mesh(new THREE.SphereGeometry(1, 128, 64), new THREE.MeshBasicMaterial({map: tex})); scene.add(globe);
+// dots in the sphere view: real round points of a fixed screen size, so nothing stretches at the poles and nothing is resampled
+const MAXP = 40000, ptPos = new Float32Array(MAXP*3), ptB = new Float32Array(MAXP), ptGeo = new THREE.BufferGeometry();
+ptGeo.setAttribute('position', new THREE.BufferAttribute(ptPos, 3).setUsage(THREE.DynamicDrawUsage));
+ptGeo.setAttribute('b', new THREE.BufferAttribute(ptB, 1).setUsage(THREE.DynamicDrawUsage));
+ptGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 2);
+const ptMat = new THREE.ShaderMaterial({uniforms: {uSize: {value: 3}},
+  vertexShader: `attribute float b; uniform float uSize; varying float vB;
+    void main(){ vB = b; gl_PointSize = uSize*(b > 1.5 ? 3.0 : 1.0); gl_Position = projectionMatrix*modelViewMatrix*vec4(position, 1.0); }`,
+  fragmentShader: `varying float vB;
+    void main(){ vec2 q = gl_PointCoord*2.0 - 1.0; float r = length(q), w = fwidth(r);
+      float ring = vB > 1.5 ? smoothstep(0.62 - w, 0.62, r)*(1.0 - smoothstep(0.86 - w, 0.86, r)) + 1.0 - smoothstep(0.3 - w, 0.3, r) : 1.0 - smoothstep(1.0 - w, 1.0, r);
+      if (ring <= 0.0) discard; gl_FragColor = vec4(vec3(min(vB, 1.0)*ring), 1.0); }`});
+const pts = new THREE.Points(ptGeo, ptMat); pts.frustumCulled = false; scene.add(pts);
 let orb = {yaw: 0, pitch: 0.25};
 function size(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); cam.aspect = w/h; cam.updateProjectionMatrix(); }
 addEventListener('resize', size); size();
@@ -288,7 +314,7 @@ function step(dtReal){
 }
 function draw3(){
   if (view !== 'sphere') return;
-  tex.needsUpdate = true;
+  tex.needsUpdate = true; ptMat.uniforms.uSize.value = P.dot*1.4*renderer.getPixelRatio();
   const cp = Math.cos(orb.pitch); cam.position.set(4.2*cp*Math.sin(orb.yaw), 4.2*Math.sin(orb.pitch), 4.2*cp*Math.cos(orb.yaw)); cam.lookAt(0, 0, 0);
   renderer.render(scene, cam);
 }
