@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
 // Every active satellite in the public catalogue (CelesTrak GP "active", derived from the US Space Force
-// 18th Space Defense Squadron catalogue), fetched server-side and cached for six hours. Used by /sphere-orbits.
-export const revalidate = 21600;
+// 18th Space Defense Squadron catalogue), fetched server-side and cached for two hours (CelesTrak asks for no more than one download per two hours). Used by /sphere-orbits.
+export const revalidate = 7200;
 
 export async function GET() {
   let sats: [string, string, string][] = [];
@@ -25,6 +25,6 @@ export async function GET() {
   }
   const body = { fetched: new Date().toISOString(), source: "CelesTrak GP · GROUP=active", count: sats.length, error };
   return NextResponse.json({ ...body, sats }, {
-    headers: { "Cache-Control": "public, s-maxage=21600, stale-while-revalidate=86400" },
+    headers: { "Cache-Control": "public, s-maxage=7200, stale-while-revalidate=86400" },
   });
 }

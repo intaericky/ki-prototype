@@ -35,6 +35,7 @@ input[type=search]{width:100%;box-sizing:border-box;background:#000;color:var(--
   <div class="seg" id="segView"><button data-v="sphere">Sphere</button><button data-v="frame">360 frame</button></div>
   <div class="seg" id="segLines" title="Optional lines"><button data-v="none">Dots only</button><button data-v="planes">Orbit lines</button><button data-v="tracks">Ground tracks</button></div>
   <div class="seg" id="segFrame" title="Hold the Earth still, or hold the stars still"><button data-v="earth">Earth still</button><button data-v="stars">Stars still</button></div>
+  <button class="btn" id="gridBtn" title="Latitude and longitude every 30°">Grid</button>
   <div class="seg" id="segSpeed"><button data-v="1">Real time</button><button data-v="60">×60</button><button data-v="600">×600</button><button data-v="3600">×3600</button></div>
   <span id="clock"></span>
   <span class="spacer"></span>
@@ -88,21 +89,23 @@ function classify(rec){
   const cls = e > 0.25 ? 'HEO' : Math.abs(per - 1436.1) < 40 && e < 0.05 ? 'GEO' : apo < 2000 ? 'LEO' : 'MEO';
   return {per, apo, peri, inc: rec.inclo/D2R, ecc: e, cls};
 }
-async function load(){
+async function load(fallback){
   let data = null, from = 'live';
   try { const r = await fetch('/api/orbits', {cache:'no-store'}); if (r.ok) { data = await r.json(); if (!data.sats || data.sats.length < 100) data = null; } } catch (e) {}
+  if (!data && !fallback) return null;
   if (!data) { from = 'built-in'; const f = await (await fetch('/sphere-eye/fallback.json')).json(); data = {fetched: f.source, source: 'built-in sample', sats: f.sats.map(s => [s.name, s.l1, s.l2])}; }
+  const list = [];
   for (const [name, l1, l2] of data.sats) {
     let rec; try { rec = satellite.twoline2satrec(l1, l2); } catch (e) { continue; } if (!rec || rec.error || !rec.no) continue;
     const o = {name: name.replace(/^0 /, ''), id: l1.slice(2, 7).trim(), rec, ...classify(rec), x: NaN, y: 0, hi: false};
     if (o.peri < 80) continue;                              // already falling in
-    sats.push(o);
+    list.push(o);
   }
-  meta = {from, fetched: data.fetched, source: data.source};
+  return {list, meta: {from, fetched: data.fetched, source: data.source}};
 }
 
 /* ---------- time ---------- */
-let speed = +(Q.get('speed') || 60), simMs = Date.now(), lastReal = performance.now();
+let speed = +(Q.get('speed') || 1), simMs = Date.now(), lastReal = performance.now();
 const jdOf = ms => ms/86400000 + 2440587.5;
 function eci(o, ms){                                       // TEME position (km) at a moment, or null
   const r = satellite.sgp4(o.rec, (jdOf(ms) - o.rec.jdsatepoch)*1440);
@@ -112,7 +115,7 @@ const lonOf = p => Math.atan2(p.y, p.x), latOf = p => Math.atan2(p.z, Math.hypot
 const X = lon => ((lon/TAU + 0.5) % 1 + 1) % 1*W, Y = lat => (0.5 - lat/PI)*H;
 
 /* ---------- state ---------- */
-const P = {gain: 0.06, dots: 1, dot: 2.2};
+const P = {gain: 0.06, dots: 1, dot: 2.2, grid: Q.get('grid') !== '0'};
 let lines = Q.get('lines') || 'none', frame = Q.get('frame') || 'earth', view = MODE === 'display' ? 'frame' : 'sphere';
 const show = {LEO: true, MEO: true, GEO: true, HEO: true};
 let find = '', picked = null, yaw = 0, version = 0;
@@ -175,6 +178,7 @@ const touch = () => { version++; };
 /* ---------- the frame ---------- */
 const out = $('map'); out.width = W; out.height = H; const ox = out.getContext('2d');
 function gmstNow(){ return satellite.gstime(jdOf(simMs)); }
+const GRID = '#2e2e2e', GRID0 = '#5a5a5a'; let gridShift = 0;
 function render(){
   const g = gmstNow();
   // where the layer's lines sit now: planes are fixed to the stars, tracks to the Earth
@@ -182,6 +186,12 @@ function render(){
   const lshift = layerKind === 'planes' ? base : layerKind === 'tracks' ? base + g : 0;
   ox.globalCompositeOperation = 'source-over'; ox.fillStyle = '#000'; ox.fillRect(0, 0, W, H);
   if (layer) { const s = Math.round((((lshift + yaw)/TAU*W) % W + W) % W); ox.drawImage(layer, s, 0); ox.drawImage(layer, s - W, 0); }
+  gridShift = base + yaw;
+  if (P.grid && view === 'frame') {                        // latitude and longitude every 30 degrees, equator and prime meridian a little brighter
+    ox.lineWidth = 1;
+    for (let la = -60; la <= 60; la += 30) { ox.strokeStyle = la ? GRID : GRID0; const y = Math.round(Y(la*D2R)) + 0.5; ox.beginPath(); ox.moveTo(0, y); ox.lineTo(W, y); ox.stroke(); }
+    for (let lo = -180; lo < 180; lo += 30) { ox.strokeStyle = lo ? GRID : GRID0; const x = Math.round(X(lo*D2R + gridShift)) + 0.5; ox.beginPath(); ox.moveTo(x, 0); ox.lineTo(x, H); ox.stroke(); }
+  }
   if (P.dots) {
     // flat frame: each dot is widened by 1/cos(latitude) so it comes out square and the same size everywhere on the sphere,
     // and snapped to whole pixels so it stays sharp. The sphere view draws real points instead (below).
@@ -228,6 +238,12 @@ const ptMat = new THREE.ShaderMaterial({uniforms: {uSize: {value: 3}},
       float ring = vB > 1.5 ? smoothstep(0.62 - w, 0.62, r)*(1.0 - smoothstep(0.86 - w, 0.86, r)) + 1.0 - smoothstep(0.3 - w, 0.3, r) : 1.0 - smoothstep(1.0 - w, 1.0, r);
       if (ring <= 0.0) discard; gl_FragColor = vec4(vec3(min(vB, 1.0)*ring), 1.0); }`});
 const pts = new THREE.Points(ptGeo, ptMat); pts.frustumCulled = false; scene.add(pts);
+const grid = new THREE.Group(); scene.add(grid);
+{ const sp = (lo, la) => { const c = Math.cos(la*D2R); return [Math.cos(lo*D2R)*c*1.001, Math.sin(la*D2R)*1.001, -Math.sin(lo*D2R)*c*1.001]; };
+  const add = (pts, col) => { const a = []; for (let i = 0; i < pts.length - 1; i++) a.push(...pts[i], ...pts[i + 1]);
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(a, 3)); grid.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({color: col}))); };
+  for (let la = -60; la <= 60; la += 30) { const p = []; for (let i = 0; i <= 360; i += 2) p.push(sp(i, la)); add(p, la ? GRID : GRID0); }
+  for (let lo = -180; lo < 180; lo += 30) { const p = []; for (let la = -90; la <= 90; la += 2) p.push(sp(lo, la)); add(p, lo ? GRID : GRID0); } }
 let orb = {yaw: 0, pitch: 0.25};
 function size(){ const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); cam.aspect = w/h; cam.updateProjectionMatrix(); }
 addEventListener('resize', size); size();
@@ -314,22 +330,36 @@ function step(dtReal){
 }
 function draw3(){
   if (view !== 'sphere') return;
+  grid.visible = !!P.grid; grid.rotation.y = gridShift;
   tex.needsUpdate = true; ptMat.uniforms.uSize.value = P.dot*1.4*renderer.getPixelRatio();
   const cp = Math.cos(orb.pitch); cam.position.set(4.2*cp*Math.sin(orb.yaw), 4.2*Math.sin(orb.pitch), 4.2*cp*Math.cos(orb.yaw)); cam.lookAt(0, 0, 0);
   renderer.render(scene, cam);
 }
 function loop(){ const now = performance.now(), dt = Math.min(0.25, (now - lastReal)/1000); lastReal = now; step(dt); draw3(); requestAnimationFrame(loop); }
 
-await load();
-if (MODE === 'display') setDisplay(true);
-const counts = {}; for (const o of sats) counts[o.cls] = (counts[o.cls] || 0) + 1;
-$('count').textContent = fmt(sats.length);
-$('status').textContent = meta.from === 'live' ? `${meta.source}, fetched ${String(meta.fetched).slice(0, 16).replace('T', ' ')} UTC` : `Live catalogue unavailable; showing a ${sats.length}-satellite sample.`;
+const countEl = {};
 for (const [k, label] of CLASSES) {
-  const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" checked><span>${label}</span><span>${fmt(counts[k] || 0)}</span>`;
+  const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" checked><span>${label}</span><span>–</span>`;
   l.querySelector('input').onchange = e => { show[k] = e.target.checked; touch(); };
-  $('classes').append(l);
+  countEl[k] = l.lastElementChild; $('classes').append(l);
 }
+function apply(cat){                                       // swap in a catalogue, keeping what was picked and searched
+  const pid = picked && picked.id;
+  sats.length = 0; sats.push(...cat.list); meta = cat.meta;
+  picked = null; if (pid) { const o = sats.find(s => s.id === pid); if (o) setPick(o); }
+  setFind($('find').value);
+  const counts = {}; for (const o of sats) counts[o.cls] = (counts[o.cls] || 0) + 1;
+  for (const k in countEl) countEl[k].textContent = fmt(counts[k] || 0);
+  $('count').textContent = fmt(sats.length);
+  $('status').textContent = meta.from === 'live' ? `${meta.source}, fetched ${String(meta.fetched).slice(0, 16).replace('T', ' ')} UTC` : `Live catalogue unavailable; showing a ${sats.length}-satellite sample.`;
+  touch();
+}
+apply(await load(true));
+// stay near real time: ask for the catalogue again every 30 minutes (the server refreshes it from CelesTrak every 2 hours)
+setInterval(async () => { const c = await load(false); if (c) apply(c); }, 30*60*1000);
+const syncGrid = () => $('gridBtn').setAttribute('aria-pressed', String(!!P.grid));
+$('gridBtn').onclick = () => { P.grid = !P.grid; syncGrid(); }; syncGrid();
+if (MODE === 'display') setDisplay(true);
 note();
 if (Q.get('find')) { $('find').value = Q.get('find'); setFind(Q.get('find')); }
 window.__orb = {sats, P, setSpeed, step, render, draw3, setPick, setFind, set: (k, v) => { if (k === 'lines') lines = v; if (k === 'frame') frame = v; if (k === 'view') { view = v; document.body.classList.toggle('flat', v === 'frame'); } touch(); }, job: () => job};
