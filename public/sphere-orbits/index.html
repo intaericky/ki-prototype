@@ -31,6 +31,9 @@ input[type=search]{width:100%;box-sizing:border-box;background:#000;color:var(--
 #drawbar #strBtns{display:none;gap:6px}
 #drawbar.strings #strBtns{display:flex}
 #drawbar .seg{flex:none}
+body:not(.tools) #segTool{display:none}
+#snapTip{position:fixed;pointer-events:none;font:11px/1.2 var(--mono);color:var(--ink);background:rgba(0,0,0,.65);padding:2px 5px;z-index:5;display:none;white-space:nowrap}
+body.display #snapTip{display:none!important}
 #drawbar:not(.drawing){color:var(--mute);padding-right:8px}
 #drawbar{padding-left:6px}
 #finishBtn{background:var(--ink);color:#000}
@@ -76,7 +79,8 @@ body.display #drawbar{display:none}
   </div>
 </aside>
 <p class="note" id="note"></p>
-<div id="drawbar" role="toolbar" aria-label="Draw"><span class="seg" id="segTool"><button data-v="cons">Constellations</button><button data-v="strings">Strings</button></span><span id="drawMsg"></span><span id="strBtns"><button class="btn" id="soundBtn">Sound</button><button class="btn" id="clearStrBtn">Cut all</button></span><span id="drawBtns"><button class="btn" id="undoBtn">Undo</button><button class="btn" id="cancelBtn">Cancel</button><button class="btn" id="finishBtn">Finish</button></span></div>
+<div id="snapTip"></div>
+<div id="drawbar" role="toolbar" aria-label="Draw"><span class="seg" id="segTool"><button data-v="cons">Constellations</button><button data-v="strings">Strings</button></span><span id="drawMsg"></span><span id="strBtns"><button class="btn" id="clearStrBtn">Cut all</button></span><button class="btn" id="soundBtn" title="Lines sound when satellites cross them">Sound</button><span id="drawBtns"><button class="btn" id="undoBtn">Undo</button><button class="btn" id="cancelBtn">Cancel</button><button class="btn" id="finishBtn">Finish</button></span></div>
 <script src="/sphere-assets/vendor/satellite.min.js"></script>
 <script type="module">
 import * as THREE from '/sphere-assets/vendor/three.module.min.js';
@@ -206,6 +210,7 @@ function render(){
   if (P.dots) {
     // flat frame: each dot is widened by 1/cos(latitude) so it comes out square and the same size everywhere on the sphere,
     // and snapped to whole pixels so it stays sharp. The sphere view draws real points instead (below).
+    conStrings = soundOn ? buildConStrings() : [];
     const any = sats.some(o => o.hi), flat = view === 'frame', ry = Math.max(1, Math.round(P.dot)), kx = W/(2*H);
     let n = 0;
     for (const o of sats) {
@@ -213,7 +218,7 @@ function render(){
       const s = eci(o, simMs); if (!s) { o.x = NaN; continue; }
       const lo = lonOf(s.position) + base + yaw, la = latOf(s.position);
       o.x = X(lo); o.y = Y(la);
-      if (strings.length) { const u = unit(lonOf(s.position) - g, la); if (o.u && (!any || o.hi)) crossings(o, o.u, u); o.u = u; } else o.u = null;
+      if (strings.length || conStrings.length) { const u = unit(lonOf(s.position) - g, la); if (o.u && (!any || o.hi)) crossings(o, o.u, u); o.u = u; } else o.u = null;
       const b = o.hi || !any ? 1 : 0.4;
       if (flat) {
         const rx = Math.max(1, Math.min(W, Math.round(ry*kx/Math.max(0.02, Math.cos(la)))));
@@ -223,9 +228,11 @@ function render(){
       } else if (n < MAXP) {
         const L = lo + PI, c = Math.cos(la);                // same mapping as three's SphereGeometry uv
         ptPos[n*3] = -Math.cos(L)*c*1.002; ptPos[n*3 + 1] = Math.sin(la)*1.002; ptPos[n*3 + 2] = Math.sin(L)*c*1.002;
-        ptB[n] = draftSet.has(o.id) ? 2 : b; n++;
+        ptB[n] = o === snap ? 3 : draftSet.has(o.id) ? 2 : b; n++;
       }
     }
+    updateSnap();
+    if (flat && snap && !isNaN(snap.x)) { ox.strokeStyle = '#fff'; ox.lineWidth = 1; ox.beginPath(); ox.arc(Math.round(snap.x) + 0.5, Math.round(snap.y) + 0.5, 9, 0, TAU); ox.stroke(); }
     if (flat) for (const id of draftSet) { const o = byId.get(id); if (o && !isNaN(o.x)) { ox.strokeStyle = '#fff'; ox.lineWidth = 1; ox.strokeRect(Math.round(o.x) - 6.5, Math.round(o.y) - 6.5, 13, 13); } }
     ptGeo.setDrawRange(0, n); ptGeo.attributes.position.needsUpdate = true; ptGeo.attributes.b.needsUpdate = true;
   } else ptGeo.setDrawRange(0, 0);
@@ -245,11 +252,11 @@ ptGeo.setAttribute('b', new THREE.BufferAttribute(ptB, 1).setUsage(THREE.Dynamic
 ptGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 2);
 const ptMat = new THREE.ShaderMaterial({uniforms: {uSize: {value: 3}},
   vertexShader: `attribute float b; uniform float uSize; varying float vB;
-    void main(){ vB = b; gl_PointSize = uSize*(b > 1.5 ? 3.0 : 1.0); gl_Position = projectionMatrix*modelViewMatrix*vec4(position, 1.0); }`,
+    void main(){ vB = b; gl_PointSize = uSize*(b > 2.5 ? 5.0 : b > 1.5 ? 3.0 : 1.0); gl_Position = projectionMatrix*modelViewMatrix*vec4(position, 1.0); }`,
   fragmentShader: `varying float vB;
     void main(){ vec2 q = gl_PointCoord*2.0 - 1.0; float r = length(q), w = fwidth(r);
-      float ring = vB > 1.5 ? smoothstep(0.62 - w, 0.62, r)*(1.0 - smoothstep(0.86 - w, 0.86, r)) + 1.0 - smoothstep(0.3 - w, 0.3, r) : 1.0 - smoothstep(1.0 - w, 1.0, r);
-      if (ring <= 0.0) discard; gl_FragColor = vec4(vec3(min(vB, 1.0)*ring), 1.0); }`});
+      float ring = vB > 2.5 ? smoothstep(0.78 - w, 0.78, r)*(1.0 - smoothstep(0.92 - w, 0.92, r)) + 1.0 - smoothstep(0.2 - w, 0.2, r) : vB > 1.5 ? smoothstep(0.62 - w, 0.62, r)*(1.0 - smoothstep(0.86 - w, 0.86, r)) + 1.0 - smoothstep(0.3 - w, 0.3, r) : 1.0 - smoothstep(1.0 - w, 1.0, r);
+      if (ring <= 0.0) discard; gl_FragColor = vec4(vec3(min(vB, 1.0)*min(ring, 1.0)), 1.0); }`});
 const pts = new THREE.Points(ptGeo, ptMat); pts.frustumCulled = false; scene.add(pts);
 const grid = new THREE.Group(); scene.add(grid);
 { const sp = (lo, la) => { const c = Math.cos(la*D2R); return [Math.cos(lo*D2R)*c*1.001, Math.sin(la*D2R)*1.001, -Math.sin(lo*D2R)*c*1.001]; };
@@ -284,8 +291,8 @@ for (const el of [canvas, out]) {
   el.addEventListener('pointerup', e => {
     if (drag && drag.str) { if (drag.moved && strDrag) addString(...strDrag); else cutString(framePoint(e)); strDrag = null; drag = null; return; }
     if (drag && !drag.moved && tool === 'cons') { const p = framePoint(e); tap(p); } drag = null; });
-  el.addEventListener('pointermove', e => { hover = draft && !drag ? framePoint(e) : null; });
-  el.addEventListener('pointerleave', () => { hover = null; });
+  el.addEventListener('pointermove', e => { hover = tool === 'cons' && !drag && e.pointerType !== 'touch' ? framePoint(e) : null; tipAt = [e.clientX, e.clientY]; });
+  el.addEventListener('pointerleave', () => { hover = null; tipAt = null; });
 }
 if (MODE === 'display') try { yaw = +(localStorage.getItem('orbits-yaw') || 0) || 0; } catch (e) {}
 
@@ -341,6 +348,8 @@ let uiT = 0; addEventListener('pointermove', () => { if (!document.body.classLis
 
 // the instrument's state (used by both sections below)
 const STR = 'sampling-sphere/v1/orbits/strings', SCALE = [0, 3, 5, 7, 10];
+let snap = null, tipAt = null, conStrings = [];
+const SNAP = 40;                                            // frame pixels: how far the cursor reaches for the nearest satellite
 let pluckCount = 0, tool = Q.get('tool') === 'strings' ? 'strings' : 'cons', strings = [], strDrag = null, soundOn = true, ac = null, master = null, voices = 0, plucksThisFrame = 0;
 
 /* ---------- constellations: join satellites into a shape, then watch the orbits pull it apart ---------- */
@@ -372,7 +381,7 @@ function starsNow(c, m){
     if (!now) return was; if (!was || m <= 0) return now; return slerp(now, was, m);
   });
 }
-function edgesOf(c, m){ const P3 = starsNow(c, m), out = []; for (const [i, j] of c.edges) if (P3[i] && P3[j]) out.push(arc(P3[i], P3[j])); return out; }
+function edgesOf(c, m){ const P3 = starsNow(c, m), out = []; c.edges.forEach(([i, j], k) => { if (P3[i] && P3[j]) { const a = arc(P3[i], P3[j]); a.k = k; out.push(a); } }); return out; }
 
 // sphere view: one line buffer rebuilt each frame (a few thousand segments at most)
 const MAXV = 240000, cvPos = new Float32Array(MAXV*3), cvCol = new Float32Array(MAXV*3), cvGeo = new THREE.BufferGeometry();
@@ -382,13 +391,15 @@ const conLines = new THREE.LineSegments(cvGeo, new THREE.LineBasicMaterial({vert
 function drawConstellations(flat){
   revealM += ((reveal ? 1 : 0) - revealM)*0.08; if (reveal) shown = reveal; else if (revealM < 0.002) { revealM = 0; shown = null; }
   const list = [];                                          // [points, brightness]
+  const now = performance.now();
   for (const c of cons.slice(-300)) { const m = c === shown ? revealM : 0, b = c === shown ? 0.55 + 0.45*revealM : shown ? 0.28 : 0.55;
-    for (const e of edgesOf(c, m)) list.push([e, b]); }
+    for (const e of edgesOf(c, m)) list.push([e, Math.min(1, b + (c.hit && c.hit[e.k] ? 0.6*Math.exp(-(now - c.hit[e.k])/350) : 0))]); }
   for (const {d} of others.values()) for (const e of edgesOf(d, 0)) list.push([e, 0.9]);
   if (draft) {
     for (const e of edgesOf(draft, 0)) list.push([e, 1]);
     const P3 = starsNow(draft, 0), pen = P3[draft.pen];
-    if (pen && hover) { const lo = (hover[0]/W - 0.5)*TAU, la = (0.5 - hover[1]/H)*PI; list.push([arc(pen, unit(lo, la)), 0.45]); }
+    if (pen && snap && snap.id !== draft.stars[draft.pen]) { const L = earthLL(snap, simMs); if (L) list.push([arc(pen, unit(L[0] + gridShift, L[1])), 0.5]); }
+    else if (pen && hover && !snap) { const lo = (hover[0]/W - 0.5)*TAU, la = (0.5 - hover[1]/H)*PI; list.push([arc(pen, unit(lo, la)), 0.3]); }
   }
   stringLines(list);
   if (flat) { ox.globalCompositeOperation = 'source-over'; ox.lineWidth = 1; for (const [pts, b] of list) polyline(ox, pts, b); return; }
@@ -414,11 +425,11 @@ function hitCon(p, r){
   return best;
 }
 function tap(p){
-  if (draft) { const o = nearestDot(p, 22); if (o) addStar(o); return; }
+  if (draft) { const o = nearestDot(p, SNAP); if (o) addStar(o); return; }
   const c = hitCon(p, 9);
-  if (c) { reveal = reveal === c ? null : c; return bar(); }
+  if (c) { reveal = reveal === c ? null : c; if (reveal) { strum(c, 'now'); setTimeout(() => reveal === c && strum(c, 'then'), 1100); } return bar(); }
   if (reveal) { reveal = null; return bar(); }
-  const o = nearestDot(p, 22); if (o) { draft = {stars: [], edges: [], pen: -1, hist: []}; addStar(o); }
+  const o = nearestDot(p, SNAP); if (o) { draft = {stars: [], edges: [], pen: -1, hist: []}; addStar(o); }
 }
 function addStar(o){
   setPick(o);
@@ -427,7 +438,8 @@ function addStar(o){
   draft.hist.push(JSON.stringify([draft.stars, draft.edges, draft.pen]));
   let j = i; if (j < 0) { if (draft.stars.length >= 40) return; draft.stars.push(o.id); j = draft.stars.length - 1; }
   if (draft.pen >= 0 && !draft.edges.some(([a, b]) => (a === draft.pen && b === j) || (a === j && b === draft.pen))) draft.edges.push([draft.pen, j]);
-  draft.pen = j; changed();
+  const joined = draft.pen >= 0 && draft.pen !== j; draft.pen = j; changed();
+  if (joined) strum(draft, 'now', [draft.edges.length - 1]);
 }
 function undo(){ if (!draft) return; const h = draft.hist.pop(); if (!h) return cancelDraft(); [draft.stars, draft.edges, draft.pen] = JSON.parse(h); if (!draft.stars.length) return cancelDraft(); changed(); }
 function cancelDraft(){ draft = null; hover = null; changed(); }
@@ -435,16 +447,17 @@ function finish(){
   if (!draft) return; if (!draft.edges.length) return cancelDraft();
   const orig = draft.stars.map(id => { const o = byId.get(id), L = o && earthLL(o, simMs); return L ? [+L[0].toFixed(5), +L[1].toFixed(5)] : [0, 0]; });
   const c = {id: Date.now().toString(36) + ME.slice(0, 4), at: Date.now(), sim: Math.round(simMs), stars: draft.stars.slice(), edges: draft.edges.map(e => e.slice()), orig};
-  draft = null; hover = null; add(c, true); changed();
-  reveal = null;
+  draft = null; add(c, true); changed();
+  reveal = null; strum(cons.find(k => k.id === c.id) || c, 'now');
 }
 function changed(){ draftSet = new Set(draft ? draft.stars : []); bar(); sendDraft(); }
 const ago = ms => { const m = Math.round(ms/60000); return m < 0 ? 'later than the clock shows' : m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 48*60 ? `${Math.floor(m/60)} h ${m % 60} min ago` : `${Math.round(m/1440)} days ago`; };
 function bar(){
+  $('soundBtn').setAttribute('aria-pressed', String(soundOn));
   const el = $('drawbar'); el.classList.toggle('drawing', !!draft); el.classList.toggle('strings', tool === 'strings'); segSync('segTool', tool);
   if (tool === 'strings') { const n = strings.length;
     $('drawMsg').textContent = n ? `${n} string${n === 1 ? '' : 's'} · every satellite that crosses one plays it · drag to add · tap one to cut it` : 'Drag across the sphere to stretch a string. Every satellite that crosses it will play it.';
-    $('soundBtn').setAttribute('aria-pressed', String(soundOn)); return; }
+    return; }
   if (draft) { const n = draft.stars.length, e = draft.edges.length;
     $('drawMsg').textContent = `${n} star${n === 1 ? '' : 's'}, ${e} line${e === 1 ? '' : 's'} · tap satellites to join them · tap the last one again to finish`;
     $('undoBtn').textContent = draft.hist.length ? 'Undo' : 'Cancel'; return; }
@@ -518,11 +531,12 @@ function cutString(p){
 }
 function crossings(o, u0, u1){
   if (dot3(u0, u1) < 0.996) return;                         // a jump (new catalogue, speed change), not a crossing
-  for (const st of strings) {
+  for (const st of strings.length ? strings.concat(conStrings) : conStrings) {
+    if (st.ids && (st.ids[0] === o.id || st.ids[1] === o.id)) continue;   // a line's own satellites do not pluck it
     const d0 = dot3(st.n, u0), d1 = dot3(st.n, u1); if ((d0 > 0) === (d1 > 0)) continue;
     const t = d0/(d0 - d1), q = nrm([u0[0] + (u1[0] - u0[0])*t, u0[1] + (u1[1] - u0[1])*t, u0[2] + (u1[2] - u0[2])*t]);
     if (dot3(cross3(st.A, q), st.n) < 0 || dot3(cross3(q, st.B), st.n) < 0) continue;
-    pluck(st, Math.acos(Math.max(-1, Math.min(1, dot3(st.A, q))))/st.len, o.cls, o.cls === 'LEO' ? 0.55 : 1);
+    pluck(st, Math.acos(Math.max(-1, Math.min(1, dot3(st.A, q))))/st.len, o.cls, (o.cls === 'LEO' ? 0.55 : 1)*(st.vel || 1)); if (st.onHit) st.onHit();
   }
 }
 function audio(){
@@ -581,6 +595,40 @@ $('segTool').addEventListener('click', e => { const b = e.target.closest('button
 $('soundBtn').onclick = () => { soundOn = !soundOn; if (soundOn) audio(); else if (ac) ac.suspend(); bar(); };
 $('clearStrBtn').onclick = () => { strings = []; saveStrings(); };
 
+/* ---------- constellations, heard ---------- */
+// Every line of a constellation is a string: its pitch follows its length right now (shorter is higher), so as the
+// orbits pull a shape apart its lines fall in pitch and the chord goes out of tune. Other satellites crossing a line
+// pluck it. Joining a line plucks it, finishing strums the shape, and opening a shape's first form plays it now, then as drawn.
+const pitch = len => Math.max(70, Math.min(1800, 115/Math.max(len, 1e-3)));     // 10 degrees ~ 660 Hz
+function lineLens(c, when){
+  const P3 = when === 'then' && c.orig ? c.orig.map(q => unit(...q)) : starsNow(c, 0);
+  return c.edges.map(([i, j]) => P3[i] && P3[j] ? Math.acos(Math.max(-1, Math.min(1, dot3(P3[i], P3[j])))) : null);
+}
+function strum(c, when, only){
+  audio(); const L = lineLens(c, when);
+  (only || c.edges.map((e, k) => k)).forEach((k, n) => { if (L[k] === null) return;
+    setTimeout(() => { pluck({freq: pitch(L[k])}, (n + 0.5)/Math.max(1, c.edges.length), 'MEO', 0.7); if (c.hit) c.hit[k] = performance.now(); }, n*70); });
+}
+function buildConStrings(){                                // the lines of the newest shapes (and an opened one), in Earth-fixed coordinates
+  const out = [], list = cons.slice(-12); if (shown && !list.includes(shown)) list.push(shown);
+  for (const c of list) {
+    c.hit = c.hit || [];
+    const U = c.stars.map(id => { const o = byId.get(id), L = o && earthLL(o, simMs); return L ? unit(...L) : null; });
+    c.edges.forEach(([i, j], k) => { const A = U[i], B = U[j]; if (!A || !B) return; const len = Math.acos(Math.max(-1, Math.min(1, dot3(A, B))));
+      if (len < 1e-3 || len > PI - 1e-3) return;
+      out.push({A, B, n: nrm(cross3(A, B)), len, freq: pitch(len), ids: [c.stars[i], c.stars[j]], vel: 0.6, onHit: () => { c.hit[k] = performance.now(); }}); });
+  }
+  return out;
+}
+function updateSnap(){                                     // the cursor holds on to the nearest satellite
+  const onLine = hover && !draft && hitCon(hover, 9);     // over a finished line, a tap opens it: no snapping there
+  const s = hover && tool === 'cons' && !onLine ? nearestDot(hover, SNAP) : null, tip = $('snapTip');
+  snap = s;
+  if (s && tipAt) { tip.textContent = s.name; tip.style.left = tipAt[0] + 16 + 'px'; tip.style.top = tipAt[1] + 14 + 'px'; tip.style.display = 'block'; }
+  else tip.style.display = 'none';
+  canvas.style.cursor = out.style.cursor = onLine ? 'pointer' : s ? 'none' : '';
+}
+
 /* ---------- loop ---------- */
 let lastV = -1;
 function step(dtReal){
@@ -626,6 +674,7 @@ const syncGrid = () => $('gridBtn').setAttribute('aria-pressed', String(!!P.grid
 $('gridBtn').onclick = () => { P.grid = !P.grid; syncGrid(); }; syncGrid();
 if (MODE === 'display') setDisplay(true);
 note(); bar();
+if (Q.has('tool')) document.body.classList.add('tools');
 if (Q.get('find')) { $('find').value = Q.get('find'); setFind(Q.get('find')); }
 window.__orb = {sats, P, setSpeed, step, render, draw3, setPick, setFind, set: (k, v) => { if (k === 'lines') lines = v; if (k === 'frame') frame = v; if (k === 'view') { view = v; document.body.classList.toggle('flat', v === 'frame'); } touch(); }, job: () => job, tap, addString, strings: () => strings, plucks: () => pluckCount, setTool: v => { tool = v; bar(); }, cons: () => cons, finish, draft: () => draft, reveal: c => { reveal = c; bar(); }};
 if (!TEST) loop(); else { step(0); }
