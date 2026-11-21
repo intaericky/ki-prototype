@@ -102,7 +102,7 @@
     <div class="row"><label>Bloom size</label><input type="range" id="bloomr" min="0" max="100" step="1"><output id="bloomrO"></output></div>
     <div class="row"><label>Bloom from</label><input type="range" id="bloomt" min="0" max="100" step="1"><output id="bloomtO"></output></div>
     <div class="row"><label>Exposure</label><input type="range" id="expo" min="0" max="100" step="1"><output id="expoO"></output></div>
-    <div class="row"><label>Tone</label><div class="seg" data-k="tone"><button data-v="aces">ACES</button><button data-v="agx">AgX</button><button data-v="reinhard">Reinhard</button><button data-v="cineon">Cineon</button></div></div>
+    <div class="row"><label>Tone</label><div class="seg" data-k="tone"><button data-v="standard">Standard</button><button data-v="aces">ACES</button><button data-v="agx">AgX</button><button data-v="reinhard">Reinhard</button><button data-v="cineon">Cineon</button></div></div>
     <div class="row"><label>Background</label><input type="color" id="bg"><output></output></div>
     <div class="row"><label>Lens (FOV)</label><input type="range" id="fov" min="0" max="100" step="1"><output id="fovO"></output></div>
     <div class="row"><label>Auto orbit</label><input type="range" id="orbit" min="0" max="100" step="1"><output id="orbitO"></output></div>
@@ -130,16 +130,16 @@ const TEST = location.hash.includes('test');
 
 // ---------- settings (URL params override; studio remembers its own) ----------
 const DEF = { view: ROLE === 'display' ? '360' : '3d', from: 'outside', earth: 'black', frame: 'fixed', range: 'leo', color: 'type', shape: 'bytype', maxalt: 100, size: 45, rcs: '1', stretch: 0, spin: 40,
-  rough: 30, metal: 0, coat: 50, coatr: 12, irid: 30, iridt: 40, sheen: 0, glow: 25, flat: '0', detail: '2',
-  env: 40, amb: 10, key: 55, keyaz: 35, keyel: 60, keyc: 'fff4e8', rim: 45, rimc: '9cc2ff',
-  bloom: 30, bloomr: 50, bloomt: 70, expo: 50, tone: 'aces', bg: '000000', fov: 30, orbit: 0, spd: 0, scale: 100,
+  rough: 60, metal: 0, coat: 0, coatr: 12, irid: 0, iridt: 40, sheen: 0, glow: 0, flat: '0', detail: '2',
+  env: 25, amb: 35, key: 60, keyaz: 35, keyel: 60, keyc: 'ffffff', rim: 0, rimc: 'ffffff',
+  bloom: 0, bloomr: 50, bloomt: 70, expo: 50, tone: 'standard', bg: '000000', fov: 30, orbit: 0, spd: 0, scale: 100,
   sat: 50, cs: 'e8eef7', c0: '3d8bff', c1: 'ffb21f', c2: 'ff2d6f', c3: 'b9c2cc',
   ralt: 'ff3d6e,ff9a2e,ffe14d,3ee8b0,2e9bff,8a5bff', rinc: '2e9bff,3ee8b0,ffe14d,ff9a2e,ff3d6e,c05bff', ryear: 'ff5a1f,2ee6ff', yspread: 'count' };
 let S = { ...DEF };
-if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem('entangled-mesh-v4') || '{}')); } catch {}
+if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem('entangled-mesh-v5') || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
-const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem('entangled-mesh-v4', JSON.stringify(S)); } catch {} };
+const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem('entangled-mesh-v5', JSON.stringify(S)); } catch {} };
 
 const SIZE_KM = () => 3 * Math.pow(1500 / 3, S.size / 100) * (S.range === 'all' ? 3 : 1); // mesh radius, km
 const MAXALT = () => S.maxalt >= 100 ? 1e9 : 300 * Math.pow(40000 / 300, S.maxalt / 100); // km
@@ -211,7 +211,7 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
 const keyL = new THREE.DirectionalLight(0xfff4e8, 3), rimL = new THREE.DirectionalLight(0x9cc2ff, 2);
 keyL.position.set(1.3, 1.6, 1.2); rimL.position.set(-1.6, 0.5, -1.4);
-const ambL = new THREE.HemisphereLight(0xdfe8ff, 0x201810, 0.3);
+const ambL = new THREE.HemisphereLight(0xffffff, 0x404040, 0.3);
 const rig = new THREE.Group(); rig.add(keyL, keyL.target, rimL, rimL.target, ambL); scene.add(rig); // turns with the camera so the light stays studio-like
 
 // ---------- object meshes: one instance per object, positioned on the GPU from its orbital elements ----------
@@ -592,7 +592,7 @@ function render(time) {
   rimL.position.set(-keyL.position.x, 0.3, -keyL.position.z);
   keyL.intensity = 5 * S.key / 100; rimL.intensity = 5 * S.rim / 100; ambL.intensity = 2 * S.amb / 100;
   keyL.color.set('#' + S.keyc); rimL.color.set('#' + S.rimc);
-  renderer.toneMapping = { aces: THREE.ACESFilmicToneMapping, agx: THREE.AgXToneMapping, reinhard: THREE.ReinhardToneMapping, cineon: THREE.CineonToneMapping }[S.tone] ?? THREE.ACESFilmicToneMapping;
+  renderer.toneMapping = { standard: THREE.LinearToneMapping, aces: THREE.ACESFilmicToneMapping, agx: THREE.AgXToneMapping, reinhard: THREE.ReinhardToneMapping, cineon: THREE.CineonToneMapping }[S.tone] ?? THREE.LinearToneMapping;
   for (const b of [bloom, bloom360]) { b.radius = S.bloomr / 100; b.threshold = 0.2 + 1.6 * S.bloomt / 100; }
   const bg = new THREE.Color('#' + S.bg); bg.r **= 2.2; bg.g **= 2.2; bg.b **= 2.2;
   if (!S.view || S.view !== '360') look.yaw += (S.orbit / 100) * 0.004;
