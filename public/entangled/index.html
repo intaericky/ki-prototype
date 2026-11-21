@@ -69,7 +69,7 @@
   </details>
   <details class="sec" open><summary>Objects</summary>
     <div class="row"><label>Shape</label><div class="seg" data-k="shape"><button data-v="bytype">By type</button><button data-v="sphere">Sphere</button><button data-v="cube">Cube</button><button data-v="diamond">Diamond</button><button data-v="shard">Shard</button><button data-v="spike">Spike</button><button data-v="ring">Ring</button><button data-v="capsule">Capsule</button></div></div>
-    <div class="row"><label>Size</label><input type="range" id="size" min="0" max="100" step="1"><output id="sizeO"></output></div>
+    <div class="row"><label title="How many times larger than real">Size</label><input type="range" id="size" min="0" max="100" step="1"><output id="sizeO"></output></div>
     <div class="row"><label>Max altitude</label><input type="range" id="maxalt" min="0" max="100" step="1"><output id="maxaltO"></output></div>
     <div class="row"><label>Size by RCS</label><div class="seg" data-k="rcs"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
     <div class="row"><label>Stretch</label><input type="range" id="stretch" min="0" max="100" step="1"><output id="stretchO"></output></div>
@@ -152,7 +152,8 @@ const fmt = {
   bloomr: pct('bloomr'), bloomt: pct('bloomt'), fov: () => Math.round(15 + S.fov * 0.75) + '°', orbit: () => S.orbit <= 0 ? 'off' : S.orbit + '',
   expo: () => ((S.expo - 50) / 25 >= 0 ? '+' : '') + ((S.expo - 50) / 25).toFixed(1) + ' EV', spd: () => SPEED().toLocaleString() + '×',
   sat: () => (S.sat * 2) + '%',
-  size: () => (SIZE_KM() < 10 ? SIZE_KM().toFixed(1) : Math.round(SIZE_KM())) + ' km',
+  // the scene is at true scale in km; with RCS sizing a mesh is ~1430 × size(km) times wider than the object's radar size (√RCS m)
+  size: () => { const k = SIZE_KM(), x = k * (S.rcs === '1' ? 1430 : 1000); return '×' + (x >= 1e4 ? Math.round(x / 1e3) + 'k' : Math.round(x)); },
   stretch: () => S.stretch <= 0 ? 'off' : '×' + (1 + S.stretch / 10).toFixed(1), spin: () => S.spin <= 0 ? 'off' : S.spin + '',
   glow: () => S.glow + '', bloom: () => S.bloom + '', scale: () => S.scale + '%',
 };
