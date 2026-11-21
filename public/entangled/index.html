@@ -9,7 +9,7 @@
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
   canvas { display: block; position: fixed; inset: 0; width: 100vw; height: 100vh; touch-action: none; cursor: grab; }
   canvas:active { cursor: grabbing; }
-  #panel { position: fixed; top: 12px; right: 12px; width: 296px; max-height: calc(100vh - 24px); overflow: auto; background: #07090dcc; backdrop-filter: blur(10px); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-sizing: border-box; }
+  #panel { position: fixed; top: 12px; right: 12px; width: 320px; max-height: calc(100vh - 24px); overflow: auto; background: #07090dcc; backdrop-filter: blur(10px); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; box-sizing: border-box; }
   #panel h1 { margin: 0 0 2px; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
   #panel .sub { color: var(--dim); margin-bottom: 10px; }
   .row { display: grid; grid-template-columns: 80px 1fr 52px; align-items: center; gap: 6px; margin: 5px 0; }
@@ -19,7 +19,10 @@
   .seg button, .btn { background: #ffffff10; color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; font: inherit; cursor: pointer; }
   .seg button.on { background: #ffffffe0; color: #000; }
   input[type=range] { width: 100%; accent-color: #9ad; }
-  .sec { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; }
+  .sec { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg); padding: 2px 0 4px; list-style: none; }
+  summary::before { content: '▸ '; color: var(--dim); } details[open] > summary::before { content: '▾ '; }
+  #presets button.on { background: #ffffffe0; color: #000; }
   .legend { display: grid; grid-template-columns: 26px 1fr auto; gap: 4px 8px; align-items: center; margin: 6px 0; }
   .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .legend span:last-child { color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -45,51 +48,64 @@
   <div class="sub">Every tracked object in Earth orbit, now, each as its own mesh. H hides this, F full screen, space pauses.</div>
   <div id="status">Loading the catalogue…</div>
 
-  <div class="sec">
+  <details class="sec" open><summary>View</summary>
     <div class="row"><label>View</label><div class="seg" data-k="view"><button data-v="3d">3D</button><button data-v="360">360 frame</button></div></div>
     <div class="row"><label>Earth</label><div class="seg" data-k="earth"><button data-v="black">Black</button><button data-v="image">Image</button><button data-v="off">Off</button></div></div>
     <div class="row"><label>Frame</label><div class="seg" data-k="frame"><button data-v="fixed">Earth-fixed</button><button data-v="inertial">Inertial</button></div></div>
     <div class="row"><label>Range</label><div class="seg" data-k="range"><button data-v="leo">Low orbit</button><button data-v="all">Out to GEO</button></div></div>
-  </div>
-
-  <div class="sec">
-    <div class="row"><label>Color by</label><div class="seg" data-k="color"><button data-v="type">Type</button><button data-v="alt">Altitude</button><button data-v="inc">Inclination</button><button data-v="year">Launch year</button></div></div>
+  </details>
+  <details class="sec" open><summary>Time</summary>
+    <div class="row"><label>Speed</label><input type="range" id="spd" min="0" max="100" step="1"><output id="spdO"></output></div>
+    <div class="row"><label></label><div class="seg" id="presets"><button data-sp="1">1×</button><button data-sp="10">10×</button><button data-sp="60">60×</button><button data-sp="600">600×</button><button data-sp="3600">3600×</button><button data-sp="10000">10k×</button></div></div>
+    <div class="row"><label></label><div class="seg"><button class="btn" id="pause">Pause</button><button class="btn" id="now">Rewind to now</button></div></div>
+    <div class="row"><label>Resolution</label><input type="range" id="scale" min="30" max="100" step="5"><output id="scaleO"></output></div>
+  </details>
+  <details class="sec" open><summary>Color</summary>
+    <div class="row"><label>Color by</label><div class="seg" data-k="color"><button data-v="type">Type</button><button data-v="alt">Altitude</button><button data-v="inc">Inclination</button><button data-v="year">Launch year</button><button data-v="one">One color</button></div></div>
     <div id="legend"></div>
     <div class="row"><label>Saturation</label><input type="range" id="sat" min="0" max="100" step="1"><output id="satO"></output></div>
     <div class="row"><label></label><div class="seg"><button class="btn" id="resetCols">Reset colors</button></div></div>
-  </div>
-
-  <div class="sec">
+  </details>
+  <details class="sec" open><summary>Objects</summary>
     <div class="row"><label>Shape</label><div class="seg" data-k="shape"><button data-v="bytype">By type</button><button data-v="sphere">Sphere</button><button data-v="cube">Cube</button><button data-v="diamond">Diamond</button><button data-v="shard">Shard</button><button data-v="spike">Spike</button><button data-v="ring">Ring</button><button data-v="capsule">Capsule</button></div></div>
     <div class="row"><label>Size</label><input type="range" id="size" min="0" max="100" step="1"><output id="sizeO"></output></div>
     <div class="row"><label>Size by RCS</label><div class="seg" data-k="rcs"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
     <div class="row"><label>Stretch</label><input type="range" id="stretch" min="0" max="100" step="1"><output id="stretchO"></output></div>
     <div class="row"><label>Rotate</label><input type="range" id="spin" min="0" max="100" step="1"><output id="spinO"></output></div>
-  </div>
-
-  <div class="sec">
+  </details>
+  <details class="sec" open><summary>Material</summary>
     <div class="row"><label>Roughness</label><input type="range" id="rough" min="0" max="100" step="1"><output id="roughO"></output></div>
     <div class="row"><label>Metal</label><input type="range" id="metal" min="0" max="100" step="1"><output id="metalO"></output></div>
     <div class="row"><label>Clearcoat</label><input type="range" id="coat" min="0" max="100" step="1"><output id="coatO"></output></div>
+    <div class="row"><label>Coat rough</label><input type="range" id="coatr" min="0" max="100" step="1"><output id="coatrO"></output></div>
     <div class="row"><label>Iridescence</label><input type="range" id="irid" min="0" max="100" step="1"><output id="iridO"></output></div>
+    <div class="row"><label>Irid. film</label><input type="range" id="iridt" min="0" max="100" step="1"><output id="iridtO"></output></div>
+    <div class="row"><label>Sheen</label><input type="range" id="sheen" min="0" max="100" step="1"><output id="sheenO"></output></div>
     <div class="row"><label>Glow</label><input type="range" id="glow" min="0" max="100" step="1"><output id="glowO"></output></div>
-  </div>
-
-  <div class="sec">
+    <div class="row"><label>Shading</label><div class="seg" data-k="flat"><button data-v="0">Smooth</button><button data-v="1">Faceted</button></div></div>
+    <div class="row"><label>Detail</label><div class="seg" data-k="detail"><button data-v="1">Low</button><button data-v="2">Medium</button><button data-v="3">High</button></div></div>
+  </details>
+  <details class="sec" open><summary>Lighting</summary>
     <div class="row"><label>Studio light</label><input type="range" id="env" min="0" max="100" step="1"><output id="envO"></output></div>
+    <div class="row"><label>Ambient</label><input type="range" id="amb" min="0" max="100" step="1"><output id="ambO"></output></div>
     <div class="row"><label>Key light</label><input type="range" id="key" min="0" max="100" step="1"><output id="keyO"></output></div>
-    <div class="row"><label>Occlusion</label><input type="range" id="ao" min="0" max="100" step="1"><output id="aoO"></output></div>
+    <div class="row"><label>Key angle</label><input type="range" id="keyaz" min="0" max="100" step="1"><output id="keyazO"></output></div>
+    <div class="row"><label>Key height</label><input type="range" id="keyel" min="0" max="100" step="1"><output id="keyelO"></output></div>
+    <div class="row"><label>Key color</label><input type="color" id="keyc"><output></output></div>
+    <div class="row"><label>Rim light</label><input type="range" id="rim" min="0" max="100" step="1"><output id="rimO"></output></div>
+    <div class="row"><label>Rim color</label><input type="color" id="rimc"><output></output></div>
+  </details>
+  <details class="sec" open><summary>Post & camera</summary>
     <div class="row"><label>Bloom</label><input type="range" id="bloom" min="0" max="100" step="1"><output id="bloomO"></output></div>
-    <div class="row"><label>Depth of field</label><input type="range" id="dof" min="0" max="100" step="1"><output id="dofO"></output></div>
+    <div class="row"><label>Bloom size</label><input type="range" id="bloomr" min="0" max="100" step="1"><output id="bloomrO"></output></div>
+    <div class="row"><label>Bloom from</label><input type="range" id="bloomt" min="0" max="100" step="1"><output id="bloomtO"></output></div>
     <div class="row"><label>Exposure</label><input type="range" id="expo" min="0" max="100" step="1"><output id="expoO"></output></div>
-    <div class="row"><label>Tone</label><div class="seg" data-k="tone"><button data-v="agx">AgX (soft)</button><button data-v="aces">ACES (punchy)</button></div></div>
-  </div>
-
-  <div class="sec">
-    <div class="row"><label>Speed</label><input type="range" id="spd" min="0" max="100" step="1"><output id="spdO"></output></div>
-    <div class="row"><label></label><div class="seg"><button class="btn" id="pause">Pause</button><button class="btn" id="now">Back to now</button><button class="btn" id="copy">Copy display URL</button></div></div>
-    <div class="row"><label>Resolution</label><input type="range" id="scale" min="30" max="100" step="5"><output id="scaleO"></output></div>
-  </div>
+    <div class="row"><label>Tone</label><div class="seg" data-k="tone"><button data-v="aces">ACES</button><button data-v="agx">AgX</button><button data-v="reinhard">Reinhard</button><button data-v="cineon">Cineon</button></div></div>
+    <div class="row"><label>Background</label><input type="color" id="bg"><output></output></div>
+    <div class="row"><label>Lens (FOV)</label><input type="range" id="fov" min="0" max="100" step="1"><output id="fovO"></output></div>
+    <div class="row"><label>Auto orbit</label><input type="range" id="orbit" min="0" max="100" step="1"><output id="orbitO"></output></div>
+  </details>
+  <div class="row" style="margin-top:10px"><label></label><div class="seg"><button class="btn" id="copy">Copy display URL</button><button class="btn" id="resetAll">Reset all</button></div></div>
   <div class="sec sub" style="margin:8px 0 0">Positions: each object's latest public element set (CelesTrak, from the US Space Force catalogue), moved on the GPU along its Kepler orbit with Earth's J2 drift, within ~15 km of SGP4. Type and radar cross-section (RCS) from SATCAT. Stretch points each mesh along its real direction of travel. Shapes and sizes are chosen here, not measured.</div>
 </div>
 
@@ -99,9 +115,7 @@ import * as THREE from 'three';
 import { EffectComposer } from '/sphere-assets/vendor/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from '/sphere-assets/vendor/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from '/sphere-assets/vendor/jsm/postprocessing/ShaderPass.js';
-import { GTAOPass } from '/sphere-assets/vendor/jsm/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from '/sphere-assets/vendor/jsm/postprocessing/UnrealBloomPass.js';
-import { BokehPass } from '/sphere-assets/vendor/jsm/postprocessing/BokehPass.js';
 import { OutputPass } from '/sphere-assets/vendor/jsm/postprocessing/OutputPass.js';
 import { RoomEnvironment } from '/sphere-assets/vendor/jsm/environments/RoomEnvironment.js';
 THREE.ColorManagement.enabled = false;
@@ -114,21 +128,25 @@ const TEST = location.hash.includes('test');
 
 // ---------- settings (URL params override; studio remembers its own) ----------
 const DEF = { view: ROLE === 'display' ? '360' : '3d', earth: 'black', frame: 'fixed', range: 'leo', color: 'type', shape: 'bytype', size: 45, rcs: '1', stretch: 0, spin: 40,
-  rough: 30, metal: 0, coat: 50, irid: 30, glow: 25, env: 40, key: 55, ao: 60, bloom: 30, dof: 0, expo: 62, tone: 'aces', spd: 0, scale: 100,
-  sat: 50, c0: '3d8bff', c1: 'ffb21f', c2: 'ff2d6f', c3: 'b9c2cc',
+  rough: 30, metal: 0, coat: 50, coatr: 12, irid: 30, iridt: 40, sheen: 0, glow: 25, flat: '0', detail: '2',
+  env: 40, amb: 10, key: 55, keyaz: 35, keyel: 60, keyc: 'fff4e8', rim: 45, rimc: '9cc2ff',
+  bloom: 30, bloomr: 50, bloomt: 70, expo: 50, tone: 'aces', bg: '000000', fov: 30, orbit: 0, spd: 0, scale: 100,
+  sat: 50, cs: 'e8eef7', c0: '3d8bff', c1: 'ffb21f', c2: 'ff2d6f', c3: 'b9c2cc',
   ralt: 'ff3d6e,ff9a2e,ffe14d,3ee8b0,2e9bff,8a5bff', rinc: '2e9bff,3ee8b0,ffe14d,ff9a2e,ff3d6e,c05bff', ryear: 'c05bff,ff3d6e,ff9a2e,ffe14d,3ee8b0,2e9bff' };
 let S = { ...DEF };
-if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem('entangled-mesh-v2') || '{}')); } catch {}
+if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem('entangled-mesh-v3') || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
-const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem('entangled-mesh-v2', JSON.stringify(S)); } catch {} };
+const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem('entangled-mesh-v3', JSON.stringify(S)); } catch {} };
 
 const SIZE_KM = () => 3 * Math.pow(1500 / 3, S.size / 100) * (S.range === 'all' ? 3 : 1); // mesh radius, km
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25)); // slider 0..100 → 1× .. 10,000×
 const pct = (k) => () => S[k] + '';
 const fmt = {
-  rough: pct('rough'), metal: pct('metal'), coat: pct('coat'), irid: pct('irid'), env: pct('env'), key: pct('key'), ao: () => S.ao <= 0 ? 'off' : S.ao + '',
-  dof: () => S.dof <= 0 ? 'off' : S.dof + '', expo: () => ((S.expo - 50) / 25 >= 0 ? '+' : '') + ((S.expo - 50) / 25).toFixed(1) + ' EV', spd: () => SPEED().toLocaleString() + '×',
+  rough: pct('rough'), metal: pct('metal'), coat: pct('coat'), coatr: pct('coatr'), irid: pct('irid'), iridt: () => Math.round(100 + 8 * S.iridt) + ' nm', sheen: pct('sheen'),
+  env: pct('env'), amb: pct('amb'), key: pct('key'), keyaz: () => Math.round(S.keyaz * 3.6 - 180) + '°', keyel: () => Math.round(S.keyel * 1.8 - 90) + '°', rim: pct('rim'),
+  bloomr: pct('bloomr'), bloomt: pct('bloomt'), fov: () => Math.round(15 + S.fov * 0.75) + '°', orbit: () => S.orbit <= 0 ? 'off' : S.orbit + '',
+  expo: () => ((S.expo - 50) / 25 >= 0 ? '+' : '') + ((S.expo - 50) / 25).toFixed(1) + ' EV', spd: () => SPEED().toLocaleString() + '×',
   sat: () => (S.sat * 2) + '%',
   size: () => (SIZE_KM() < 10 ? SIZE_KM().toFixed(1) : Math.round(SIZE_KM())) + ' km',
   stretch: () => S.stretch <= 0 ? 'off' : '×' + (1 + S.stretch / 10).toFixed(1), spin: () => S.spin <= 0 ? 'off' : S.spin + '',
@@ -162,12 +180,12 @@ function shapeGeo(name) {
     case 'cube': g = new THREE.BoxGeometry(1.3, 1.3, 1.3); break;
     case 'diamond': g = new THREE.OctahedronGeometry(1.15, 0); break;
     case 'shard': g = new THREE.TetrahedronGeometry(1.25, 0); g.scale(0.7, 0.9, 1.4); break;
-    case 'spike': g = new THREE.ConeGeometry(0.55, 2.4, 10); g.rotateX(Math.PI / 2); break;
-    case 'ring': g = new THREE.TorusGeometry(0.9, 0.3, 8, 24); break;
-    case 'capsule': g = new THREE.CapsuleGeometry(0.42, 1.3, 4, 10); g.rotateX(Math.PI / 2); break;
-    default: g = new THREE.IcosahedronGeometry(1, 2);
+    case 'spike': g = new THREE.ConeGeometry(0.55, 2.4, 6 + 4 * S.detail); g.rotateX(Math.PI / 2); break;
+    case 'ring': g = new THREE.TorusGeometry(0.9, 0.3, 4 + 3 * S.detail, 10 + 8 * S.detail); break;
+    case 'capsule': g = new THREE.CapsuleGeometry(0.42, 1.3, 1 + S.detail, 4 + 4 * S.detail); g.rotateX(Math.PI / 2); break;
+    default: g = new THREE.IcosahedronGeometry(1, +S.detail);
   }
-  if (['diamond', 'shard', 'cube'].includes(name)) { g = g.index ? g.toNonIndexed() : g; g.computeVertexNormals(); } // flat facets
+  if (S.flat === '1' || ['diamond', 'shard', 'cube'].includes(name)) { g = g.index ? g.toNonIndexed() : g; g.computeVertexNormals(); } // flat facets
   return g;
 }
 
@@ -179,7 +197,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 let W = 0, H = 0;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 16 / 9, 100, 400000);
-const cubeRT = new THREE.WebGLCubeRenderTarget(1536, { type: THREE.HalfFloatType, generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+const cubeRT = new THREE.WebGLCubeRenderTarget(1024, { type: THREE.HalfFloatType, generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
 const cubeCam = new THREE.CubeCamera(500, 400000, cubeRT);
 const look = { yaw: 0.6, pitch: 0.35, dist: 1, yaw360: Q.has('yaw') ? +Q.get('yaw') * D2R : 0 };
 
@@ -188,7 +206,8 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
 const keyL = new THREE.DirectionalLight(0xfff4e8, 3), rimL = new THREE.DirectionalLight(0x9cc2ff, 2);
 keyL.position.set(1.3, 1.6, 1.2); rimL.position.set(-1.6, 0.5, -1.4);
-const rig = new THREE.Group(); rig.add(keyL, keyL.target, rimL, rimL.target); scene.add(rig); // turns with the camera so the light stays studio-like
+const ambL = new THREE.HemisphereLight(0xdfe8ff, 0x201810, 0.3);
+const rig = new THREE.Group(); rig.add(keyL, keyL.target, rimL, rimL.target, ambL); scene.add(rig); // turns with the camera so the light stays studio-like
 
 // ---------- object meshes: one instance per object, positioned on the GPU from its orbital elements ----------
 // The orbit code is injected into three.js's own physical material (and into the depth/normal materials the AO and
@@ -232,7 +251,7 @@ const ENT_VERT = /* glsl */`
     lp = lp * ca + cross(ax, lp) * sa + ax * dot(ax, lp) * (1.0 - ca);
     ln = ln * ca + cross(ax, ln) * sa + ax * dot(ax, ln) * (1.0 - ca);
     lp.z *= 1.0 + uStretch; ln.z /= 1.0 + uStretch;
-    float sc = uSize * aCol.w;
+    float sc = uSize * aCol.w * (1.0 + 0.04 * fract(sin(id * 91.7) * 4375.85)); // tiny per-object offset so coincident objects nest instead of flickering
     lp = p + (s * lp.x + u * lp.y + f * lp.z) * sc;
     ln = normalize(s * ln.x + u * ln.y + f * ln.z);
   }`;
@@ -274,14 +293,14 @@ scene.add(earth);
 
 // ---------- 360 unwrap ----------
 const unwrapMat = new THREE.ShaderMaterial({
-  uniforms: { uCube: { value: cubeRT.texture }, uYaw: { value: 0 }, tDay: earthMat.uniforms.tDay, tNight: earthMat.uniforms.tNight, uMode: { value: 0 }, uSun: earthMat.uniforms.uSun, uEarthRot: earthMat.uniforms.uEarthRot },
+  uniforms: { uCube: { value: cubeRT.texture }, uYaw: { value: 0 }, uBg: { value: new THREE.Color(0, 0, 0) }, tDay: earthMat.uniforms.tDay, tNight: earthMat.uniforms.tNight, uMode: { value: 0 }, uSun: earthMat.uniforms.uSun, uEarthRot: earthMat.uniforms.uEarthRot },
   vertexShader: `varying vec2 vUv; void main(){ vUv = position.xy*0.5+0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-  fragmentShader: `uniform samplerCube uCube; uniform float uYaw, uEarthRot; uniform int uMode; uniform vec3 uSun; uniform sampler2D tDay, tNight; varying vec2 vUv;
+  fragmentShader: `uniform samplerCube uCube; uniform vec3 uBg; uniform float uYaw, uEarthRot; uniform int uMode; uniform vec3 uSun; uniform sampler2D tDay, tNight; varying vec2 vUv;
     void main(){
       float lo = (vUv.x - 0.5) * 6.2831853 + uYaw, la = (vUv.y - 0.5) * 3.1415927;
       vec3 d = vec3(cos(la)*cos(lo), sin(la), -cos(la)*sin(lo));
       vec4 c = textureCube(uCube, d);
-      vec3 g = vec3(0.0);
+      vec3 g = uBg;
       if (uMode == 1) { // the ground under everything, as seen from outside
         vec3 e = vec3(d.x, -d.z, d.y); float lon = atan(e.y, e.x) - uEarthRot, lat = asin(clamp(e.z, -1.0, 1.0));
         vec2 uv = vec2(fract(lon / 6.2831853 + 0.5), lat / 3.1415927 + 0.5);
@@ -290,12 +309,10 @@ const unwrapMat = new THREE.ShaderMaterial({
       gl_FragColor = vec4(mix(g, c.rgb, clamp(c.a, 0.0, 1.0)), 1.0);
     }`, depthTest: false, depthWrite: false });
 
-// ---------- post: 3D = render → ambient occlusion → bloom → depth of field → filmic output; 360 = unwrap → bloom → output ----------
+// ---------- post: 3D = render (4× MSAA) → bloom → filmic output; 360 = unwrap → bloom → output ----------
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: TEST ? 0 : 4 }));
-const gtao = new GTAOPass(scene, camera, 1, 1); orbitize(gtao.normalMaterial);
 const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.5, 0.9);
-const bokeh = new BokehPass(scene, camera, { focus: 30000, aperture: 0, maxblur: 0.012 }); orbitize(bokeh.materialDepth);
-composer.addPass(new RenderPass(scene, camera)); composer.addPass(gtao); composer.addPass(bloom); composer.addPass(bokeh); composer.addPass(new OutputPass());
+composer.addPass(new RenderPass(scene, camera)); composer.addPass(bloom); composer.addPass(new OutputPass());
 const composer360 = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
 const bloom360 = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.5, 0.9);
 composer360.addPass(new ShaderPass(unwrapMat)); composer360.addPass(bloom360); composer360.addPass(new OutputPass());
@@ -329,6 +346,7 @@ function colorOf(o) {
   return c.map((v) => Math.max(0, l + (v - l) * k));
 }
 function baseColor(o) {
+  if (S.color === 'one') return lin('#' + S.cs);
   if (S.color === 'type') return lin(typeHex(o.type));
   if (S.color === 'alt') { const h = o.a - RE; return ramp('alt', h < 2000 ? (Math.log(Math.max(h, 150) / 150) / Math.log(2000 / 150)) * 0.6 : 0.6 + 0.4 * Math.min(1, (h - 2000) / 33800)); }
   if (S.color === 'inc') return ramp('inc', o.inc / 180);
@@ -417,9 +435,11 @@ function status() {
 function legend() {
   const el = $('legend');
   const rows = '<div class="legend">' + TYPES.map((t, i) => `<input type="checkbox" data-t="${i}" ${SHOWN[i] ? 'checked' : ''}><span>${S.color === 'type' ? `<input type="color" data-c="${i}" value="${typeHex(i)}"> ` : ''}${t.name}</span><span>${counts[i].toLocaleString()}</span>`).join('') + '</div>';
-  if (S.color === 'type') el.innerHTML = rows;
+  if (S.color === 'one') el.innerHTML = `<div class="row"><label>Color</label><input type="color" data-one value="#${S.cs}"><output></output></div>` + rows;
+  else if (S.color === 'type') el.innerHTML = rows;
   else el.innerHTML = `<div class="stops">${stops(S.color).map((h, j) => `<input type="color" data-s="${j}" value="${h}">`).join('')}</div><div class="gradlab">${RAMPS[S.color].lab.map((l) => `<span>${l}</span>`).join('')}</div>` + rows;
   el.querySelectorAll('input[data-t]').forEach((c) => c.onchange = () => { SHOWN[+c.dataset.t] = c.checked ? 1 : 0; });
+  el.querySelectorAll('input[data-one]').forEach((c) => c.oninput = () => { S.cs = c.value.slice(1); recolorSoon(); });
   el.querySelectorAll('input[data-c]').forEach((c) => c.oninput = () => { S['c' + c.dataset.c] = c.value.slice(1); recolorSoon(); });
   el.querySelectorAll('input[data-s]').forEach((c) => c.oninput = () => { const a = S['r' + S.color].split(','); a[+c.dataset.s] = c.value.slice(1); S['r' + S.color] = a.join(','); recolorSoon(); });
 }
@@ -451,22 +471,29 @@ function syncUI() {
     const k = seg.dataset.k;
     b.classList.toggle('on', String(S[k]) === b.dataset.v);
   }));
+  document.querySelectorAll('#presets button').forEach((b) => b.classList.toggle('on', !paused && SPEED() === +b.dataset.sp));
   $('pause').classList.toggle('on', paused); $('pause').style.background = paused ? '#ffffffe0' : ''; $('pause').style.color = paused ? '#000' : '';
   for (const k of Object.keys(fmt)) { const i = $(k); if (i) { i.value = S[k]; $(k + 'O').textContent = fmt[k](); } }
+  for (const k of ['keyc', 'rimc', 'bg']) $(k).value = '#' + S[k];
 }
 document.querySelectorAll('.seg[data-k]').forEach((seg) => seg.addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
   const k = seg.dataset.k, v = b.dataset.v;
   S[k] = v;
   if (k === 'color' || k === 'rcs') recolor();
-  if (k === 'shape') buildMeshes();
+  if (k === 'shape' || k === 'flat' || k === 'detail') buildMeshes();
   if (k === 'view') resize();
   save(); syncUI();
 }));
 for (const k of Object.keys(fmt)) { const i = $(k); if (i) i.addEventListener('input', () => { S[k] = +i.value; if (k === 'scale') resize(); if (k === 'sat') recolorSoon(); save(); syncUI(); }); }
+for (const k of ['keyc', 'rimc', 'bg']) $(k).addEventListener('input', (e) => { S[k] = e.target.value.slice(1); save(); });
 $('pause').onclick = () => { paused = !paused; syncUI(); };
-$('resetCols').onclick = () => { for (const k of ['sat', 'c0', 'c1', 'c2', 'c3', 'ralt', 'rinc', 'ryear']) S[k] = DEF[k]; recolor(); save(); syncUI(); };
-$('now').onclick = () => { simT = Date.now(); T0 = simT; if (objs.length) buildInstances(); };
+$('resetCols').onclick = () => { for (const k of ['sat', 'cs', 'c0', 'c1', 'c2', 'c3', 'ralt', 'rinc', 'ryear']) S[k] = DEF[k]; recolor(); save(); syncUI(); };
+// rewind: the clock runs back to real time over ~3 s, so every object flies back along its own orbit to where it really is now
+let rewind = null;
+$('now').onclick = () => { rewind = { from: simT, t0: performance.now(), dur: Math.min(4000, 1200 + Math.abs(simT - Date.now()) / 36e5 * 400) }; paused = false; syncUI(); };
+document.querySelectorAll('#presets button').forEach((b) => b.onclick = () => { S.spd = Math.log10(+b.dataset.sp) * 25; paused = false; save(); syncUI(); });
+$('resetAll').onclick = () => { for (const k of Object.keys(DEF)) S[k] = DEF[k]; SHOWN = [1, 1, 1, 1]; buildMeshes(); recolor(); resize(); save(); syncUI(); };
 $('copy').onclick = () => {
   const p = new URLSearchParams();
   for (const k of Object.keys(DEF)) if (k !== 'view' && String(S[k]) !== String(DEF[k])) p.set(k, S[k]);
@@ -510,7 +537,11 @@ function frame(now) {
   if (!TEST) requestAnimationFrame(frame);
   const dtReal = Math.min(0.1, (now - last) / 1000); last = now;
   fps = fps * 0.95 + (1 / Math.max(dtReal, 1e-3)) * 0.05;
-  if (!paused) simT += dtReal * 1000 * SPEED();
+  if (rewind) {
+    const k = Math.min(1, (now - rewind.t0) / rewind.dur), e = k * k * (3 - 2 * k);
+    simT = rewind.from + (Date.now() - rewind.from) * e;
+    if (k >= 1) { rewind = null; S.spd = 0; save(); syncUI(); }
+  } else if (!paused) simT += dtReal * 1000 * SPEED();
   render(now / 1000);
   const d = new Date(simT);
   $('clock').innerHTML = `<b>${d.toISOString().slice(0, 19).replace('T', ' ')} UTC</b> · ${paused ? 'paused' : SPEED().toLocaleString() + '×'}${Math.abs(simT - Date.now()) > 5000 ? ' · ' + ((simT - Date.now()) / 36e5).toFixed(1) + ' h from now' : ''} · ${fps.toFixed(0)} fps`;
@@ -525,10 +556,19 @@ function render(time) {
   ENT_U.uDt.value = (simT - T0) / 1000; ENT_U.uRot.value = rot; ENT_U.uShown.value.set(...SHOWN);
   ENT_U.uSize.value = size; ENT_U.uStretch.value = S.stretch / 10; ENT_U.uSpin.value = 3 * S.spin / 100; ENT_U.uTime.value = time;
   meshMat.roughness = 0.03 + 0.95 * S.rough / 100; meshMat.metalness = S.metal / 100;
-  meshMat.clearcoat = S.coat / 100; meshMat.iridescence = S.irid / 100;
+  meshMat.clearcoat = S.coat / 100; meshMat.clearcoatRoughness = S.coatr / 100; meshMat.iridescence = S.irid / 100;
+  meshMat.iridescenceThicknessRange[1] = 100 + 8 * S.iridt; meshMat.sheen = S.sheen / 100;
   meshMat.emissiveIntensity = 1.2 * S.glow / 100; meshMat.envMapIntensity = 1.2 * S.env / 100;
-  keyL.intensity = 5 * S.key / 100; rimL.intensity = 3.5 * S.key / 100;
-  renderer.toneMapping = S.tone === 'aces' ? THREE.ACESFilmicToneMapping : THREE.AgXToneMapping;
+  const az = (S.keyaz * 3.6 - 180) * D2R, el = (S.keyel * 1.8 - 90) * D2R;
+  keyL.position.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
+  rimL.position.set(-keyL.position.x, 0.3, -keyL.position.z);
+  keyL.intensity = 5 * S.key / 100; rimL.intensity = 5 * S.rim / 100; ambL.intensity = 2 * S.amb / 100;
+  keyL.color.set('#' + S.keyc); rimL.color.set('#' + S.rimc);
+  renderer.toneMapping = { aces: THREE.ACESFilmicToneMapping, agx: THREE.AgXToneMapping, reinhard: THREE.ReinhardToneMapping, cineon: THREE.CineonToneMapping }[S.tone] ?? THREE.ACESFilmicToneMapping;
+  for (const b of [bloom, bloom360]) { b.radius = S.bloomr / 100; b.threshold = 0.2 + 1.6 * S.bloomt / 100; }
+  const bg = new THREE.Color('#' + S.bg); bg.r **= 2.2; bg.g **= 2.2; bg.b **= 2.2;
+  if (!S.view || S.view !== '360') look.yaw += (S.orbit / 100) * 0.004;
+  if (camera.fov !== 15 + S.fov * 0.75) { camera.fov = 15 + S.fov * 0.75; camera.updateProjectionMatrix(); }
   renderer.toneMappingExposure = Math.pow(2, (S.expo - 50) / 25);
 
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
@@ -542,20 +582,17 @@ function render(time) {
     renderer.setClearColor(0x000000, 0);
     cubeCam.update(renderer, scene);
     earth.visible = true;
-    unwrapMat.uniforms.uYaw.value = look.yaw360; unwrapMat.uniforms.uMode.value = S.earth === 'image' ? 1 : 0;
+    unwrapMat.uniforms.uYaw.value = look.yaw360; unwrapMat.uniforms.uBg.value.copy(bg); unwrapMat.uniforms.uMode.value = S.earth === 'image' ? 1 : 0;
     bloom360.strength = 1.6 * S.bloom / 100; bloom360.enabled = S.bloom > 0;
     composer360.render();
   } else {
     earth.visible = S.earth !== 'off';
-    const dist = (S.range === 'all' ? 150000 : 34000) * look.dist;
+    const dist = (S.range === 'all' ? 150000 : 34000) * look.dist * Math.tan(20 * D2R) / Math.tan(camera.fov / 2 * D2R);
     camera.position.set(Math.cos(look.pitch) * Math.sin(look.yaw), Math.sin(look.pitch), Math.cos(look.pitch) * Math.cos(look.yaw)).multiplyScalar(dist);
     camera.lookAt(0, 0, 0); camera.near = Math.max(50, dist * 0.005); camera.far = dist * 6; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
     rig.quaternion.copy(camera.quaternion);
-    renderer.setClearColor(0x000000, 1);
-    gtao.enabled = S.ao > 0; gtao.blendIntensity = S.ao / 100;
-    gtao.updateGtaoMaterial({ radius: size * 4, thickness: size * 3, distanceFallOff: 1, scale: 1 });
+    renderer.setClearColor(bg, 1);
     bloom.strength = 1.6 * S.bloom / 100; bloom.enabled = S.bloom > 0;
-    bokeh.enabled = S.dof > 0; bokeh.uniforms.focus.value = dist - REARTH * 0.6; bokeh.uniforms.aperture.value = 4e-6 * S.dof / 100;
     composer.render();
   }
 }
