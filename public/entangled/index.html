@@ -591,7 +591,7 @@ function render(time) {
   const mode360 = S.view === '360', size = SIZE_KM();
 
   ENT_U.uDt.value = (simT - T0) / 1000; ENT_U.uRot.value = rot; ENT_U.uShown.value.set(...SHOWN);
-  ENT_U.uSize.value = size; ENT_U.uMaxAlt.value = MAXALT(); ENT_U.uStretch.value = S.stretch / 10; ENT_U.uSpin.value = 3 * S.spin / 100; ENT_U.uTime.value = time;
+  ENT_U.uSize.value = size; ENT_U.uMaxAlt.value = mode360 && S.range === 'leo' ? Math.min(2000, MAXALT()) : MAXALT(); // 360 'Low orbit' keeps only LEO, so slow GPS/GEO objects don't paint over the moving ones ENT_U.uStretch.value = S.stretch / 10; ENT_U.uSpin.value = 3 * S.spin / 100; ENT_U.uTime.value = time;
   meshMat.roughness = 0.03 + 0.95 * S.rough / 100; meshMat.metalness = S.metal / 100;
   meshMat.clearcoat = S.coat / 100; meshMat.clearcoatRoughness = S.coatr / 100; meshMat.iridescence = S.irid / 100;
   meshMat.iridescenceThicknessRange[1] = 100 + 8 * S.iridt; meshMat.sheen = S.sheen / 100;
