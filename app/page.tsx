@@ -3,7 +3,7 @@ const PAGES = [
     group: "Entangled",
     note: "Every tracked object in Earth orbit (payloads, rocket bodies, debris) in real time, each as its own colourful 3D mesh you can reshape and resize.",
     links: [
-      { href: "/entangled", title: "Studio", text: "3D view and every control: Earth black, image or off, shape, size, stretch, squirm, colour by type, speed-up." },
+      { href: "/entangled", title: "Studio", text: "3D view and every control: Earth black, image or off, shape, size, stretch, rotate, colour by type, speed-up." },
       { href: "/entangled-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere. Settings come from the studio's Copy display URL." },
     ],
   },

@@ -59,8 +59,7 @@
     <div class="row"><label>Size</label><input type="range" id="size" min="0" max="100" step="1"><output id="sizeO"></output></div>
     <div class="row"><label>Size by RCS</label><div class="seg" data-k="rcs"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
     <div class="row"><label>Stretch</label><input type="range" id="stretch" min="0" max="100" step="1"><output id="stretchO"></output></div>
-    <div class="row"><label>Squirm</label><input type="range" id="squirm" min="0" max="100" step="1"><output id="squirmO"></output></div>
-    <div class="row"><label>Spin</label><input type="range" id="spin" min="0" max="100" step="1"><output id="spinO"></output></div>
+    <div class="row"><label>Rotate</label><input type="range" id="spin" min="0" max="100" step="1"><output id="spinO"></output></div>
     <div class="row"><label>Glow</label><input type="range" id="glow" min="0" max="100" step="1"><output id="glowO"></output></div>
     <div class="row"><label>Gloss</label><input type="range" id="gloss" min="0" max="100" step="1"><output id="glossO"></output></div>
     <div class="row"><label>Bloom</label><input type="range" id="bloom" min="0" max="100" step="1"><output id="bloomO"></output></div>
@@ -85,17 +84,17 @@ const $ = (id) => document.getElementById(id);
 const TEST = location.hash.includes('test');
 
 // ---------- settings (URL params override; studio remembers its own) ----------
-const DEF = { view: ROLE === 'display' ? '360' : '3d', earth: 'black', frame: 'fixed', range: 'leo', color: 'type', shape: 'bytype', size: 45, rcs: '1', stretch: 0, squirm: 0, spin: 0, glow: 35, gloss: 60, bloom: 50, speed: '1', scale: 100 };
+const DEF = { view: ROLE === 'display' ? '360' : '3d', earth: 'black', frame: 'fixed', range: 'leo', color: 'type', shape: 'bytype', size: 45, rcs: '1', stretch: 0, spin: 40, glow: 35, gloss: 60, bloom: 50, speed: '1', scale: 100 };
 let S = { ...DEF };
-if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem('entangled-mesh-settings') || '{}')); } catch {}
+if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem('entangled-mesh-v2') || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
-const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem('entangled-mesh-settings', JSON.stringify(S)); } catch {} };
+const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem('entangled-mesh-v2', JSON.stringify(S)); } catch {} };
 
 const SIZE_KM = () => 3 * Math.pow(1500 / 3, S.size / 100) * (S.range === 'all' ? 3 : 1); // mesh radius, km
 const fmt = {
   size: () => (SIZE_KM() < 10 ? SIZE_KM().toFixed(1) : Math.round(SIZE_KM())) + ' km',
-  stretch: () => S.stretch <= 0 ? 'off' : '×' + (1 + S.stretch / 10).toFixed(1), squirm: () => S.squirm + '', spin: () => S.spin + '',
+  stretch: () => S.stretch <= 0 ? 'off' : '×' + (1 + S.stretch / 10).toFixed(1), spin: () => S.spin <= 0 ? 'off' : S.spin + '',
   glow: () => S.glow + '', gloss: () => S.gloss + '', bloom: () => S.bloom + '', scale: () => S.scale + '%',
 };
 
@@ -155,13 +154,13 @@ const look = { yaw: 0.6, pitch: 0.35, dist: 1, yaw360: Q.has('yaw') ? +Q.get('ya
 const meshMat = new THREE.ShaderMaterial({
   glslVersion: THREE.GLSL3,
   uniforms: { uDt: { value: 0 }, uRot: { value: 0 }, uShown: { value: new THREE.Vector4(1, 1, 1, 1) }, uSize: { value: 50 }, uStretch: { value: 0 },
-    uSquirm: { value: 0 }, uSpin: { value: 0 }, uTime: { value: 0 }, uGlow: { value: 0.3 }, uGloss: { value: 0.6 }, uLight: { value: new THREE.Vector3(0.45, 0.8, 0.35).normalize() } },
+    uSpin: { value: 0 }, uTime: { value: 0 }, uGlow: { value: 0.3 }, uGloss: { value: 0.6 }, uLight: { value: new THREE.Vector3(0.45, 0.8, 0.35).normalize() } },
   vertexShader: /* glsl */`
     in vec4 aE;    // a km, e, i rad, -
     in vec4 aAng;  // raan, argp, M at reference time, half ndot term (rad/s²)
     in vec4 aRate; // raan rate, argp rate, mean-anomaly rate (rad/s), type index
     in vec4 aCol;  // linear rgb, size weight
-    uniform float uDt, uRot, uSize, uStretch, uSquirm, uSpin, uTime; uniform vec4 uShown;
+    uniform float uDt, uRot, uSize, uStretch, uSpin, uTime; uniform vec4 uShown;
     out vec3 vN; out vec3 vW; out vec3 vCol;
     vec3 orbitPos(float dt) {
       float e = aE.y;
@@ -186,13 +185,12 @@ const meshMat = new THREE.ShaderMaterial({
       vec3 u = normalize(p), s = normalize(cross(f, u)); u = cross(s, f);
       float id = float(gl_InstanceID);
       vec3 lp = position, ln = normal;
-      // spin about the direction of travel, each object at its own phase
-      float a = uSpin * uTime + id * 2.399;
+      // tumble in place: every object turns about its own fixed random axis at its own rate and phase
+      vec3 ax = normalize(vec3(fract(sin(id * 12.9898) * 43758.5453), fract(sin(id * 78.233) * 24634.6345), fract(sin(id * 37.719) * 12345.6789)) - 0.5 + 1e-4);
+      float a = uSpin * uTime * (0.4 + 1.2 * fract(sin(id * 3.17) * 9831.7)) + id * 2.399;
       float ca = cos(a), sa = sin(a);
-      lp.xy = mat2(ca, sa, -sa, ca) * lp.xy; ln.xy = mat2(ca, sa, -sa, ca) * ln.xy;
-      // squirm: a slow wobble of the surface, different for every object
-      float q = sin(lp.x * 2.7 + uTime * 1.9 + id) * sin(lp.y * 3.1 + uTime * 1.4 + id * 1.7) * sin(lp.z * 2.3 + uTime * 1.1 + id * 2.3);
-      lp += ln * q * uSquirm;
+      lp = lp * ca + cross(ax, lp) * sa + ax * dot(ax, lp) * (1.0 - ca);
+      ln = ln * ca + cross(ax, ln) * sa + ax * dot(ax, ln) * (1.0 - ca);
       lp.z *= 1.0 + uStretch;
       float sc = uSize * aCol.w;
       vec3 wp = p + (s * lp.x + u * lp.y + f * lp.z) * sc;
@@ -481,7 +479,7 @@ function render(time) {
 
   const mu = meshMat.uniforms;
   mu.uDt.value = (simT - T0) / 1000; mu.uRot.value = rot; mu.uShown.value.set(...SHOWN);
-  mu.uSize.value = SIZE_KM(); mu.uStretch.value = S.stretch / 10; mu.uSquirm.value = 0.6 * S.squirm / 100; mu.uSpin.value = 3 * S.spin / 100;
+  mu.uSize.value = SIZE_KM(); mu.uStretch.value = S.stretch / 10; mu.uSpin.value = 3 * S.spin / 100;
   mu.uTime.value = time; mu.uGlow.value = S.glow / 100; mu.uGloss.value = S.gloss / 100;
 
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
