@@ -492,7 +492,9 @@ function render(time) {
     // 360: a cube camera at Earth's centre sees every object; the unwrap paints the ground under them, as a viewer around the sphere sees it
     earth.visible = false;
     renderer.setClearColor(0x000000, 0);
+    renderer.autoClear = true; // each cube face must start empty, or old frames pile up as trails
     cubeCam.update(renderer, scene);
+    renderer.autoClear = false;
     earth.visible = true;
     unwrapMat.uniforms.uYaw.value = look.yaw360; unwrapMat.uniforms.uMode.value = S.earth === 'image' ? 1 : 0;
     pass(unwrapMat, flat);
