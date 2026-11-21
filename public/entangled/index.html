@@ -384,7 +384,7 @@ const dotMat = new THREE.ShaderMaterial({
   fragmentShader: /* glsl */`
     out vec4 outColor;
     in vec3 vCol; in float vA;
-    void main() { float r = length(gl_PointCoord - 0.5) * 2.0; float k = smoothstep(1.0, 0.2, r); outColor = vec4(vCol * vA * k * 1.6, 1.0); }`,
+    void main() { float r = length(gl_PointCoord - 0.5) * 2.0; float k = 1.0 - smoothstep(0.2, 1.0, r); outColor = vec4(vCol * vA * k * 1.6, 1.0); }`,
   blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true,
 });
 
