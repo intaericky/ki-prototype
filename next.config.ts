@@ -16,6 +16,11 @@ const nextConfig: NextConfig = {
         source: `/${page}`,
         destination: "/constellations/index.html",
       })),
+      // Entangled: every tracked object as one colourful blob mesh; /entangled-display is the 360 frame for the LED sphere
+      ...["entangled", "entangled-display"].map((page) => ({
+        source: `/${page}`,
+        destination: "/entangled/index.html",
+      })),
     ];
   },
 };

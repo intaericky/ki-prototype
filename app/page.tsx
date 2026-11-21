@@ -1,5 +1,13 @@
 const PAGES = [
   {
+    group: "Entangled",
+    note: "Every tracked object in Earth orbit (payloads, rocket bodies, debris) in real time, swelling into one colourful squirming mesh.",
+    links: [
+      { href: "/entangled", title: "Studio", text: "3D view and every control: Earth black, image or off, blob size, merge, squirm, colour by type, speed-up." },
+      { href: "/entangled-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere. Settings come from the studio's Copy display URL." },
+    ],
+  },
+  {
     group: "Constellations",
     note: "Every active satellite in real time; visitors join them into constellations that the orbits pull apart. Same ?room= keeps the three in step.",
     links: [
