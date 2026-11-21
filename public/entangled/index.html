@@ -50,6 +50,7 @@
 
   <details class="sec" open><summary>View</summary>
     <div class="row"><label>View</label><div class="seg" data-k="view"><button data-v="3d">3D</button><button data-v="360">360 frame</button></div></div>
+    <div class="row"><label>360 seen from</label><div class="seg" data-k="from"><button data-v="outside">Outside</button><button data-v="center">Center</button></div></div>
     <div class="row"><label>Earth</label><div class="seg" data-k="earth"><button data-v="black">Black</button><button data-v="image">Image</button><button data-v="off">Off</button></div></div>
     <div class="row"><label>Frame</label><div class="seg" data-k="frame"><button data-v="fixed">Earth-fixed</button><button data-v="inertial">Inertial</button></div></div>
     <div class="row"><label>Range</label><div class="seg" data-k="range"><button data-v="leo">Low orbit</button><button data-v="all">Out to GEO</button></div></div>
@@ -69,6 +70,7 @@
   <details class="sec" open><summary>Objects</summary>
     <div class="row"><label>Shape</label><div class="seg" data-k="shape"><button data-v="bytype">By type</button><button data-v="sphere">Sphere</button><button data-v="cube">Cube</button><button data-v="diamond">Diamond</button><button data-v="shard">Shard</button><button data-v="spike">Spike</button><button data-v="ring">Ring</button><button data-v="capsule">Capsule</button></div></div>
     <div class="row"><label>Size</label><input type="range" id="size" min="0" max="100" step="1"><output id="sizeO"></output></div>
+    <div class="row"><label>Max altitude</label><input type="range" id="maxalt" min="0" max="100" step="1"><output id="maxaltO"></output></div>
     <div class="row"><label>Size by RCS</label><div class="seg" data-k="rcs"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
     <div class="row"><label>Stretch</label><input type="range" id="stretch" min="0" max="100" step="1"><output id="stretchO"></output></div>
     <div class="row"><label>Rotate</label><input type="range" id="spin" min="0" max="100" step="1"><output id="spinO"></output></div>
@@ -127,7 +129,7 @@ const $ = (id) => document.getElementById(id);
 const TEST = location.hash.includes('test');
 
 // ---------- settings (URL params override; studio remembers its own) ----------
-const DEF = { view: ROLE === 'display' ? '360' : '3d', earth: 'black', frame: 'fixed', range: 'leo', color: 'type', shape: 'bytype', size: 45, rcs: '1', stretch: 0, spin: 40,
+const DEF = { view: ROLE === 'display' ? '360' : '3d', from: 'outside', earth: 'black', frame: 'fixed', range: 'leo', color: 'type', shape: 'bytype', maxalt: 100, size: 45, rcs: '1', stretch: 0, spin: 40,
   rough: 30, metal: 0, coat: 50, coatr: 12, irid: 30, iridt: 40, sheen: 0, glow: 25, flat: '0', detail: '2',
   env: 40, amb: 10, key: 55, keyaz: 35, keyel: 60, keyc: 'fff4e8', rim: 45, rimc: '9cc2ff',
   bloom: 30, bloomr: 50, bloomt: 70, expo: 50, tone: 'aces', bg: '000000', fov: 30, orbit: 0, spd: 0, scale: 100,
@@ -140,9 +142,11 @@ if (ROLE === 'display') S.view = '360';
 const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem('entangled-mesh-v3', JSON.stringify(S)); } catch {} };
 
 const SIZE_KM = () => 3 * Math.pow(1500 / 3, S.size / 100) * (S.range === 'all' ? 3 : 1); // mesh radius, km
+const MAXALT = () => S.maxalt >= 100 ? 1e9 : 300 * Math.pow(40000 / 300, S.maxalt / 100); // km
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25)); // slider 0..100 → 1× .. 10,000×
 const pct = (k) => () => S[k] + '';
 const fmt = {
+  maxalt: () => S.maxalt >= 100 ? 'all' : Math.round(MAXALT()).toLocaleString() + ' km',
   rough: pct('rough'), metal: pct('metal'), coat: pct('coat'), coatr: pct('coatr'), irid: pct('irid'), iridt: () => Math.round(100 + 8 * S.iridt) + ' nm', sheen: pct('sheen'),
   env: pct('env'), amb: pct('amb'), key: pct('key'), keyaz: () => Math.round(S.keyaz * 3.6 - 180) + '°', keyel: () => Math.round(S.keyel * 1.8 - 90) + '°', rim: pct('rim'),
   bloomr: pct('bloomr'), bloomt: pct('bloomt'), fov: () => Math.round(15 + S.fov * 0.75) + '°', orbit: () => S.orbit <= 0 ? 'off' : S.orbit + '',
@@ -212,13 +216,13 @@ const rig = new THREE.Group(); rig.add(keyL, keyL.target, rimL, rimL.target, amb
 // ---------- object meshes: one instance per object, positioned on the GPU from its orbital elements ----------
 // The orbit code is injected into three.js's own physical material (and into the depth/normal materials the AO and
 // depth-of-field passes use), so every object gets real PBR shading while still moving on its real orbit.
-const ENT_U = { uDt: { value: 0 }, uRot: { value: 0 }, uShown: { value: new THREE.Vector4(1, 1, 1, 1) }, uSize: { value: 50 }, uStretch: { value: 0 }, uSpin: { value: 0 }, uTime: { value: 0 } };
+const ENT_U = { uDt: { value: 0 }, uRot: { value: 0 }, uShown: { value: new THREE.Vector4(1, 1, 1, 1) }, uSize: { value: 50 }, uSizeRef: { value: 0 }, uMaxAlt: { value: 1e9 }, uStretch: { value: 0 }, uSpin: { value: 0 }, uTime: { value: 0 } };
 const ENT_VERT = /* glsl */`
   attribute vec4 aE;    // a km, e, i rad, -
   attribute vec4 aAng;  // raan, argp, M at reference time, half ndot term (rad/s²)
   attribute vec4 aRate; // raan rate, argp rate, mean-anomaly rate (rad/s), type index
   attribute vec4 aCol;  // linear rgb, size weight
-  uniform float uDt, uRot, uSize, uStretch, uSpin, uTime; uniform vec4 uShown;
+  uniform float uDt, uRot, uSize, uSizeRef, uMaxAlt, uStretch, uSpin, uTime; uniform vec4 uShown;
   varying vec3 vEntCol;
   vec3 orbitPos(float dt) {
     float e = aE.y;
@@ -242,6 +246,7 @@ const ENT_VERT = /* glsl */`
     float vis = t == 0 ? uShown.x : t == 1 ? uShown.y : t == 2 ? uShown.z : uShown.w;
     if (vis < 0.5) { lp = vec3(0.0); return; }
     vec3 p = orbitPos(uDt), f = normalize(orbitPos(uDt + 30.0) - p);
+    if (length(p) - 6378.0 > uMaxAlt) { lp = vec3(0.0); return; }
     vec3 u = normalize(p), s = normalize(cross(f, u)); u = cross(s, f);
     float id = float(gl_InstanceID);
     // tumble in place: every object turns about its own fixed random axis at its own rate and phase
@@ -251,7 +256,8 @@ const ENT_VERT = /* glsl */`
     lp = lp * ca + cross(ax, lp) * sa + ax * dot(ax, lp) * (1.0 - ca);
     ln = ln * ca + cross(ax, ln) * sa + ax * dot(ax, ln) * (1.0 - ca);
     lp.z *= 1.0 + uStretch; ln.z /= 1.0 + uStretch;
-    float sc = uSize * aCol.w * (1.0 + 0.04 * fract(sin(id * 91.7) * 4375.85)); // tiny per-object offset so coincident objects nest instead of flickering
+    float sc = uSize * aCol.w * (1.0 + 0.04 * fract(sin(id * 91.7) * 4375.85));
+    if (uSizeRef > 0.0) sc *= length(p) / uSizeRef; // 360 seen from outside: same apparent size at every height // tiny per-object offset so coincident objects nest instead of flickering
     lp = p + (s * lp.x + u * lp.y + f * lp.z) * sc;
     ln = normalize(s * ln.x + u * ln.y + f * ln.z);
   }`;
@@ -437,11 +443,19 @@ function legend() {
   const rows = '<div class="legend">' + TYPES.map((t, i) => `<input type="checkbox" data-t="${i}" ${SHOWN[i] ? 'checked' : ''}><span>${S.color === 'type' ? `<input type="color" data-c="${i}" value="${typeHex(i)}"> ` : ''}${t.name}</span><span>${counts[i].toLocaleString()}</span>`).join('') + '</div>';
   if (S.color === 'one') el.innerHTML = `<div class="row"><label>Color</label><input type="color" data-one value="#${S.cs}"><output></output></div>` + rows;
   else if (S.color === 'type') el.innerHTML = rows;
-  else el.innerHTML = `<div class="stops">${stops(S.color).map((h, j) => `<input type="color" data-s="${j}" value="${h}">`).join('')}</div><div class="gradlab">${RAMPS[S.color].lab.map((l) => `<span>${l}</span>`).join('')}</div>` + rows;
+  else el.innerHTML = `<div class="grad" style="background:linear-gradient(90deg,${stops(S.color).join(',')})"></div><div class="stops">${stops(S.color).map((h, j) => `<input type="color" data-s="${j}" value="${h}">`).join('')}</div>
+    <div class="row"><label>Gradient</label><div class="seg"><button class="btn" data-n="2">2 colors</button><button class="btn" data-n="3">3</button><button class="btn" data-n="6">6</button></div></div><div class="gradlab">${RAMPS[S.color].lab.map((l) => `<span>${l}</span>`).join('')}</div>` + rows;
   el.querySelectorAll('input[data-t]').forEach((c) => c.onchange = () => { SHOWN[+c.dataset.t] = c.checked ? 1 : 0; });
+  el.querySelectorAll('button[data-n]').forEach((b) => b.onclick = () => {
+    const n = +b.dataset.n, cur = stops(S.color), k = 'r' + S.color;
+    // resample the current gradient to n evenly spaced stops
+    S[k] = Array.from({ length: n }, (_, j) => { const c = ramp(S.color, j / (n - 1)).map((v) => Math.round(255 * Math.pow(Math.min(1, v), 1 / 2.2))); return c.map((v) => v.toString(16).padStart(2, '0')).join(''); }).join(',');
+    if (n === 6 && cur.length === 6) S[k] = DEF[k];
+    recolor(); save();
+  });
   el.querySelectorAll('input[data-one]').forEach((c) => c.oninput = () => { S.cs = c.value.slice(1); recolorSoon(); });
   el.querySelectorAll('input[data-c]').forEach((c) => c.oninput = () => { S['c' + c.dataset.c] = c.value.slice(1); recolorSoon(); });
-  el.querySelectorAll('input[data-s]').forEach((c) => c.oninput = () => { const a = S['r' + S.color].split(','); a[+c.dataset.s] = c.value.slice(1); S['r' + S.color] = a.join(','); recolorSoon(); });
+  el.querySelectorAll('input[data-s]').forEach((c) => c.oninput = () => { const a = S['r' + S.color].split(','); a[+c.dataset.s] = c.value.slice(1); S['r' + S.color] = a.join(','); el.querySelector('.grad').style.background = `linear-gradient(90deg,${stops(S.color).join(',')})`; recolorSoon(); });
 }
 let recolorT = null;
 function recolorSoon() { clearTimeout(recolorT); recolorT = setTimeout(() => { recolorQuiet(); save(); }, 30); }
@@ -554,7 +568,7 @@ function render(time) {
   const mode360 = S.view === '360', size = SIZE_KM();
 
   ENT_U.uDt.value = (simT - T0) / 1000; ENT_U.uRot.value = rot; ENT_U.uShown.value.set(...SHOWN);
-  ENT_U.uSize.value = size; ENT_U.uStretch.value = S.stretch / 10; ENT_U.uSpin.value = 3 * S.spin / 100; ENT_U.uTime.value = time;
+  ENT_U.uSize.value = size; ENT_U.uMaxAlt.value = MAXALT(); ENT_U.uStretch.value = S.stretch / 10; ENT_U.uSpin.value = 3 * S.spin / 100; ENT_U.uTime.value = time;
   meshMat.roughness = 0.03 + 0.95 * S.rough / 100; meshMat.metalness = S.metal / 100;
   meshMat.clearcoat = S.coat / 100; meshMat.clearcoatRoughness = S.coatr / 100; meshMat.iridescence = S.irid / 100;
   meshMat.iridescenceThicknessRange[1] = 100 + 8 * S.iridt; meshMat.sheen = S.sheen / 100;
@@ -580,7 +594,13 @@ function render(time) {
     rig.quaternion.identity();
     earth.visible = false;
     renderer.setClearColor(0x000000, 0);
+    const out = S.from !== 'center';
+    if (out) {
+      // seen from outside the ball: draw each object's outward face, let the farthest (highest) surface win, and undo the shrink with distance
+      meshMat.side = THREE.BackSide; meshMat.depthFunc = THREE.GreaterEqualDepth; renderer.state.buffers.depth.setClear(0); ENT_U.uSizeRef.value = 6800;
+    }
     cubeCam.update(renderer, scene);
+    meshMat.side = THREE.FrontSide; meshMat.depthFunc = THREE.LessEqualDepth; renderer.state.buffers.depth.setClear(1); ENT_U.uSizeRef.value = 0;
     earth.visible = true;
     unwrapMat.uniforms.uYaw.value = look.yaw360; unwrapMat.uniforms.uBg.value.copy(bg); unwrapMat.uniforms.uMode.value = S.earth === 'image' ? 1 : 0;
     bloom360.strength = 1.6 * S.bloom / 100; bloom360.enabled = S.bloom > 0;
