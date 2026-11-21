@@ -22,7 +22,7 @@
   .sec { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 6px; }
   summary { cursor: pointer; font-weight: 600; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg); padding: 2px 0 4px; list-style: none; }
   summary::before { content: '▸ '; color: var(--dim); } details[open] > summary::before { content: '▾ '; }
-  #presets button.on { background: #ffffffe0; color: #000; }
+  #presets button.on, .btn.on { background: #ffffffe0; color: #000; }
   .legend { display: grid; grid-template-columns: 26px 1fr auto; gap: 4px 8px; align-items: center; margin: 6px 0; }
   .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .legend span:last-child { color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -134,12 +134,12 @@ const DEF = { view: ROLE === 'display' ? '360' : '3d', from: 'outside', earth: '
   env: 40, amb: 10, key: 55, keyaz: 35, keyel: 60, keyc: 'fff4e8', rim: 45, rimc: '9cc2ff',
   bloom: 30, bloomr: 50, bloomt: 70, expo: 50, tone: 'aces', bg: '000000', fov: 30, orbit: 0, spd: 0, scale: 100,
   sat: 50, cs: 'e8eef7', c0: '3d8bff', c1: 'ffb21f', c2: 'ff2d6f', c3: 'b9c2cc',
-  ralt: 'ff3d6e,ff9a2e,ffe14d,3ee8b0,2e9bff,8a5bff', rinc: '2e9bff,3ee8b0,ffe14d,ff9a2e,ff3d6e,c05bff', ryear: 'c05bff,ff3d6e,ff9a2e,ffe14d,3ee8b0,2e9bff' };
+  ralt: 'ff3d6e,ff9a2e,ffe14d,3ee8b0,2e9bff,8a5bff', rinc: '2e9bff,3ee8b0,ffe14d,ff9a2e,ff3d6e,c05bff', ryear: 'ff5a1f,2ee6ff', yspread: 'count' };
 let S = { ...DEF };
-if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem('entangled-mesh-v3') || '{}')); } catch {}
+if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem('entangled-mesh-v4') || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
-const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem('entangled-mesh-v3', JSON.stringify(S)); } catch {} };
+const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem('entangled-mesh-v4', JSON.stringify(S)); } catch {} };
 
 const SIZE_KM = () => 3 * Math.pow(1500 / 3, S.size / 100) * (S.range === 'all' ? 3 : 1); // mesh radius, km
 const MAXALT = () => S.maxalt >= 100 ? 1e9 : 300 * Math.pow(40000 / 300, S.maxalt / 100); // km
@@ -352,12 +352,23 @@ function colorOf(o) {
   const c = baseColor(o), l = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2], k = S.sat / 50;
   return c.map((v) => Math.max(0, l + (v - l) * k));
 }
+// launch year spread evenly by object count: each year's position = share of objects launched before it (mid-rank)
+let yearRank = new Map(), yearLab = null;
+function buildYearRank() {
+  const ys = objs.map((o) => o.yr).filter(Boolean).sort((a, b) => a - b), n = ys.length;
+  yearRank = new Map();
+  if (!n) return;
+  let i = 0;
+  while (i < n) { let j = i; while (j < n && ys[j] === ys[i]) j++; yearRank.set(ys[i], (i + j) / 2 / n); i = j; }
+  yearLab = [0, 0.25, 0.5, 0.75, 1].map((q) => String(ys[Math.min(n - 1, Math.floor(q * (n - 1)))]));
+}
 function baseColor(o) {
   if (S.color === 'one') return lin('#' + S.cs);
   if (S.color === 'type') return lin(typeHex(o.type));
   if (S.color === 'alt') { const h = o.a - RE; return ramp('alt', h < 2000 ? (Math.log(Math.max(h, 150) / 150) / Math.log(2000 / 150)) * 0.6 : 0.6 + 0.4 * Math.min(1, (h - 2000) / 33800)); }
   if (S.color === 'inc') return ramp('inc', o.inc / 180);
-  return ramp('year', o.yr ? (o.yr - 1958) / (2026 - 1958) : 0.5);
+  if (!o.yr) return ramp('year', 0.5);
+  return ramp('year', S.yspread === 'count' && yearRank.size ? yearRank.get(o.yr) : (o.yr - 1958) / (2026 - 1958));
 }
 
 let inst = [null, null, null, null]; // per type: { list, attrs }
@@ -414,6 +425,7 @@ function ingest(parts) {
     byId.set(norad, { norad, intl, type, rcs: sc?.[2] ?? null, yr, ep, mm, ecc, inc, raan, argp, ma, ndot: Number.isFinite(ndot) ? ndot : 0 });
   }
   objs = [...byId.values()];
+  buildYearRank();
   counts.fill(0); for (const o of objs) counts[o.type]++;
   T0 = simT;
   buildInstances();
@@ -445,7 +457,7 @@ function legend() {
   if (S.color === 'one') el.innerHTML = `<div class="row"><label>Color</label><input type="color" data-one value="#${S.cs}"><output></output></div>` + rows;
   else if (S.color === 'type') el.innerHTML = rows;
   else el.innerHTML = `<div class="grad" style="background:linear-gradient(90deg,${stops(S.color).join(',')})"></div><div class="stops">${stops(S.color).map((h, j) => `<input type="color" data-s="${j}" value="${h}">`).join('')}</div>
-    <div class="row"><label>Gradient</label><div class="seg"><button class="btn" data-n="2">2 colors</button><button class="btn" data-n="3">3</button><button class="btn" data-n="6">6</button></div></div><div class="gradlab">${RAMPS[S.color].lab.map((l) => `<span>${l}</span>`).join('')}</div>` + rows;
+    <div class="row"><label>Gradient</label><div class="seg"><button class="btn" data-n="2">2 colors</button><button class="btn" data-n="3">3</button><button class="btn" data-n="6">6</button></div></div><div class="gradlab">${(S.color === 'year' && S.yspread === 'count' && yearLab ? yearLab : RAMPS[S.color].lab).map((l) => `<span>${l}</span>`).join('')}</div>` + (S.color === 'year' ? `<div class="row"><label>Spread</label><div class="seg"><button class="btn${S.yspread === 'count' ? ' on' : ''}" data-ys="count">Even by count</button><button class="btn${S.yspread === 'year' ? ' on' : ''}" data-ys="year">By year</button></div></div>` : '') + rows;
   el.querySelectorAll('input[data-t]').forEach((c) => c.onchange = () => { SHOWN[+c.dataset.t] = c.checked ? 1 : 0; });
   el.querySelectorAll('button[data-n]').forEach((b) => b.onclick = () => {
     const n = +b.dataset.n, cur = stops(S.color), k = 'r' + S.color;
@@ -454,6 +466,7 @@ function legend() {
     if (n === 6 && cur.length === 6) S[k] = DEF[k];
     recolor(); save();
   });
+  el.querySelectorAll('button[data-ys]').forEach((b) => b.onclick = () => { S.yspread = b.dataset.ys; recolor(); save(); });
   el.querySelectorAll('input[data-one]').forEach((c) => c.oninput = () => { S.cs = c.value.slice(1); recolorSoon(); });
   el.querySelectorAll('input[data-c]').forEach((c) => c.oninput = () => { S['c' + c.dataset.c] = c.value.slice(1); recolorSoon(); });
   el.querySelectorAll('input[data-s]').forEach((c) => c.oninput = () => { const a = S['r' + S.color].split(','); a[+c.dataset.s] = c.value.slice(1); S['r' + S.color] = a.join(','); el.querySelector('.grad').style.background = `linear-gradient(90deg,${stops(S.color).join(',')})`; recolorSoon(); });
@@ -503,7 +516,7 @@ document.querySelectorAll('.seg[data-k]').forEach((seg) => seg.addEventListener(
 for (const k of Object.keys(fmt)) { const i = $(k); if (i) i.addEventListener('input', () => { S[k] = +i.value; if (k === 'scale') resize(); if (k === 'sat') recolorSoon(); save(); syncUI(); }); }
 for (const k of ['keyc', 'rimc', 'bg']) $(k).addEventListener('input', (e) => { S[k] = e.target.value.slice(1); save(); });
 $('pause').onclick = () => { paused = !paused; syncUI(); };
-$('resetCols').onclick = () => { for (const k of ['sat', 'cs', 'c0', 'c1', 'c2', 'c3', 'ralt', 'rinc', 'ryear']) S[k] = DEF[k]; recolor(); save(); syncUI(); };
+$('resetCols').onclick = () => { for (const k of ['sat', 'yspread', 'cs', 'c0', 'c1', 'c2', 'c3', 'ralt', 'rinc', 'ryear']) S[k] = DEF[k]; recolor(); save(); syncUI(); };
 // rewind: the clock runs back to real time over ~3 s, so every object flies back along its own orbit to where it really is now
 let rewind = null;
 $('now').onclick = () => { rewind = { from: simT, t0: performance.now(), dur: Math.min(4000, 1200 + Math.abs(simT - Date.now()) / 36e5 * 400) }; paused = false; syncUI(); };
