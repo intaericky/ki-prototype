@@ -205,6 +205,10 @@ const camera = new THREE.PerspectiveCamera(40, 16 / 9, 100, 400000);
 const cubeRT = new THREE.WebGLCubeRenderTarget(1024, { type: THREE.HalfFloatType, generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
 const cubeCam = new THREE.CubeCamera(500, 400000, cubeRT);
 const look = { yaw: 0.6, pitch: 0.35, dist: 1, yaw360: Q.has('yaw') ? +Q.get('yaw') * D2R : 0 };
+// 360 orientation: free rotation of the whole sphere (drag any direction); ?rot=x,y,z,w or the older ?yaw=deg
+const rot360 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), look.yaw360);
+if (Q.has('rot')) { const r = Q.get('rot').split(',').map(Number); if (r.length === 4 && r.every(isFinite)) rot360.set(...r).normalize(); }
+const rot360M = new THREE.Matrix3();
 
 // studio lighting: a soft-box room baked into an environment map (reflections, wrap-around light) plus a key and a cool rim light
 const pmrem = new THREE.PMREMGenerator(renderer);
@@ -300,12 +304,12 @@ scene.add(earth);
 
 // ---------- 360 unwrap ----------
 const unwrapMat = new THREE.ShaderMaterial({
-  uniforms: { uCube: { value: cubeRT.texture }, uYaw: { value: 0 }, uBg: { value: new THREE.Color(0, 0, 0) }, tDay: earthMat.uniforms.tDay, tNight: earthMat.uniforms.tNight, uMode: { value: 0 }, uSun: earthMat.uniforms.uSun, uEarthRot: earthMat.uniforms.uEarthRot },
+  uniforms: { uCube: { value: cubeRT.texture }, uRot: { value: rot360M }, uBg: { value: new THREE.Color(0, 0, 0) }, tDay: earthMat.uniforms.tDay, tNight: earthMat.uniforms.tNight, uMode: { value: 0 }, uSun: earthMat.uniforms.uSun, uEarthRot: earthMat.uniforms.uEarthRot },
   vertexShader: `varying vec2 vUv; void main(){ vUv = position.xy*0.5+0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-  fragmentShader: `uniform samplerCube uCube; uniform vec3 uBg; uniform float uYaw, uEarthRot; uniform int uMode; uniform vec3 uSun; uniform sampler2D tDay, tNight; varying vec2 vUv;
+  fragmentShader: `uniform samplerCube uCube; uniform vec3 uBg; uniform mat3 uRot; uniform float uEarthRot; uniform int uMode; uniform vec3 uSun; uniform sampler2D tDay, tNight; varying vec2 vUv;
     void main(){
-      float lo = (vUv.x - 0.5) * 6.2831853 + uYaw, la = (vUv.y - 0.5) * 3.1415927;
-      vec3 d = vec3(cos(la)*cos(lo), sin(la), -cos(la)*sin(lo));
+      float lo = (vUv.x - 0.5) * 6.2831853, la = (vUv.y - 0.5) * 3.1415927;
+      vec3 d = uRot * vec3(cos(la)*cos(lo), sin(la), -cos(la)*sin(lo));
       vec4 c = textureCube(uCube, d);
       vec3 g = uBg;
       if (uMode == 1) { // the ground under everything, as seen from outside
@@ -526,7 +530,7 @@ $('copy').onclick = () => {
   const p = new URLSearchParams();
   for (const k of Object.keys(DEF)) if (k !== 'view' && String(S[k]) !== String(DEF[k])) p.set(k, S[k]);
   if (SHOWN.some((v) => !v)) p.set('types', SHOWN.join(''));
-  if (look.yaw360) p.set('yaw', (look.yaw360 / D2R).toFixed(1));
+  if (Math.abs(rot360.w) < 0.99999) p.set('rot', rot360.toArray().map((v) => v.toFixed(4)).join(','));
   const url = location.origin + '/entangled-display' + (p.toString() ? '?' + p : '');
   navigator.clipboard?.writeText(url); $('copy').textContent = 'Copied'; setTimeout(() => $('copy').textContent = 'Copy display URL', 1500);
 };
@@ -541,10 +545,15 @@ canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clie
 canvas.addEventListener('pointermove', (e) => {
   if (!drag) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY };
-  if (S.view === '360') look.yaw360 -= dx / innerWidth * TAU;
+  if (S.view === '360') {
+    // turn about the frame's own up axis (left/right) and its horizontal axis (up/down), so the sphere rolls freely
+    rot360.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -dx / innerWidth * TAU));
+    rot360.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), dy / innerHeight * Math.PI)).normalize();
+  }
   else { look.yaw -= dx * 0.005; look.pitch = Math.max(-1.5, Math.min(1.5, look.pitch + dy * 0.005)); }
 });
 canvas.addEventListener('pointerup', () => drag = null);
+canvas.addEventListener('dblclick', () => { if (S.view === '360') rot360.identity(); }); // double-click: back to the upright view
 canvas.addEventListener('wheel', (e) => { look.dist = Math.max(0.2, Math.min(4, look.dist * Math.exp(e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
 
 // ---------- sizing ----------
@@ -616,7 +625,7 @@ function render(time) {
     cubeCam.update(renderer, scene);
     meshMat.side = THREE.FrontSide; meshMat.depthFunc = THREE.LessEqualDepth; renderer.state.buffers.depth.setClear(1); ENT_U.uSizeRef.value = 0;
     earth.visible = true;
-    unwrapMat.uniforms.uYaw.value = look.yaw360; unwrapMat.uniforms.uBg.value.copy(bg); unwrapMat.uniforms.uMode.value = S.earth === 'image' ? 1 : 0;
+    rot360M.setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rot360)); unwrapMat.uniforms.uBg.value.copy(bg); unwrapMat.uniforms.uMode.value = S.earth === 'image' ? 1 : 0;
     bloom360.strength = 1.6 * S.bloom / 100; bloom360.enabled = S.bloom > 0;
     composer360.render();
   } else {
