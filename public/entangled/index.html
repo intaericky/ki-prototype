@@ -70,7 +70,8 @@
   </details>
   <details class="sec" open><summary>Grid</summary>
     <div class="row"><label>Globe grid</label><div class="seg" data-k="grid"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
-    <div class="row"><label>In 360</label><div class="seg" data-k="gridz"><button data-v="over">Over objects</button><button data-v="under">Under objects</button></div></div>
+    <div class="row"><label>Style</label><div class="seg" data-k="gstyle"><button data-v="mesh">3D mesh</button><button data-v="flat">Flat lines</button></div></div>
+    <div class="row"><label>Flat in 360</label><div class="seg" data-k="gridz"><button data-v="over">Over objects</button><button data-v="under">Under objects</button></div></div>
     <div class="row"><label>Latitude lines</label><input type="range" id="glat" min="2" max="36" step="1"><output id="glatO"></output></div>
     <div class="row"><label>Longitude lines</label><input type="range" id="glon" min="2" max="72" step="1"><output id="glonO"></output></div>
     <div class="row"><label>Thickness</label><input type="range" id="gridw" min="0.5" max="12" step="0.5"><output id="gridwO"></output></div>
@@ -155,7 +156,7 @@ const TEST = location.hash.includes('test');
 // defaults = Intae's preset of 2026-11-22 (360 from outside, altitude colours, spheres ×426k by RCS, 120×)
 const DEF = { view: '360', from: 'outside', earth: 'black', frame: 'fixed', range: 'leo', color: 'alt', shape: 'sphere', maxalt: 100, size: 74, rcs: '1', stretch: 0, spin: 40,
   cross: '1', crossl: 36, crossw: 2, pathw: 3, hit: 'box', hitx: 0,
-  grid: '0', gridz: 'over', glat: 12, glon: 24, gridw: 2, gridc: 'ffffff', grida: 60,
+  grid: '0', gstyle: 'mesh', gridz: 'over', glat: 12, glon: 24, gridw: 2, gridc: 'ffffff', grida: 60,
   rough: 50, metal: 0, coat: 1, coatr: 0, irid: 0, iridt: 40, sheen: 0, glow: 0, flat: '0', detail: '2',
   env: 25, amb: 35, key: 60, keyaz: 35, keyel: 60, keyc: 'ffffff', rim: 0, rimc: 'ffffff',
   bloom: 0, bloomr: 50, bloomt: 70, expo: 50, tone: 'standard', bg: '000000', fov: 50, orbit: 0, spd: 52, scale: 100,
@@ -323,6 +324,30 @@ const GRID_GLSL = `uniform vec4 uGrid; uniform vec3 uGridCol; uniform float uGri
     float co = clamp(0.5 * uGrid.w + 0.5 - abs(fract(fo + 0.5) - 0.5) / wo, 0.0, 1.0) * (1.0 - smoothstep(80.0, 89.0, abs(lat)));
     return max(cl, co) * uGridA;
   }`;
+
+// 3D grid: real tubes along latitude and longitude lines at Earth's surface, lit like the objects, in depth with them
+const gridMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0, transparent: true });
+const gridGroup = new THREE.Group(); scene.add(gridGroup);
+let gridKey = '';
+function updateGridMesh(rotY) {
+  const on = S.grid === '1' && S.gstyle === 'mesh';
+  gridGroup.visible = on; if (!on) return;
+  const rad = Math.max(2, S.gridw / 2 * 21); // ~21 km per pixel of the 1920-wide frame at the surface
+  const key = [S.glat, S.glon, S.gridw].join();
+  if (key !== gridKey) {
+    gridKey = key;
+    for (const m of gridGroup.children) m.geometry.dispose();
+    gridGroup.clear();
+    const R0 = RE + rad, seg = 256;
+    const tube = (fn, closed) => { const pts = []; for (let k = 0; k < seg; k++) pts.push(fn(k / (closed ? seg : seg - 1))); return new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts, closed), seg, rad, 8, closed), gridMat); };
+    const P = (la, lo) => new THREE.Vector3(R0 * Math.cos(la) * Math.cos(lo), R0 * Math.sin(la), -R0 * Math.cos(la) * Math.sin(lo)); // ECEF → scene (y north)
+    for (let i = 1; i < S.glat; i++) { const la = -Math.PI / 2 + Math.PI * i / S.glat; gridGroup.add(tube((u) => P(la, u * TAU), true)); }
+    for (let j = 0; j < S.glon; j++) { const lo = TAU * j / S.glon; gridGroup.add(tube((u) => P((u - 0.5) * Math.PI * (1 - 2 / S.glat), lo), false)); } // meridians stop at the last latitude ring, so the poles don't knot
+  }
+  const c = new THREE.Color('#' + S.gridc); gridMat.color.setRGB(c.r ** 2.2, c.g ** 2.2, c.b ** 2.2);
+  gridMat.opacity = S.grida / 100; gridMat.transparent = S.grida < 100; gridMat.depthWrite = true;
+  gridGroup.rotation.y = rotY;
+}
 
 // ---------- Earth (black occluder, image, or off) ----------
 const earthMat = new THREE.ShaderMaterial({
@@ -672,8 +697,9 @@ function render(time) {
 
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   earthMat.uniforms.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
-  { const gc = new THREE.Color('#' + S.gridc); GRID_U.uGrid.value.set(S.grid === '1' ? 1 : 0, S.glat, S.glon, S.gridw); GRID_U.uGridCol.value.set(gc.r ** 2.2, gc.g ** 2.2, gc.b ** 2.2); GRID_U.uGridA.value = S.grida / 100; unwrapMat.uniforms.uGridOver.value = S.gridz === 'over' ? 1 : 0; }
-  earthMat.uniforms.uMode.value = S.earth === 'image' ? 1 : S.earth === 'off' ? 2 : 0; earthMat.uniforms.uEarthRot.value = fixed ? 0 : g;
+  { const gc = new THREE.Color('#' + S.gridc); GRID_U.uGrid.value.set(S.grid === '1' && S.gstyle === 'flat' ? 1 : 0, S.glat, S.glon, S.gridw); GRID_U.uGridCol.value.set(gc.r ** 2.2, gc.g ** 2.2, gc.b ** 2.2); GRID_U.uGridA.value = S.grida / 100; unwrapMat.uniforms.uGridOver.value = S.gridz === 'over' ? 1 : 0; }
+  earthMat.uniforms.uMode.value = S.earth === 'image' ? 1 : S.earth === 'off' ? 2 : 0;
+  updateGridMesh(fixed ? 0 : g); earthMat.uniforms.uEarthRot.value = fixed ? 0 : g;
 
   updateSats(rot, mode360, size);
   unwrapMat.uniforms.uCross.value.set(S.cross === '1' ? 1 : 0, S.crossl * H / 1080, S.crossw * H / 1080); unwrapMat.uniforms.uRes.value.set(W, H);
@@ -686,16 +712,16 @@ function render(time) {
     const out = S.from !== 'center';
     if (out) {
       // seen from outside the ball: draw each object's outward face, let the farthest (highest) surface win, and undo the shrink with distance
-      meshMat.side = THREE.BackSide; meshMat.depthFunc = THREE.GreaterEqualDepth; renderer.state.buffers.depth.setClear(0); ENT_U.uSizeRef.value = 6800;
+      meshMat.side = THREE.BackSide; meshMat.depthFunc = THREE.GreaterEqualDepth; gridMat.side = THREE.BackSide; gridMat.depthFunc = THREE.GreaterEqualDepth; renderer.state.buffers.depth.setClear(0); ENT_U.uSizeRef.value = 6800;
     }
     cubeCam.update(renderer, scene);
-    meshMat.side = THREE.FrontSide; meshMat.depthFunc = THREE.LessEqualDepth; renderer.state.buffers.depth.setClear(1); ENT_U.uSizeRef.value = 0;
+    meshMat.side = THREE.FrontSide; meshMat.depthFunc = THREE.LessEqualDepth; gridMat.side = THREE.FrontSide; gridMat.depthFunc = THREE.LessEqualDepth; renderer.state.buffers.depth.setClear(1); ENT_U.uSizeRef.value = 0;
     earth.visible = true;
     rot360M.setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rot360)); unwrapMat.uniforms.uBg.value.copy(bg); unwrapMat.uniforms.uMode.value = S.earth === 'image' ? 1 : 0;
     bloom360.strength = 1.6 * S.bloom / 100; bloom360.enabled = S.bloom > 0;
     composer360.render();
   } else {
-    earth.visible = S.earth !== 'off' || S.grid === '1';
+    earth.visible = S.earth !== 'off' || (S.grid === '1' && S.gstyle === 'flat');
     const dist = (S.range === 'all' ? 150000 : 34000) * look.dist * Math.tan(20 * D2R) / Math.tan(camera.fov / 2 * D2R);
     camera.position.set(Math.cos(look.pitch) * Math.sin(look.yaw), Math.sin(look.pitch), Math.cos(look.pitch) * Math.cos(look.yaw)).multiplyScalar(dist);
     camera.lookAt(0, 0, 0); camera.near = Math.max(50, dist * 0.005); camera.far = dist * 6; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
