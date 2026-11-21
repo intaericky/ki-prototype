@@ -55,6 +55,15 @@
     <div class="row"><label>Frame</label><div class="seg" data-k="frame"><button data-v="fixed">Earth-fixed</button><button data-v="inertial">Inertial</button></div></div>
     <div class="row"><label>Range</label><div class="seg" data-k="range"><button data-v="leo">Low orbit</button><button data-v="all">Out to GEO</button></div></div>
   </details>
+  <details class="sec" open><summary>Grid</summary>
+    <div class="row"><label>Globe grid</label><div class="seg" data-k="grid"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
+    <div class="row"><label>In 360</label><div class="seg" data-k="gridz"><button data-v="over">Over objects</button><button data-v="under">Under objects</button></div></div>
+    <div class="row"><label>Latitude lines</label><input type="range" id="glat" min="2" max="36" step="1"><output id="glatO"></output></div>
+    <div class="row"><label>Longitude lines</label><input type="range" id="glon" min="2" max="72" step="1"><output id="glonO"></output></div>
+    <div class="row"><label>Thickness</label><input type="range" id="gridw" min="0.5" max="12" step="0.5"><output id="gridwO"></output></div>
+    <div class="row"><label>Opacity</label><input type="range" id="grida" min="5" max="100" step="5"><output id="gridaO"></output></div>
+    <div class="row"><label>Grid color</label><input type="color" id="gridc"><output></output></div>
+  </details>
   <details class="sec" open><summary>Time</summary>
     <div class="row"><label>Speed</label><input type="range" id="spd" min="0" max="100" step="1"><output id="spdO"></output></div>
     <div class="row"><label></label><div class="seg" id="presets"><button data-sp="1">1×</button><button data-sp="10">10×</button><button data-sp="60">60×</button><button data-sp="600">600×</button><button data-sp="3600">3600×</button><button data-sp="10000">10k×</button></div></div>
@@ -129,10 +138,12 @@ const $ = (id) => document.getElementById(id);
 const TEST = location.hash.includes('test');
 
 // ---------- settings (URL params override; studio remembers its own) ----------
-const DEF = { view: ROLE === 'display' ? '360' : '3d', from: 'outside', earth: 'black', frame: 'fixed', range: 'leo', color: 'type', shape: 'bytype', maxalt: 100, size: 45, rcs: '1', stretch: 0, spin: 40,
-  rough: 60, metal: 0, coat: 0, coatr: 12, irid: 0, iridt: 40, sheen: 0, glow: 0, flat: '0', detail: '2',
+// defaults = Intae's preset of 2026-11-22 (360 from outside, altitude colours, spheres ×426k by RCS, 120×)
+const DEF = { view: '360', from: 'outside', earth: 'black', frame: 'fixed', range: 'leo', color: 'alt', shape: 'sphere', maxalt: 100, size: 74, rcs: '1', stretch: 0, spin: 40,
+  grid: '0', gridz: 'over', glat: 12, glon: 24, gridw: 2, gridc: 'ffffff', grida: 60,
+  rough: 50, metal: 0, coat: 1, coatr: 0, irid: 0, iridt: 40, sheen: 0, glow: 0, flat: '0', detail: '2',
   env: 25, amb: 35, key: 60, keyaz: 35, keyel: 60, keyc: 'ffffff', rim: 0, rimc: 'ffffff',
-  bloom: 0, bloomr: 50, bloomt: 70, expo: 50, tone: 'standard', bg: '000000', fov: 50, orbit: 0, spd: 0, scale: 100,
+  bloom: 0, bloomr: 50, bloomt: 70, expo: 50, tone: 'standard', bg: '000000', fov: 50, orbit: 0, spd: 52, scale: 100,
   sat: 50, cs: 'e8eef7', c0: '3d8bff', c1: 'ffb21f', c2: 'ff2d6f', c3: 'b9c2cc',
   ralt: 'ff3d6e,ff9a2e,ffe14d,3ee8b0,2e9bff,8a5bff', rinc: '2e9bff,3ee8b0,ffe14d,ff9a2e,ff3d6e,c05bff', ryear: 'ff5a1f,2ee6ff', yspread: 'count' };
 let S = { ...DEF };
@@ -152,6 +163,7 @@ const fmt = {
   bloomr: pct('bloomr'), bloomt: pct('bloomt'), fov: () => Math.round(10 + S.fov * 0.8) + '°', orbit: () => S.orbit <= 0 ? 'off' : S.orbit + '',
   expo: () => ((S.expo - 50) / 25 >= 0 ? '+' : '') + ((S.expo - 50) / 25).toFixed(1) + ' EV', spd: () => SPEED().toLocaleString() + '×',
   sat: () => (S.sat * 2) + '%',
+  glat: () => S.glat + ' (' + +(180 / S.glat).toFixed(1) + '°)', glon: () => S.glon + ' (' + +(360 / S.glon).toFixed(1) + '°)', gridw: () => S.gridw + ' px', grida: () => S.grida + '%',
   // the scene is at true scale in km; with RCS sizing a mesh is ~1430 × size(km) times wider than the object's radar size (√RCS m)
   size: () => { const k = SIZE_KM(), x = k * (S.rcs === '1' ? 1430 : 1000); return '×' + (x >= 1e4 ? Math.round(x / 1e3) + 'k' : Math.round(x)); },
   stretch: () => S.stretch <= 0 ? 'off' : '×' + (1 + S.stretch / 10).toFixed(1), spin: () => S.spin <= 0 ? 'off' : S.spin + '',
@@ -282,18 +294,37 @@ function orbitize(mat, colorize = false) {
 const meshMat = orbitize(new THREE.MeshPhysicalMaterial({ color: 0xffffff, emissive: 0xffffff, clearcoatRoughness: 0.12, iridescenceIOR: 1.4, iridescenceThicknessRange: [120, 520] }), true);
 const meshes = [null, null, null, null]; // one InstancedBufferGeometry mesh per object type
 
+// ---------- globe grid: latitude/longitude lines of constant pixel width, drawn on Earth (3D) or in the 360 unwrap ----------
+const GRID_U = { uGrid: { value: new THREE.Vector4(0, 12, 24, 2) }, uGridCol: { value: new THREE.Vector3(1, 1, 1) }, uGridA: { value: 0.6 } };
+const GRID_GLSL = `uniform vec4 uGrid; uniform vec3 uGridCol; uniform float uGridA;
+  float gridCov(vec3 e, float rot) { // e: Earth-fixed unit vector, z north; returns line coverage 0..1
+    if (uGrid.x < 0.5) return 0.0;
+    float lat = degrees(asin(clamp(e.z, -1.0, 1.0))), lon = degrees(atan(e.y, e.x) - rot);
+    float fl = lat * uGrid.y / 180.0, wl = max(fwidth(fl), 1e-6);
+    float fo = lon * uGrid.z / 360.0, fo2 = (lon + 180.0) * uGrid.z / 360.0, wo = max(min(fwidth(fo), fwidth(fo2)), 1e-6);
+    float cl = clamp(0.5 * uGrid.w + 0.5 - abs(fract(fl + 0.5) - 0.5) / wl, 0.0, 1.0);
+    float co = clamp(0.5 * uGrid.w + 0.5 - abs(fract(fo + 0.5) - 0.5) / wo, 0.0, 1.0) * (1.0 - smoothstep(80.0, 89.0, abs(lat)));
+    return max(cl, co) * uGridA;
+  }`;
+
 // ---------- Earth (black occluder, image, or off) ----------
 const earthMat = new THREE.ShaderMaterial({
-  uniforms: { tDay: { value: null }, tNight: { value: null }, uMode: { value: 0 }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uEarthRot: { value: 0 } },
+  uniforms: { tDay: { value: null }, tNight: { value: null }, uMode: { value: 0 }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uEarthRot: { value: 0 }, ...GRID_U },
   vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: `uniform sampler2D tDay, tNight; uniform int uMode; uniform vec3 uSun; uniform float uEarthRot; varying vec3 vP;
+    ${GRID_GLSL}
     void main(){
-      if (uMode == 0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
       vec3 n = normalize(vP); vec3 e = vec3(n.x, -n.z, n.y);
-      float lon = atan(e.y, e.x) - uEarthRot, lat = asin(clamp(e.z, -1.0, 1.0));
-      vec2 uv = vec2(fract(lon / 6.2831853 + 0.5), lat / 3.1415927 + 0.5);
-      vec3 day = pow(texture2D(tDay, uv).rgb, vec3(2.2)), night = pow(texture2D(tNight, uv).rgb, vec3(2.2));
-      gl_FragColor = vec4(mix(night * 0.5, day * 0.9, smoothstep(-0.08, 0.12, dot(n, uSun))), 1.0);
+      float gc = gridCov(e, uEarthRot);
+      if (uMode == 2) { if (gc < 0.01) discard; gl_FragColor = vec4(uGridCol * gc, 1.0); return; } // Earth off, grid only
+      vec3 col = vec3(0.0);
+      if (uMode == 1) {
+        float lon = atan(e.y, e.x) - uEarthRot, lat = asin(clamp(e.z, -1.0, 1.0));
+        vec2 uv = vec2(fract(lon / 6.2831853 + 0.5), lat / 3.1415927 + 0.5);
+        vec3 day = pow(texture2D(tDay, uv).rgb, vec3(2.2)), night = pow(texture2D(tNight, uv).rgb, vec3(2.2));
+        col = mix(night * 0.5, day * 0.9, smoothstep(-0.08, 0.12, dot(n, uSun)));
+      }
+      gl_FragColor = vec4(mix(col, uGridCol, gc), 1.0);
     }`,
 });
 const tl = new THREE.TextureLoader();
@@ -304,9 +335,10 @@ scene.add(earth);
 
 // ---------- 360 unwrap ----------
 const unwrapMat = new THREE.ShaderMaterial({
-  uniforms: { uCube: { value: cubeRT.texture }, uRot: { value: rot360M }, uBg: { value: new THREE.Color(0, 0, 0) }, tDay: earthMat.uniforms.tDay, tNight: earthMat.uniforms.tNight, uMode: { value: 0 }, uSun: earthMat.uniforms.uSun, uEarthRot: earthMat.uniforms.uEarthRot },
+  uniforms: { uCube: { value: cubeRT.texture }, uRot: { value: rot360M }, uBg: { value: new THREE.Color(0, 0, 0) }, tDay: earthMat.uniforms.tDay, tNight: earthMat.uniforms.tNight, uMode: { value: 0 }, uSun: earthMat.uniforms.uSun, uEarthRot: earthMat.uniforms.uEarthRot, uGridOver: { value: 1 }, ...GRID_U },
   vertexShader: `varying vec2 vUv; void main(){ vUv = position.xy*0.5+0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-  fragmentShader: `uniform samplerCube uCube; uniform vec3 uBg; uniform mat3 uRot; uniform float uEarthRot; uniform int uMode; uniform vec3 uSun; uniform sampler2D tDay, tNight; varying vec2 vUv;
+  fragmentShader: `uniform samplerCube uCube; uniform vec3 uBg; uniform mat3 uRot; uniform float uEarthRot, uGridOver;
+    ${GRID_GLSL} uniform int uMode; uniform vec3 uSun; uniform sampler2D tDay, tNight; varying vec2 vUv;
     void main(){
       float lo = (vUv.x - 0.5) * 6.2831853, la = (vUv.y - 0.5) * 3.1415927;
       vec3 d = uRot * vec3(cos(la)*cos(lo), sin(la), -cos(la)*sin(lo));
@@ -317,7 +349,11 @@ const unwrapMat = new THREE.ShaderMaterial({
         vec2 uv = vec2(fract(lon / 6.2831853 + 0.5), lat / 3.1415927 + 0.5);
         g = mix(pow(texture2D(tNight, uv).rgb, vec3(2.2)) * 0.5, pow(texture2D(tDay, uv).rgb, vec3(2.2)) * 0.9, smoothstep(-0.08, 0.12, dot(d, uSun)));
       }
-      gl_FragColor = vec4(mix(g, c.rgb, clamp(c.a, 0.0, 1.0)), 1.0);
+      float gc = gridCov(vec3(d.x, -d.z, d.y), uEarthRot);
+      if (uGridOver < 0.5) g = mix(g, uGridCol, gc);
+      vec3 col = mix(g, c.rgb, clamp(c.a, 0.0, 1.0));
+      if (uGridOver > 0.5) col = mix(col, uGridCol, gc);
+      gl_FragColor = vec4(col, 1.0);
     }`, depthTest: false, depthWrite: false });
 
 // ---------- post: 3D = render (4× MSAA) → bloom → filmic output; 360 = unwrap → bloom → output ----------
@@ -506,7 +542,7 @@ function syncUI() {
   document.querySelectorAll('#presets button').forEach((b) => b.classList.toggle('on', !paused && SPEED() === +b.dataset.sp));
   $('pause').classList.toggle('on', paused); $('pause').style.background = paused ? '#ffffffe0' : ''; $('pause').style.color = paused ? '#000' : '';
   for (const k of Object.keys(fmt)) { const i = $(k); if (i) { i.value = S[k]; $(k + 'O').textContent = fmt[k](); } }
-  for (const k of ['keyc', 'rimc', 'bg']) $(k).value = '#' + S[k];
+  for (const k of ['keyc', 'rimc', 'bg', 'gridc']) $(k).value = '#' + S[k];
 }
 document.querySelectorAll('.seg[data-k]').forEach((seg) => seg.addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
@@ -518,7 +554,7 @@ document.querySelectorAll('.seg[data-k]').forEach((seg) => seg.addEventListener(
   save(); syncUI();
 }));
 for (const k of Object.keys(fmt)) { const i = $(k); if (i) i.addEventListener('input', () => { S[k] = +i.value; if (k === 'scale') resize(); if (k === 'sat') recolorSoon(); save(); syncUI(); }); }
-for (const k of ['keyc', 'rimc', 'bg']) $(k).addEventListener('input', (e) => { S[k] = e.target.value.slice(1); save(); });
+for (const k of ['keyc', 'rimc', 'bg', 'gridc']) $(k).addEventListener('input', (e) => { S[k] = e.target.value.slice(1); save(); });
 $('pause').onclick = () => { paused = !paused; syncUI(); };
 $('resetCols').onclick = () => { for (const k of ['sat', 'yspread', 'cs', 'c0', 'c1', 'c2', 'c3', 'ralt', 'rinc', 'ryear']) S[k] = DEF[k]; recolor(); save(); syncUI(); };
 // rewind: the clock runs back to real time over ~3 s, so every object flies back along its own orbit to where it really is now
@@ -611,7 +647,8 @@ function render(time) {
 
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   earthMat.uniforms.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
-  earthMat.uniforms.uMode.value = S.earth === 'image' ? 1 : 0; earthMat.uniforms.uEarthRot.value = fixed ? 0 : g;
+  { const gc = new THREE.Color('#' + S.gridc); GRID_U.uGrid.value.set(S.grid === '1' ? 1 : 0, S.glat, S.glon, S.gridw); GRID_U.uGridCol.value.set(gc.r ** 2.2, gc.g ** 2.2, gc.b ** 2.2); GRID_U.uGridA.value = S.grida / 100; unwrapMat.uniforms.uGridOver.value = S.gridz === 'over' ? 1 : 0; }
+  earthMat.uniforms.uMode.value = S.earth === 'image' ? 1 : S.earth === 'off' ? 2 : 0; earthMat.uniforms.uEarthRot.value = fixed ? 0 : g;
 
   if (mode360) {
     // 360: a cube camera at Earth's centre sees every object; the unwrap paints the ground under them, as a viewer around the sphere sees it
@@ -630,7 +667,7 @@ function render(time) {
     bloom360.strength = 1.6 * S.bloom / 100; bloom360.enabled = S.bloom > 0;
     composer360.render();
   } else {
-    earth.visible = S.earth !== 'off';
+    earth.visible = S.earth !== 'off' || S.grid === '1';
     const dist = (S.range === 'all' ? 150000 : 34000) * look.dist * Math.tan(20 * D2R) / Math.tan(camera.fov / 2 * D2R);
     camera.position.set(Math.cos(look.pitch) * Math.sin(look.yaw), Math.sin(look.pitch), Math.cos(look.pitch) * Math.cos(look.yaw)).multiplyScalar(dist);
     camera.lookAt(0, 0, 0); camera.near = Math.max(50, dist * 0.005); camera.far = dist * 6; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
