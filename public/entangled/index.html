@@ -693,7 +693,7 @@ copyMat.uniforms.tSrc = brightMat.uniforms.tSrc;
 syncUI(); legend(); resize();
 requestAnimationFrame(frame);
 // test hook: inject a catalogue and drive time from a test runner
-window.__ent = { ingest: (parts) => { meta = { fetched: new Date().toISOString(), sources: ['test'], errors: [] }; ingest(parts); }, S, look, setSim: (ms) => { simT = ms; }, setSpeed: (v) => { speed = v; }, render, frame: (ms) => frame(ms), get count() { return objs.length; } };
+window.__ent = { ingest: (parts) => { meta = { fetched: new Date().toISOString(), sources: ['test'], errors: [] }; ingest(parts); }, S, look, setSim: (ms) => { simT = ms; }, setSpeed: (v) => { speed = v; }, render, frame: (ms) => frame(ms), dbg: { renderer, THREE, get hdr() { return hdr; }, get bl() { return bl; }, atlasA, atlasB, marchMat, outMat, dotMat, splatMat, get objs() { return objs; } }, get count() { return objs.length; } };
 if (!(location.hash.includes('test'))) load();
 // refresh the catalogue every 2 h (CelesTrak's update cycle)
 setInterval(() => { if (!location.hash.includes('test')) load(); }, 2 * 3600e3);
