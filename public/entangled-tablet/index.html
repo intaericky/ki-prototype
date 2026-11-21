@@ -19,7 +19,7 @@
   #name::placeholder { color: var(--dim); }
   #launch { width: 104px; height: 104px; border-radius: 50%; border: 1px solid var(--fg); background: none; color: var(--fg); font: inherit; font-size: 17px; letter-spacing: .04em; flex: none; cursor: pointer; transition: background .2s, color .2s; }
   #launch:active, #launch.go { background: var(--fg); color: #000; }
-  #launch:disabled { border-color: var(--dim); color: var(--dim); }
+  #launch:disabled:not(.go) { border-color: var(--dim); color: var(--dim); }
   aside { grid-row: 1 / 3; grid-column: 3; border-left: 1px solid var(--faint); padding-left: 24px; display: flex; flex-direction: column; min-height: 0; }
   aside h2 { font-weight: 400; font-size: 13px; letter-spacing: .14em; color: var(--dim); margin: 2px 0 14px; }
   #list { overflow-y: auto; flex: 1; min-height: 0; }

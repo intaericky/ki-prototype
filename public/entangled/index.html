@@ -834,9 +834,9 @@ function sweep(s, ms0, ms1) {
     const x = tmpA[0] - ps[0], y = tmpA[1] - ps[1], z = tmpA[2] - ps[2];
     if (pa) {
       const ax = pa[3 * k], ay = pa[3 * k + 1], az = pa[3 * k + 2];
-      // near-miss counter: closest approach under 10 km (each approach counted once)
+      // close-pass counter: closest approach under 25 km (each approach counted once)
       const [d2] = ORB.sweepMin(ax, ay, az, x, y, z);
-      const close = d2 < 100;
+      const close = d2 < 625;
       if (close && !s.nearFlag[k]) s.near++;
       s.nearFlag[k] = close ? 1 : 0;
       if (d2 < 2500) { // within 50 km: test the hit rule
@@ -867,8 +867,8 @@ function testHits(s) {
   const t1 = simT;
   if (t1 < s.d.el.ep) { s.last = null; return; }
   if (!s.cand || s.candRule !== S.hit) { s.cand = candidates(s); s.candRule = S.hit; s.prevRel = null; s.curRel = new Float64Array(3 * s.cand.length); s.nearFlag = new Uint8Array(s.cand.length); s.last = null; }
-  if (s.last == null || t1 < s.last || t1 - s.last > 120e3) { s.last = Math.max(s.d.el.ep, t1); s.prevRel = null; sweep(s, s.last, s.last); return; }
-  const steps = Math.min(30, Math.ceil((t1 - s.last) / 2000));
+  if (s.last == null || t1 < s.last || t1 - s.last > 300e3) { s.last = Math.max(s.d.el.ep, t1); s.prevRel = null; sweep(s, s.last, s.last); return; }
+  const steps = Math.min(150, Math.ceil((t1 - s.last) / 2000));
   for (let i = 0; i < steps; i++) {
     const a = s.last + (t1 - s.last) * i / steps, b = s.last + (t1 - s.last) * (i + 1) / steps;
     const h = sweep(s, a, b);
