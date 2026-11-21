@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Entangled · Launch</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  :root { --fg: #fff; --dim: #ffffff66; --faint: #ffffff26; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--fg); font-family: Pretendard, -apple-system, sans-serif; font-weight: 400; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; }
+  main { position: fixed; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr) 120px 320px; grid-template-rows: minmax(0, 1fr) auto; gap: 0 28px; padding: 28px 32px; }
+  #globeWrap { grid-row: 1; grid-column: 1; position: relative; min-height: 0; }
+  #heightWrap { grid-row: 1; grid-column: 2; position: relative; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #bottom { grid-row: 2; grid-column: 1 / 3; display: flex; align-items: center; gap: 28px; padding-top: 20px; }
+  #name { flex: 1; min-width: 0; background: none; border: 0; border-bottom: 1px solid var(--fg); color: var(--fg); font: inherit; font-size: 22px; padding: 8px 0; outline: none; border-radius: 0; user-select: text; -webkit-user-select: text; }
+  #name::placeholder { color: var(--dim); }
+  #launch { width: 104px; height: 104px; border-radius: 50%; border: 1px solid var(--fg); background: none; color: var(--fg); font: inherit; font-size: 17px; letter-spacing: .04em; flex: none; cursor: pointer; transition: background .2s, color .2s; }
+  #launch:active, #launch.go { background: var(--fg); color: #000; }
+  #launch:disabled { border-color: var(--dim); color: var(--dim); }
+  aside { grid-row: 1 / 3; grid-column: 3; border-left: 1px solid var(--faint); padding-left: 24px; display: flex; flex-direction: column; min-height: 0; }
+  aside h2 { font-weight: 400; font-size: 13px; letter-spacing: .14em; color: var(--dim); margin: 2px 0 14px; }
+  #list { overflow-y: auto; flex: 1; min-height: 0; }
+  .r { display: grid; grid-template-columns: 16px 1fr auto; gap: 2px 8px; padding: 11px 0; border-bottom: 1px solid var(--faint); align-items: baseline; }
+  .r i { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--fg); display: inline-block; }
+  .r.up i { background: var(--fg); }
+  .r .n { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .r .t { font-size: 16px; font-variant-numeric: tabular-nums; }
+  .r .s { grid-column: 2 / 4; font-size: 12px; color: var(--dim); }
+  .r.mine .n::after { content: ' ←'; color: var(--dim); }
+  #status { font-size: 12px; color: var(--dim); margin-top: 10px; }
+  .lab { position: absolute; font-size: 12px; letter-spacing: .14em; color: var(--dim); pointer-events: none; }
+</style>
+</head>
+<body>
+<main>
+  <div id="globeWrap"><canvas id="globe"></canvas><div class="lab" style="left:0;top:0">TURN · DIRECTION</div></div>
+  <div id="heightWrap"><canvas id="height"></canvas><div class="lab" style="left:0;top:0">HEIGHT</div></div>
+  <div id="bottom"><input id="name" maxlength="28" placeholder="Name your satellite" autocomplete="off" autocorrect="off" spellcheck="false"><button id="launch">Launch</button></div>
+  <aside><h2>RECORD</h2><div id="list"></div><div id="status"></div></aside>
+</main>
+<script type="module">
+import * as ORB from '/entangled/orbit.js';
+const $ = (id) => document.getElementById(id);
+const Q = new URLSearchParams(location.search);
+const ROOM = ORB.cleanRoom(Q.get('room')), TOPIC = ORB.roomTopic(ROOM), ME = Math.random().toString(36).slice(2, 10);
+const TEST = location.hash.includes('test');
+
+// ---------- state ----------
+let rot = [0, 0, 0, 1], frame = 'fixed', clock = null, alt = 550, theta = 0.35, touched = 0, mine = new Set();
+try { for (const id of JSON.parse(localStorage.getItem('entangled-mine') || '[]')) mine.add(id); } catch {}
+const sats = new Map();
+const simNow = () => clock ? ORB.clockNow(clock) : Date.now();
+const ALT0 = 200, ALT1 = 2000;
+
+// ---------- small quaternion helpers ----------
+const qmul = (a, b) => [a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1], a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0], a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3], a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]];
+const qaxis = (ax, a) => { const s = Math.sin(a / 2); return [ax[0] * s, ax[1] * s, ax[2] * s, Math.cos(a / 2)]; };
+const qnorm = (q) => { const l = Math.hypot(...q) || 1; return q.map((v) => v / l); };
+
+// ---------- relay ----------
+let mq = null, ok = false;
+const pub = (t, o, retain = false) => { if (mq && ok) mq.publish(TOPIC + t, o == null ? '' : JSON.stringify(o), { retain, qos: retain ? 1 : 0 }); };
+if (!Q.has('solo')) import('/sphere-assets/vendor/mqtt.esm.js').then((m) => {
+  const mqtt = m.default || m;
+  mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
+  mq.on('connect', () => { ok = true; mq.subscribe([TOPIC + '/clock', TOPIC + '/look', TOPIC + '/sat/+']); status(); });
+  mq.on('close', () => { ok = false; status(); }); mq.on('offline', () => { ok = false; status(); });
+  mq.on('message', (t, msg) => {
+    const k = t.slice(TOPIC.length), s = msg.toString();
+    let d = null; try { d = s ? JSON.parse(s) : null; } catch { return; }
+    if (k === '/clock') { if (d && [d.wall0, d.sim0, d.speed].every(Number.isFinite)) clock = d; status(); return; }
+    if (k === '/look') { if (d?.by !== ME && !drag && Array.isArray(d?.q) && d.q.length === 4 && d.q.every(Number.isFinite)) rot = qnorm(d.q); if (d?.frame) frame = d.frame; return; }
+    if (k.startsWith('/sat/')) { const id = k.slice(5); if (!d) sats.delete(id); else { const c = ORB.cleanSat(d); if (c && c.id === id) sats.set(id, { d: c, q: ORB.prep(c.el, c.el.ep) }); } list(); }
+  });
+}).catch(() => {});
+let lookAt = 0;
+function sendLook() { const n = performance.now(); if (n - lookAt < 40) return; lookAt = n; pub('/look', { q: rot, frame, by: ME }, true); }
+setInterval(() => { if (Date.now() - touched < 20000) pub('/draft/' + ME, { alt, theta }); }, 400);
+function status() { $('status').textContent = (ok ? '' : 'Connecting… ') + (ok && !clock ? 'Waiting for the sphere' : '') + (ROOM ? ' · ' + ROOM : ''); }
+status();
+
+// ---------- catalogue (for the dots and the crowding by height) ----------
+let cat = [], catQ = [], catT = 0, hist = new Float32Array((ALT1 - ALT0) / 10), histMax = 1;
+async function load() {
+  const names = ['active', 'debris', 'rocket'];
+  const parts = {};
+  await Promise.all(names.map((p) => fetch('/api/space-objects?part=' + p).then((r) => r.json()).then((j) => { parts[p] = j; }).catch(() => {})));
+  ingest(parts);
+}
+function ingest(parts) {
+  catT = simNow();
+  const all = ORB.parseCatalogue(parts);
+  cat = []; catQ = []; hist.fill(0);
+  for (const o of all) {
+    const q = ORB.prep(o, catT), hp = q.a * (1 - q.e) - ORB.RE, ha = q.a * (1 + q.e) - ORB.RE;
+    if (hp > ALT1) continue;
+    cat.push(o); catQ.push(q);
+    // time spent at each height, spread between perigee and apogee
+    const b0 = Math.max(0, Math.floor((hp - ALT0) / 10)), b1 = Math.min(hist.length - 1, Math.floor((Math.min(ha, ALT1) - ALT0) / 10));
+    for (let b = b0; b <= b1; b++) hist[b] += 1 / (b1 - b0 + 1);
+  }
+  histMax = Math.max(1, ...hist);
+}
+
+// ---------- globe ----------
+const gc = $('globe'), gx = gc.getContext('2d'), hc = $('height'), hx = hc.getContext('2d');
+let G = { cx: 0, cy: 0, r: 100 }, dpr = 1;
+function size() {
+  dpr = Math.min(2, devicePixelRatio || 1);
+  for (const c of [gc, hc]) { const b = c.getBoundingClientRect(); c.width = Math.round(b.width * dpr); c.height = Math.round(b.height * dpr); }
+  const w = gc.width, h = gc.height;
+  G = { cx: w / 2, cy: h / 2 + 8 * dpr, r: Math.min(w, h) / 2 - 46 * dpr };
+}
+addEventListener('resize', size);
+
+// scene direction → frame (d0 = Rᵀ p) → orthographic screen of the ball seen from the front
+let RM = ORB.quatMat(rot);
+function proj(p, out) {
+  const l = Math.hypot(p[0], p[1], p[2]) || 1, x = p[0] / l, y = p[1] / l, z = p[2] / l;
+  const d0 = RM[0] * x + RM[3] * y + RM[6] * z, d1 = RM[1] * x + RM[4] * y + RM[7] * z, d2 = RM[2] * x + RM[5] * y + RM[8] * z;
+  out[0] = G.cx - d2 * G.r; out[1] = G.cy - d1 * G.r; out[2] = d0; return out;
+}
+const sc = [0, 0, 0], pp = [0, 0, 0], tmp = [0, 0, 0];
+function drawGlobe() {
+  const t = simNow(), g = frame === 'fixed' ? -ORB.gmst(t) : 0;
+  RM = ORB.quatMat(rot);
+  const W = gc.width, H = gc.height, L = dpr;
+  gx.clearRect(0, 0, W, H);
+  // objects (front half), as fine points
+  gx.fillStyle = '#ffffff70';
+  const dt = (t - catT) / 1000, s = Math.max(1, L * 1.2);
+  for (let j = 0; j < catQ.length; j++) {
+    ORB.posEci(catQ[j], dt, tmp); ORB.eciToScene(tmp, g, sc); proj(sc, pp);
+    if (pp[2] > 0) gx.fillRect(pp[0], pp[1], s, s);
+  }
+  // Earth grid (30°), front solid, back hidden
+  gx.strokeStyle = '#ffffff30'; gx.lineWidth = L;
+  const line = (fn, n) => { gx.beginPath(); let pen = false; for (let k = 0; k <= n; k++) { const e = fn(k / n); ORB.eciToScene(e, 0, sc); proj(sc, pp); if (pp[2] > 0) { pen ? gx.lineTo(pp[0], pp[1]) : gx.moveTo(pp[0], pp[1]); pen = true; } else pen = false; } gx.stroke(); };
+  const ecef = (la, lo) => { const r = frame === 'fixed' ? lo : lo + ORB.gmst(t); return [Math.cos(la) * Math.cos(r), Math.cos(la) * Math.sin(r), Math.sin(la)]; };
+  for (let la = -60; la <= 60; la += 30) line((u) => ecef(la * ORB.D2R, u * ORB.TAU), 90);
+  for (let lo = 0; lo < 360; lo += 30) line((u) => ecef((u - 0.5) * Math.PI, lo * ORB.D2R), 60);
+  // outline
+  gx.strokeStyle = '#fff'; gx.lineWidth = L; gx.beginPath(); gx.arc(G.cx, G.cy, G.r, 0, ORB.TAU); gx.stroke();
+  // direction ring + knob
+  const R2 = G.r + 22 * L;
+  gx.strokeStyle = '#ffffff40'; gx.beginPath(); gx.arc(G.cx, G.cy, R2, 0, ORB.TAU); gx.stroke();
+  const kx = G.cx + Math.cos(theta) * R2, ky = G.cy - Math.sin(theta) * R2;
+  gx.fillStyle = '#000'; gx.strokeStyle = '#fff'; gx.beginPath(); gx.arc(kx, ky, 11 * L, 0, ORB.TAU); gx.fill(); gx.stroke();
+  gx.beginPath(); gx.moveTo(kx - Math.sin(theta) * 5 * L + Math.cos(theta) * 0, ky - Math.cos(theta) * 5 * L); gx.lineTo(kx + Math.sin(theta) * 5 * L, ky + Math.cos(theta) * 5 * L); gx.stroke();
+  // planned path: one revolution from the cross, now
+  const o = ORB.launchElements(rot, theta, alt, t, frame), pts = ORB.pathScene(o, t, frame, 240);
+  gx.lineWidth = 1.5 * L; gx.strokeStyle = '#fff';
+  gx.beginPath(); let pen = false;
+  for (const p of pts) { proj(p, pp); if (pp[2] > 0) { pen ? gx.lineTo(pp[0], pp[1]) : gx.moveTo(pp[0], pp[1]); pen = true; } else pen = false; }
+  gx.stroke();
+  // direction arrow at the cross
+  const ax = Math.cos(theta), ay = -Math.sin(theta), A = 34 * L;
+  gx.lineWidth = 1.5 * L; gx.beginPath(); gx.moveTo(G.cx + ax * A, G.cy + ay * A); gx.lineTo(G.cx + ax * (A - 9 * L) - ay * 6 * L, G.cy + ay * (A - 9 * L) + ax * 6 * L); gx.moveTo(G.cx + ax * A, G.cy + ay * A); gx.lineTo(G.cx + ax * (A - 9 * L) + ay * 6 * L, G.cy + ay * (A - 9 * L) - ax * 6 * L); gx.stroke();
+  // launched satellites still up
+  for (const s of sats.values()) {
+    if (s.d.status !== 'up' || t < s.d.el.ep) continue;
+    ORB.posEci(s.q, (t - s.d.el.ep) / 1000, tmp); ORB.eciToScene(tmp, g, sc); proj(sc, pp);
+    if (pp[2] <= 0) continue;
+    gx.strokeStyle = '#fff'; gx.fillStyle = mine.has(s.d.id) ? '#fff' : '#000'; gx.lineWidth = L;
+    gx.beginPath(); gx.arc(pp[0], pp[1], 5 * L, 0, ORB.TAU); gx.fill(); gx.stroke();
+    gx.font = `${12 * L}px Pretendard, sans-serif`; gx.fillStyle = '#ffffffb0'; gx.fillText(s.d.name || '', pp[0] + 9 * L, pp[1] + 4 * L);
+  }
+  // the cross
+  gx.strokeStyle = '#fff'; gx.lineWidth = 1.5 * L; const C = 14 * L;
+  gx.beginPath(); gx.moveTo(G.cx - C, G.cy); gx.lineTo(G.cx + C, G.cy); gx.moveTo(G.cx, G.cy - C); gx.lineTo(G.cx, G.cy + C); gx.stroke();
+}
+
+// ---------- height ----------
+const hY = (a) => { const top = 34 * dpr, bot = hc.height - 14 * dpr; return bot - (a - ALT0) / (ALT1 - ALT0) * (bot - top); };
+function drawHeight() {
+  const W = hc.width, L = dpr; hx.clearRect(0, 0, W, hc.height);
+  // crowding: time-averaged objects per 10 km of height
+  hx.strokeStyle = '#ffffff80'; hx.lineWidth = L;
+  hx.beginPath();
+  for (let b = 0; b < hist.length; b++) { if (!hist[b]) continue; const y = Math.round(hY(ALT0 + b * 10 + 5)) + 0.5, len = Math.log1p(hist[b]) / Math.log1p(histMax) * (W - 40 * L); hx.moveTo(0, y); hx.lineTo(len, y); }
+  hx.stroke();
+  // scale
+  hx.fillStyle = '#ffffff66'; hx.font = `${11 * L}px Pretendard, sans-serif`; hx.textAlign = 'right';
+  for (const a of [200, 500, 1000, 1500, 2000]) { const y = hY(a); hx.fillRect(W - 6 * L, y, 6 * L, L); hx.fillText(a, W - 9 * L, y + 4 * L); }
+  // chosen height
+  const y = Math.round(hY(alt)) + 0.5;
+  hx.strokeStyle = '#fff'; hx.lineWidth = 1.5 * L; hx.beginPath(); hx.moveTo(0, y); hx.lineTo(W, y); hx.stroke();
+  hx.fillStyle = '#fff'; hx.textAlign = 'left'; hx.font = `${18 * L}px Pretendard, sans-serif`; hx.fillText(alt + ' km', 0, y - 8 * L);
+}
+
+// ---------- touch ----------
+let drag = null;
+gc.addEventListener('pointerdown', (e) => {
+  gc.setPointerCapture(e.pointerId);
+  const x = e.offsetX * dpr, y = e.offsetY * dpr, d = Math.hypot(x - G.cx, y - G.cy);
+  drag = { mode: d > G.r + 6 * dpr ? 'dir' : 'turn', x: e.clientX, y: e.clientY };
+  if (drag.mode === 'dir') theta = Math.atan2(G.cy - y, x - G.cx);
+  touched = Date.now();
+});
+gc.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  touched = Date.now();
+  if (drag.mode === 'dir') { const x = e.offsetX * dpr, y = e.offsetY * dpr; theta = Math.atan2(G.cy - y, x - G.cx); return; }
+  const dx = (e.clientX - drag.x) * dpr / G.r, dy = (e.clientY - drag.y) * dpr / G.r; drag.x = e.clientX; drag.y = e.clientY;
+  // same turn as dragging the sphere display itself: about the frame's up axis, then its horizontal axis
+  rot = qnorm(qmul(qmul(rot, qaxis([0, 1, 0], -dx)), qaxis([0, 0, 1], dy)));
+  sendLook();
+});
+gc.addEventListener('pointerup', () => { drag = null; sendLook(); });
+gc.addEventListener('pointercancel', () => { drag = null; });
+let hdrag = false;
+const setAlt = (e) => { const y = e.offsetY * dpr, top = 34 * dpr, bot = hc.height - 14 * dpr; alt = Math.round(Math.max(ALT0, Math.min(ALT1, ALT0 + (bot - y) / (bot - top) * (ALT1 - ALT0))) / 10) * 10; touched = Date.now(); };
+hc.addEventListener('pointerdown', (e) => { hc.setPointerCapture(e.pointerId); hdrag = true; setAlt(e); });
+hc.addEventListener('pointermove', (e) => { if (hdrag) setAlt(e); });
+hc.addEventListener('pointerup', () => { hdrag = false; });
+
+// ---------- launch ----------
+$('launch').onclick = () => {
+  const t = Math.round(simNow()), id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const name = $('name').value.trim().slice(0, 28) || 'Untitled';
+  const el = ORB.launchElements(rot, theta, alt, t, frame);
+  const d = { id, name, alt, theta, el, created: Date.now(), status: 'up' };
+  sats.set(id, { d: ORB.cleanSat(d), q: ORB.prep(el, el.ep) }); mine.add(id);
+  try { localStorage.setItem('entangled-mine', JSON.stringify([...mine].slice(-50))); } catch {}
+  pub('/sat/' + id, d, true); pub('/draft/' + ME, null); touched = 0;
+  $('name').value = ''; $('name').blur();
+  const b = $('launch'); b.classList.add('go'); b.disabled = true; setTimeout(() => { b.classList.remove('go'); b.disabled = false; }, 1500);
+  list();
+};
+$('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('name').blur(); });
+
+// ---------- record ----------
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const TYPE = ['satellite', 'rocket body', 'debris', 'object'];
+function list() {
+  const t = simNow();
+  const a = [...sats.values()].map((s) => ({ s, lasted: (s.d.status === 'hit' ? s.d.tHit : Math.max(t, s.d.el.ep)) - s.d.el.ep }));
+  a.sort((x, y) => y.lasted - x.lasted);
+  $('list').innerHTML = a.slice(0, 60).map(({ s, lasted }) => {
+    const d = s.d, up = d.status === 'up';
+    const sub = up ? `${d.alt} km · in orbit${d.near ? ' · ' + d.near + ' close passes' : ''}` : `${d.alt} km · hit ${TYPE[d.hitBy?.type ?? 3]} ${esc(d.hitBy?.intl || '')}`;
+    return `<div class="r ${up ? 'up' : ''} ${mine.has(d.id) ? 'mine' : ''}"><i></i><span class="n">${esc(d.name || 'Untitled')}</span><span class="t">${ORB.fmtLasted(lasted)}</span><span class="s">${sub}</span></div>`;
+  }).join('');
+}
+
+// ---------- loop ----------
+let lastList = 0;
+function loop() {
+  if (gc.width === 0) size();
+  drawGlobe(); drawHeight();
+  if (performance.now() - lastList > 1000) { lastList = performance.now(); list(); }
+  if (!TEST) requestAnimationFrame(loop);
+}
+size();
+if (!TEST) { load(); setInterval(load, 2 * 3600e3); }
+requestAnimationFrame(loop);
+window.__tab = { ingest, get rot() { return rot; }, set rot(v) { rot = v; }, set alt(v) { alt = v; }, set theta(v) { theta = v; }, loop, sats, ORB };
+</script>
+</body>
+</html>

@@ -21,6 +21,8 @@ const nextConfig: NextConfig = {
         source: `/${page}`,
         destination: "/entangled/index.html",
       })),
+      // the audience's launch tablet
+      { source: "/entangled-tablet", destination: "/entangled-tablet/index.html" },
     ];
   },
 };

@@ -48,6 +48,19 @@
   <div class="sub">Every tracked object in Earth orbit, now, each as its own mesh. H hides this, F full screen, space pauses.</div>
   <div id="status">Loading the catalogue…</div>
 
+  <details class="sec" open><summary>Room & launches</summary>
+    <div class="row"><label>Room</label><input type="text" id="room" spellcheck="false" placeholder="(none)" style="grid-column:2/4;background:#ffffff10;border:1px solid var(--line);border-radius:5px;color:var(--fg);font:inherit;padding:3px 6px"></div>
+    <div class="row"><label></label><div class="seg"><a class="btn" id="openTablet" target="_blank">Tablet</a><a class="btn" id="openDisplay" target="_blank">Sphere display</a></div></div>
+    <div id="relay" class="sub" style="margin:2px 0 4px"></div>
+    <div class="row"><label>Centre cross</label><div class="seg" data-k="cross"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
+    <div class="row"><label>Cross size</label><input type="range" id="crossl" min="5" max="120" step="1"><output id="crosslO"></output></div>
+    <div class="row"><label>Cross line</label><input type="range" id="crossw" min="1" max="10" step="0.5"><output id="crosswO"></output></div>
+    <div class="row"><label>Orbit line</label><input type="range" id="pathw" min="0" max="12" step="0.5"><output id="pathwO"></output></div>
+    <div class="row"><label>Hit when</label><div class="seg" data-k="hit"><button data-v="box">Safety box</button><button data-v="true">True size</button></div></div>
+    <div class="row"><label>Enlarge</label><input type="range" id="hitx" min="0" max="100" step="1"><output id="hitxO"></output></div>
+    <div class="row"><label></label><div class="seg"><button class="btn" id="clearSats">Clear all launches</button></div></div>
+    <div id="satList" class="sub" style="margin:4px 0 0;white-space:pre-wrap"></div>
+  </details>
   <details class="sec" open><summary>View</summary>
     <div class="row"><label>View</label><div class="seg" data-k="view"><button data-v="3d">3D</button><button data-v="360">360 frame</button></div></div>
     <div class="row"><label>360 seen from</label><div class="seg" data-k="from"><button data-v="outside">Outside</button><button data-v="center">Center</button></div></div>
@@ -129,6 +142,7 @@ import { ShaderPass } from '/sphere-assets/vendor/jsm/postprocessing/ShaderPass.
 import { UnrealBloomPass } from '/sphere-assets/vendor/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from '/sphere-assets/vendor/jsm/postprocessing/OutputPass.js';
 import { RoomEnvironment } from '/sphere-assets/vendor/jsm/environments/RoomEnvironment.js';
+import * as ORB from '/entangled/orbit.js';
 THREE.ColorManagement.enabled = false;
 
 const Q = new URLSearchParams(location.search);
@@ -140,6 +154,7 @@ const TEST = location.hash.includes('test');
 // ---------- settings (URL params override; studio remembers its own) ----------
 // defaults = Intae's preset of 2026-11-22 (360 from outside, altitude colours, spheres ×426k by RCS, 120×)
 const DEF = { view: '360', from: 'outside', earth: 'black', frame: 'fixed', range: 'leo', color: 'alt', shape: 'sphere', maxalt: 100, size: 74, rcs: '1', stretch: 0, spin: 40,
+  cross: '1', crossl: 36, crossw: 2, pathw: 3, hit: 'box', hitx: 0,
   grid: '0', gridz: 'over', glat: 12, glon: 24, gridw: 2, gridc: 'ffffff', grida: 60,
   rough: 50, metal: 0, coat: 1, coatr: 0, irid: 0, iridt: 40, sheen: 0, glow: 0, flat: '0', detail: '2',
   env: 25, amb: 35, key: 60, keyaz: 35, keyel: 60, keyc: 'ffffff', rim: 0, rimc: 'ffffff',
@@ -154,6 +169,7 @@ const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(
 
 const SIZE_KM = () => 3 * Math.pow(1500 / 3, S.size / 100) * (S.range === 'all' ? 3 : 1); // mesh radius, km
 const MAXALT = () => S.maxalt >= 100 ? 1e9 : 300 * Math.pow(40000 / 300, S.maxalt / 100); // km
+const HITX = () => Math.round(Math.pow(10, S.hitx / 20)); // collision size multiplier ×1 .. ×100,000
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25)); // slider 0..100 → 1× .. 10,000×
 const pct = (k) => () => S[k] + '';
 const fmt = {
@@ -163,6 +179,7 @@ const fmt = {
   bloomr: pct('bloomr'), bloomt: pct('bloomt'), fov: () => Math.round(10 + S.fov * 0.8) + '°', orbit: () => S.orbit <= 0 ? 'off' : S.orbit + '',
   expo: () => ((S.expo - 50) / 25 >= 0 ? '+' : '') + ((S.expo - 50) / 25).toFixed(1) + ' EV', spd: () => SPEED().toLocaleString() + '×',
   sat: () => (S.sat * 2) + '%',
+  crossl: () => S.crossl + ' px', crossw: () => S.crossw + ' px', pathw: () => S.pathw <= 0 ? 'off' : S.pathw + ' px', hitx: () => '×' + HITX().toLocaleString(),
   glat: () => S.glat + ' (' + +(180 / S.glat).toFixed(1) + '°)', glon: () => S.glon + ' (' + +(360 / S.glon).toFixed(1) + '°)', gridw: () => S.gridw + ' px', grida: () => S.grida + '%',
   // the scene is at true scale in km; with RCS sizing a mesh is ~1430 × size(km) times wider than the object's radar size (√RCS m)
   size: () => { const k = SIZE_KM(), x = k * (S.rcs === '1' ? 1430 : 1000); return '×' + (x >= 1e4 ? Math.round(x / 1e3) + 'k' : Math.round(x)); },
@@ -335,9 +352,9 @@ scene.add(earth);
 
 // ---------- 360 unwrap ----------
 const unwrapMat = new THREE.ShaderMaterial({
-  uniforms: { uCube: { value: cubeRT.texture }, uRot: { value: rot360M }, uBg: { value: new THREE.Color(0, 0, 0) }, tDay: earthMat.uniforms.tDay, tNight: earthMat.uniforms.tNight, uMode: { value: 0 }, uSun: earthMat.uniforms.uSun, uEarthRot: earthMat.uniforms.uEarthRot, uGridOver: { value: 1 }, ...GRID_U },
+  uniforms: { uCube: { value: cubeRT.texture }, uRot: { value: rot360M }, uBg: { value: new THREE.Color(0, 0, 0) }, tDay: earthMat.uniforms.tDay, tNight: earthMat.uniforms.tNight, uMode: { value: 0 }, uSun: earthMat.uniforms.uSun, uEarthRot: earthMat.uniforms.uEarthRot, uGridOver: { value: 1 }, uCross: { value: new THREE.Vector3(1, 18, 2) }, uRes: { value: new THREE.Vector2(1920, 1080) }, ...GRID_U },
   vertexShader: `varying vec2 vUv; void main(){ vUv = position.xy*0.5+0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-  fragmentShader: `uniform samplerCube uCube; uniform vec3 uBg; uniform mat3 uRot; uniform float uEarthRot, uGridOver;
+  fragmentShader: `uniform samplerCube uCube; uniform vec3 uBg; uniform mat3 uRot; uniform float uEarthRot, uGridOver; uniform vec3 uCross; uniform vec2 uRes;
     ${GRID_GLSL} uniform int uMode; uniform vec3 uSun; uniform sampler2D tDay, tNight; varying vec2 vUv;
     void main(){
       float lo = (vUv.x - 0.5) * 6.2831853, la = (vUv.y - 0.5) * 3.1415927;
@@ -353,6 +370,11 @@ const unwrapMat = new THREE.ShaderMaterial({
       if (uGridOver < 0.5) g = mix(g, uGridCol, gc);
       vec3 col = mix(g, c.rgb, clamp(c.a, 0.0, 1.0));
       if (uGridOver > 0.5) col = mix(col, uGridCol, gc);
+      if (uCross.x > 0.5) { // the launch cross at the frame centre (the point facing the audience)
+        vec2 q = abs((vUv - 0.5) * uRes);
+        float arm = max(clamp(0.5 * uCross.z + 0.5 - q.y, 0.0, 1.0) * step(q.x, uCross.y), clamp(0.5 * uCross.z + 0.5 - q.x, 0.0, 1.0) * step(q.y, uCross.y));
+        col = mix(col, vec3(1.0), arm);
+      }
       gl_FragColor = vec4(col, 1.0);
     }`, depthTest: false, depthWrite: false });
 
@@ -470,6 +492,7 @@ function ingest(parts) {
   T0 = simT;
   buildInstances();
   legend(); status();
+  onCatalogue();
 }
 const good = {}; // last good copy of each part; a failed refresh never wipes what is showing
 let retry = null;
@@ -553,20 +576,21 @@ document.querySelectorAll('.seg[data-k]').forEach((seg) => seg.addEventListener(
   if (k === 'view') resize();
   save(); syncUI();
 }));
-for (const k of Object.keys(fmt)) { const i = $(k); if (i) i.addEventListener('input', () => { S[k] = +i.value; if (k === 'scale') resize(); if (k === 'sat') recolorSoon(); save(); syncUI(); }); }
+for (const k of Object.keys(fmt)) { const i = $(k); if (i) i.addEventListener('input', () => { S[k] = +i.value; if (k === 'scale') resize(); if (k === 'sat') recolorSoon(); if (k === 'spd') clockDirty(); save(); syncUI(); }); }
 for (const k of ['keyc', 'rimc', 'bg', 'gridc']) $(k).addEventListener('input', (e) => { S[k] = e.target.value.slice(1); save(); });
-$('pause').onclick = () => { paused = !paused; syncUI(); };
+$('pause').onclick = () => { paused = !paused; syncUI(); clockDirty(); };
 $('resetCols').onclick = () => { for (const k of ['sat', 'yspread', 'cs', 'c0', 'c1', 'c2', 'c3', 'ralt', 'rinc', 'ryear']) S[k] = DEF[k]; recolor(); save(); syncUI(); };
 // rewind: the clock runs back to real time over ~3 s, so every object flies back along its own orbit to where it really is now
 let rewind = null;
-$('now').onclick = () => { rewind = { from: simT, t0: performance.now(), dur: Math.min(4000, 1200 + Math.abs(simT - Date.now()) / 36e5 * 400) }; paused = false; syncUI(); };
-document.querySelectorAll('#presets button').forEach((b) => b.onclick = () => { S.spd = Math.log10(+b.dataset.sp) * 25; paused = false; save(); syncUI(); });
+$('now').onclick = () => { roomClock = null; rewind = { from: simT, t0: performance.now(), dur: Math.min(4000, 1200 + Math.abs(simT - Date.now()) / 36e5 * 400) }; paused = false; syncUI(); };
+document.querySelectorAll('#presets button').forEach((b) => b.onclick = () => { S.spd = Math.log10(+b.dataset.sp) * 25; paused = false; save(); syncUI(); clockDirty(); });
 $('resetAll').onclick = () => { for (const k of Object.keys(DEF)) S[k] = DEF[k]; SHOWN = [1, 1, 1, 1]; buildMeshes(); recolor(); resize(); save(); syncUI(); };
 $('copy').onclick = () => {
   const p = new URLSearchParams();
   for (const k of Object.keys(DEF)) if (k !== 'view' && String(S[k]) !== String(DEF[k])) p.set(k, S[k]);
   if (SHOWN.some((v) => !v)) p.set('types', SHOWN.join(''));
   if (Math.abs(rot360.w) < 0.99999) p.set('rot', rot360.toArray().map((v) => v.toFixed(4)).join(','));
+  if (ROOM) p.set('room', ROOM);
   const url = location.origin + '/entangled-display' + (p.toString() ? '?' + p : '');
   navigator.clipboard?.writeText(url); $('copy').textContent = 'Copied'; setTimeout(() => $('copy').textContent = 'Copy display URL', 1500);
 };
@@ -574,7 +598,7 @@ addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
   if (e.key === 'h' || e.key === 'H') document.body.classList.toggle('hide');
   if (e.key === 'f' || e.key === 'F') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.();
-  if (e.key === ' ') { paused = !paused; syncUI(); e.preventDefault(); }
+  if (e.key === ' ') { paused = !paused; syncUI(); clockDirty(); e.preventDefault(); }
 });
 let drag = null;
 canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); });
@@ -585,11 +609,12 @@ canvas.addEventListener('pointermove', (e) => {
     // turn about the frame's own up axis (left/right) and its horizontal axis (up/down), so the sphere rolls freely
     rot360.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -dx / innerWidth * TAU));
     rot360.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), dy / innerHeight * Math.PI)).normalize();
+    sendLook();
   }
   else { look.yaw -= dx * 0.005; look.pitch = Math.max(-1.5, Math.min(1.5, look.pitch + dy * 0.005)); }
 });
 canvas.addEventListener('pointerup', () => drag = null);
-canvas.addEventListener('dblclick', () => { if (S.view === '360') rot360.identity(); }); // double-click: back to the upright view
+canvas.addEventListener('dblclick', () => { if (S.view === '360') { rot360.identity(); sendLook(); } }); // double-click: back to the upright view
 canvas.addEventListener('wheel', (e) => { look.dist = Math.max(0.2, Math.min(4, look.dist * Math.exp(e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
 
 // ---------- sizing ----------
@@ -613,8 +638,8 @@ function frame(now) {
   if (rewind) {
     const k = Math.min(1, (now - rewind.t0) / rewind.dur), e = k * k * (3 - 2 * k);
     simT = rewind.from + (Date.now() - rewind.from) * e;
-    if (k >= 1) { rewind = null; S.spd = 0; save(); syncUI(); }
-  } else if (!paused) simT += dtReal * 1000 * SPEED();
+    if (k >= 1) { rewind = null; S.spd = 0; save(); syncUI(); clockDirty(true); }
+  } else if (roomClock) { simT = ORB.clockNow(roomClock); } else if (!paused) simT += dtReal * 1000 * SPEED();
   render(now / 1000);
   const d = new Date(simT);
   $('clock').innerHTML = `<b>${d.toISOString().slice(0, 19).replace('T', ' ')} UTC</b> · ${paused ? 'paused' : SPEED().toLocaleString() + '×'}${Math.abs(simT - Date.now()) > 5000 ? ' · ' + ((simT - Date.now()) / 36e5).toFixed(1) + ' h from now' : ''} · ${fps.toFixed(0)} fps`;
@@ -650,6 +675,9 @@ function render(time) {
   { const gc = new THREE.Color('#' + S.gridc); GRID_U.uGrid.value.set(S.grid === '1' ? 1 : 0, S.glat, S.glon, S.gridw); GRID_U.uGridCol.value.set(gc.r ** 2.2, gc.g ** 2.2, gc.b ** 2.2); GRID_U.uGridA.value = S.grida / 100; unwrapMat.uniforms.uGridOver.value = S.gridz === 'over' ? 1 : 0; }
   earthMat.uniforms.uMode.value = S.earth === 'image' ? 1 : S.earth === 'off' ? 2 : 0; earthMat.uniforms.uEarthRot.value = fixed ? 0 : g;
 
+  updateSats(rot, mode360, size);
+  unwrapMat.uniforms.uCross.value.set(S.cross === '1' ? 1 : 0, S.crossl * H / 1080, S.crossw * H / 1080); unwrapMat.uniforms.uRes.value.set(W, H);
+
   if (mode360) {
     // 360: a cube camera at Earth's centre sees every object; the unwrap paints the ground under them, as a viewer around the sphere sees it
     rig.quaternion.identity();
@@ -678,10 +706,219 @@ function render(time) {
   }
 }
 
+// ---------- room: shared clock, sphere rotation, audience launches and their records ----------
+// Pages in the same ?room= share one clock (constant speed through the work), the sphere's rotation and every launch.
+// The LED display is the authority: it keeps the clock, tests every launched satellite against the real catalogue on the
+// CPU (same orbit model as the GPU) and publishes hits. A studio becomes the authority only when no display is around.
+const ROOM = ORB.cleanRoom(Q.get('room'));
+const TOPIC = ORB.roomTopic(ROOM), ME = Math.random().toString(36).slice(2, 10);
+let mq = null, relayOk = false, roomClock = null, lastHb = 0, clockSeen = false;
+const isAuthority = () => ROLE === 'display' || Date.now() - lastHb > 8000;
+function relayText() { $('relay').textContent = Q.has('solo') ? 'Relay off (solo)' : `Relay ${relayOk ? 'connected' : 'not connected'} · room ${ROOM || '(none)'} · ${isAuthority() ? 'this page tests hits' : 'the sphere display tests hits'}`; }
+function publish(t, obj, retain = false) { if (mq && relayOk) mq.publish(TOPIC + t, obj == null ? '' : JSON.stringify(obj), { retain, qos: retain ? 1 : 0 }); }
+let clockT = null;
+function clockDirty(now) {
+  if (!mq || !relayOk) return;
+  clearTimeout(clockT);
+  clockT = setTimeout(() => { roomClock = { wall0: Date.now(), sim0: simT, speed: paused ? 0 : SPEED(), by: ME }; publish('/clock', roomClock, true); }, now ? 0 : 120);
+}
+let lookT = 0;
+function sendLook() { const n = performance.now(); if (n - lookT < 40) return; lookT = n; publish('/look', { q: rot360.toArray(), frame: S.frame, by: ME }, true); }
+const draft = new Map(); // tablet id → { alt, theta, t }
+if (!Q.has('solo')) import('/sphere-assets/vendor/mqtt.esm.js').then((m) => {
+  const mqtt = m.default || m;
+  mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
+  mq.on('close', () => { relayOk = false; relayText(); }); mq.on('offline', () => { relayOk = false; relayText(); });
+  mq.on('connect', () => {
+    relayOk = true; relayText();
+    mq.subscribe([TOPIC + '/clock', TOPIC + '/look', TOPIC + '/sat/+', TOPIC + '/draft/+', TOPIC + '/hb']);
+    // no clock in the room yet: the authority starts one (now, at this page's speed)
+    setTimeout(() => { if (!clockSeen && isAuthority()) { simT = Date.now(); clockDirty(true); } }, 2500);
+  });
+  mq.on('message', (t, msg) => {
+    const k = t.slice(TOPIC.length), str = msg.toString();
+    let d = null; try { d = str ? JSON.parse(str) : null; } catch { return; }
+    if (k === '/hb') { if (d?.by !== ME) lastHb = Date.now(); return; }
+    if (k === '/clock') {
+      if (!d || ![d.wall0, d.sim0, d.speed].every(Number.isFinite)) return;
+      clockSeen = true; roomClock = d; rewind = null; paused = d.speed === 0;
+      if (d.speed > 0) S.spd = Math.log10(d.speed) * 25;
+      syncUI(); return;
+    }
+    if (k === '/look') { if (d?.by !== ME && Array.isArray(d?.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !drag) rot360.fromArray(d.q).normalize(); return; }
+    if (k.startsWith('/draft/')) { const id = k.slice(7); if (d && Number.isFinite(d.alt) && Number.isFinite(d.theta)) draft.set(id, { alt: d.alt, theta: d.theta, t: Date.now() }); else draft.delete(id); return; }
+    if (k.startsWith('/sat/')) { const id = k.slice(5); if (!d) removeSat(id); else { const c = ORB.cleanSat(d); if (c && c.id === id) upsertSat(c); } }
+  });
+}).catch(() => {});
+setInterval(() => {
+  if (ROLE === 'display') publish('/hb', { by: ME });
+  for (const [k, v] of draft) if (Date.now() - v.t > 6000) draft.delete(k);
+  relayText();
+}, 3000);
+
+// CPU copy of the catalogue for hit tests
+let cat = [], catQ = [], catT = 0;
+function onCatalogue() {
+  catT = simT; cat = objs; catQ = objs.map((o) => ORB.prep(o, catT));
+  for (const s of sats.values()) s.cand = null;
+}
+
+const sats = new Map(); // id → { d, q, mesh, path, cand, prev, ... }
+const satGeo = new THREE.IcosahedronGeometry(1, 3);
+const satMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.55, roughness: 0.4, depthTest: false, depthWrite: false });
+const pathMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false });
+const draftMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false });
+const flashes = [];
+function upsertSat(d) {
+  let s = sats.get(d.id);
+  if (!s) {
+    s = { d, mesh: new THREE.Mesh(satGeo, satMat), path: null, pathAt: 0, cand: null, last: null, nearSent: 0, near: d.near || 0 };
+    s.mesh.renderOrder = 20; s.mesh.frustumCulled = false; scene.add(s.mesh); sats.set(d.id, s);
+  }
+  const wasHit = s.d.status === 'hit';
+  s.d = d; s.o = d.el; s.q = ORB.prep(d.el, d.el.ep); s.near = Math.max(s.near, d.near || 0);
+  if (!wasHit && d.status === 'hit' && d.tHit) flashAt(s, d.tHit);
+  listSats();
+}
+function removeSat(id) { const s = sats.get(id); if (!s) return; scene.remove(s.mesh); if (s.path) { scene.remove(s.path); s.path.geometry.dispose(); } sats.delete(id); listSats(); }
+function listSats() {
+  const el = $('satList'); if (!el) return;
+  const a = [...sats.values()].sort((x, y) => y.d.created - x.d.created).slice(0, 12);
+  el.textContent = a.length ? a.map((s) => `${s.d.status === 'hit' ? '×' : '•'} ${s.d.name || '(no name)'} · ${Math.round(s.d.alt)} km · ${s.d.status === 'hit' ? 'lasted ' + ORB.fmtLasted(s.d.tHit - s.d.el.ep) : 'in orbit'}`).join('\n') : 'No launches yet.';
+}
+$('clearSats').onclick = () => { for (const id of [...sats.keys()]) { publish('/sat/' + id, null, true); removeSat(id); } };
+
+const tmpA = [0, 0, 0], tmpB = [0, 0, 0], tmpS = [0, 0, 0];
+function satPos(s, ms, out) { return ORB.posEci(s.q, (ms - s.d.el.ep) / 1000, out); }
+function candidates(s) {
+  const r = s.q.a, m = S.hit === 'box' ? 30 : 15, out = [];
+  for (let j = 0; j < catQ.length; j++) { const q = catQ[j]; if (q.a * (1 - q.e) - m < r && q.a * (1 + q.e) + m > r) out.push(j); }
+  return Int32Array.from(out);
+}
+// one sweep step for satellite s from ms0 to ms1: relative motion of every candidate, linear within the step
+function sweep(s, ms0, ms1) {
+  const c = s.cand, n = c.length, pa = s.prevRel, mult = HITX(), box = S.hit === 'box';
+  const ps = satPos(s, ms1, tmpS), dt1 = (ms1 - catT) / 1000;
+  // satellite's radial / along / cross axes at ms1
+  const ps2 = satPos(s, ms1 + 1000, tmpB), r = norm3([ps[0], ps[1], ps[2]]), v = norm3([ps2[0] - ps[0], ps2[1] - ps[1], ps2[2] - ps[2]]), h = norm3(cross3(r, v)), al = cross3(h, r);
+  const bx = 1 / (ORB.BOX[0] * mult), by = 1 / (ORB.BOX[1] * mult), bz = 1 / (ORB.BOX[2] * mult);
+  let hit = null;
+  for (let k = 0; k < n; k++) {
+    const j = c[k]; ORB.posEci(catQ[j], dt1, tmpA);
+    const x = tmpA[0] - ps[0], y = tmpA[1] - ps[1], z = tmpA[2] - ps[2];
+    if (pa) {
+      const ax = pa[3 * k], ay = pa[3 * k + 1], az = pa[3 * k + 2];
+      // near-miss counter: closest approach under 10 km (each approach counted once)
+      const [d2] = ORB.sweepMin(ax, ay, az, x, y, z);
+      const close = d2 < 100;
+      if (close && !s.nearFlag[k]) s.near++;
+      s.nearFlag[k] = close ? 1 : 0;
+      if (d2 < 2500) { // within 50 km: test the hit rule
+        let m2, f;
+        if (box) {
+          const p0 = [ax * r[0] + ay * r[1] + az * r[2], ax * al[0] + ay * al[1] + az * al[2], ax * h[0] + ay * h[1] + az * h[2]];
+          const p1 = [x * r[0] + y * r[1] + z * r[2], x * al[0] + y * al[1] + z * al[2], x * h[0] + y * h[1] + z * h[2]];
+          [m2, f] = ORB.sweepMin(p0[0] * bx, p0[1] * by, p0[2] * bz, p1[0] * bx, p1[1] * by, p1[2] * bz);
+          if (m2 < 1 && (!hit || f < hit.f)) hit = { j, f, km: Math.sqrt(d2) };
+        } else {
+          const rr = (ORB.SAT_RADIUS_KM + ORB.trueRadiusKm(cat[j])) * mult;
+          [m2, f] = ORB.sweepMin(ax, ay, az, x, y, z);
+          if (m2 < rr * rr && (!hit || f < hit.f)) hit = { j, f, km: Math.sqrt(m2) };
+        }
+      }
+    }
+    s.curRel[3 * k] = x; s.curRel[3 * k + 1] = y; s.curRel[3 * k + 2] = z;
+  }
+  const t = s.prevRel; s.prevRel = s.curRel; s.curRel = t || new Float64Array(3 * n);
+  if (hit) return { t: ms0 + (ms1 - ms0) * hit.f, j: hit.j, km: hit.km };
+  return null;
+}
+const norm3 = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+function testHits(s) {
+  if (!catQ.length || s.d.status !== 'up') return;
+  const t1 = simT;
+  if (t1 < s.d.el.ep) { s.last = null; return; }
+  if (!s.cand || s.candRule !== S.hit) { s.cand = candidates(s); s.candRule = S.hit; s.prevRel = null; s.curRel = new Float64Array(3 * s.cand.length); s.nearFlag = new Uint8Array(s.cand.length); s.last = null; }
+  if (s.last == null || t1 < s.last || t1 - s.last > 120e3) { s.last = Math.max(s.d.el.ep, t1); s.prevRel = null; sweep(s, s.last, s.last); return; }
+  const steps = Math.min(30, Math.ceil((t1 - s.last) / 2000));
+  for (let i = 0; i < steps; i++) {
+    const a = s.last + (t1 - s.last) * i / steps, b = s.last + (t1 - s.last) * (i + 1) / steps;
+    const h = sweep(s, a, b);
+    if (h) {
+      const o = cat[h.j];
+      s.d = { ...s.d, status: 'hit', tHit: Math.round(h.t), hitBy: { norad: o.norad, intl: o.intl, type: o.type, km: Math.round(h.km * 1000) / 1000 }, near: s.near, rule: S.hit + (HITX() > 1 ? '×' + HITX() : '') };
+      publish('/sat/' + s.d.id, s.d, true); flashAt(s, s.d.tHit); listSats();
+      return;
+    }
+  }
+  s.last = t1;
+  if (s.near !== s.nearSent && Date.now() - (s.nearAt || 0) > 10000) { s.nearSent = s.near; s.nearAt = Date.now(); s.d = { ...s.d, near: s.near }; publish('/sat/' + s.d.id, s.d, true); }
+}
+function flashAt(s, ms) { flashes.push({ p: satPos(s, ms, [0, 0, 0]), ms, t0: performance.now(), mesh: null }); }
+
+function tubeFor(pts, px, mode360) {
+  const curve = new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(p[0], p[1], p[2])), false);
+  const rad = Math.max(1, px / 2 * 22.6 * (mode360 ? 1 : 0.6)); // ~22.6 km per pixel of the 1920-wide frame at low orbit
+  return new THREE.TubeGeometry(curve, pts.length * 2, rad, 6, false);
+}
+let draftMesh = null, draftAt = 0;
+function updateSats(rot, mode360, size) {
+  const auth = isAuthority(), out360 = mode360 && S.from !== 'center', sc = [0, 0, 0], now = performance.now();
+  for (const s of sats.values()) {
+    if (auth) testHits(s);
+    const t = s.d.status === 'hit' ? null : simT;
+    const visible = t != null && t >= s.d.el.ep;
+    s.mesh.visible = visible;
+    if (visible) {
+      ORB.eciToScene(satPos(s, t, tmpS), rot, sc);
+      s.mesh.position.set(sc[0], sc[1], sc[2]);
+      const k = size * 1.6 * (out360 ? Math.hypot(sc[0], sc[1], sc[2]) / 6800 : 1);
+      s.mesh.scale.setScalar(k);
+    }
+    // the path one revolution ahead, redrawn every 2 s
+    if (S.pathw > 0 && visible) {
+      if (!s.path || Date.now() - s.pathAt > 2000) {
+        s.pathAt = Date.now();
+        const g = tubeFor(ORB.pathScene(s.o, simT, S.frame, 160), S.pathw, mode360);
+        if (s.path) { s.path.geometry.dispose(); s.path.geometry = g; } else { s.path = new THREE.Mesh(g, pathMat); s.path.renderOrder = 15; s.path.frustumCulled = false; scene.add(s.path); }
+      }
+      s.path.visible = true;
+    } else if (s.path) s.path.visible = false;
+  }
+  // the orbit being set on a tablet (newest draft), from the cross, now
+  const dr = [...draft.values()].sort((a, b) => b.t - a.t)[0];
+  if (dr && S.pathw > 0) {
+    if (!draftMesh || Date.now() - draftAt > 150) {
+      draftAt = Date.now();
+      const o = ORB.launchElements(rot360.toArray(), dr.theta, dr.alt, simT, S.frame);
+      const g = tubeFor(ORB.pathScene(o, simT, S.frame, 160), S.pathw * 1.5, mode360);
+      if (draftMesh) { draftMesh.geometry.dispose(); draftMesh.geometry = g; } else { draftMesh = new THREE.Mesh(g, draftMat); draftMesh.renderOrder = 16; draftMesh.frustumCulled = false; scene.add(draftMesh); }
+    }
+    draftMesh.visible = true;
+  } else if (draftMesh) draftMesh.visible = false;
+  // hit flashes: a white burst that grows and fades over 3 s
+  for (let i = flashes.length - 1; i >= 0; i--) {
+    const f = flashes[i], k = (now - f.t0) / 3000;
+    if (k > 1) { if (f.mesh) { scene.remove(f.mesh); f.mesh.material.dispose(); } flashes.splice(i, 1); continue; }
+    if (!f.mesh) { f.mesh = new THREE.Mesh(satGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: false, depthWrite: false })); f.mesh.renderOrder = 25; f.mesh.frustumCulled = false; scene.add(f.mesh); }
+    ORB.eciToScene(f.p, rot, sc); f.mesh.position.set(sc[0], sc[1], sc[2]);
+    f.mesh.scale.setScalar(size * (1.6 + 6 * k) * (out360 ? Math.hypot(sc[0], sc[1], sc[2]) / 6800 : 1));
+    f.mesh.material.opacity = 1 - k;
+  }
+}
+// room links
+$('room').value = ROOM;
+$('room').onchange = (e) => { const r = ORB.cleanRoom(e.target.value); const u = new URL(location.href); if (r) u.searchParams.set('room', r); else u.searchParams.delete('room'); location.href = u; };
+$('openTablet').href = '/entangled-tablet' + (ROOM ? '?room=' + ROOM : ''); $('openDisplay').href = '/entangled-display' + (ROOM ? '?room=' + ROOM : '');
+relayText();
+
 syncUI(); legend(); resize();
 requestAnimationFrame(frame);
 window.__ent = { ingest: (parts) => { meta = { fetched: new Date().toISOString(), sources: ['test'], errors: [] }; ingest(parts); }, S, look, render, frame: (ms) => frame(ms),
-  setSpeed: (v) => { S.spd = Math.log10(Math.max(1, v)) * 25; paused = false; }, rebuild: () => { buildMeshes(); recolor(); }, get count() { return objs.length; } };
+  setSpeed: (v) => { S.spd = Math.log10(Math.max(1, v)) * 25; paused = false; }, rebuild: () => { buildMeshes(); recolor(); }, get count() { return objs.length; },
+  ORB, sats, rot360, get simT() { return simT; }, set simT(v) { simT = v; }, addSat: (d) => upsertSat(ORB.cleanSat(d)), draft, catQ: () => catQ.length };
 if (!TEST) load();
 setInterval(() => { if (!TEST) load(); }, 2 * 3600e3); // CelesTrak updates every 2 h
 </script>
