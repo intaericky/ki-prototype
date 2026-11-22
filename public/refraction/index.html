@@ -27,6 +27,10 @@
   input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 11px; height: 11px; border-radius: 50%; background: #000; border: 1px solid var(--fg); margin-top: -5px; }
   input[type=range]::-moz-range-track { height: 1px; background: var(--dim); }
   input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: #000; border: 1px solid var(--fg); }
+  .checks { grid-column: 2 / 4; display: grid; gap: 4px; }
+  .checks label { color: var(--fg); display: flex; gap: 8px; align-items: center; }
+  .checks span { color: var(--dim); margin-left: auto; font-variant-numeric: tabular-nums; }
+  .checks input { accent-color: #fff; margin: 0; }
   .note { color: var(--dim); font-size: 12px; margin-top: 12px; line-height: 1.5; }
   .err { color: #fff; }
   body.display #toggle, body.display #panel, body.display #info { display: none; }
@@ -52,7 +56,7 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: 'glass', size: 50, rcs: '1', ior: 50, disp: 0, rim: 25, gain: 100, bounces: 3, light: 'sun', range: 'all', revive: 30, spd: 0 };
+const DEF = { view: 'glass', size: 50, rcs: '1', ior: 50, disp: 0, rim: 25, gain: 100, bounces: 2, light: 'sun', range: 'all', types: '1111', revive: 30, spd: 0 };
 let S = { ...DEF };
 const KEY = 'refraction-v1';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -60,6 +64,7 @@ for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number
 if (ROLE === 'display') S.view = '360';
 if (ROLE === 'tablet' && !Q.has('view')) S.view = 'lines';
 const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+const fmtX = (x) => '×' + (x >= 1e4 ? Math.round(x / 1e3) + 'k' : Math.round(x));
 const SIZE_KM = () => 5 * Math.pow(100, S.size / 100); // ball radius: 5 .. 500 km (50 → 50 km)
 const IOR = () => 1 + S.ior / 100;                      // 1.0 .. 2.0 (glass ≈ 1.5)
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25)); // 1× .. 10,000×
@@ -89,7 +94,7 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 const NOBJ_W = 1024, NITEM_W = 4096, HB = 65536, HB_W = 256; // texture widths, hash buckets
 const U = {
   tObj: { value: null }, tItem: { value: null }, tBucket: { value: null }, uCell: { value: 250 }, uShell: { value: 9000 }, uBounces: { value: 3 },
-  tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 1 },
+  tDepth: { value: null }, tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 1 },
   uIor: { value: 1.5 }, uDisp: { value: 0 }, uRim: { value: 0.25 }, uGain: { value: 1 }, uPxK: { value: 0.001 },
   uViewProj: { value: new THREE.Matrix4() }, uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) },
 };
@@ -99,7 +104,7 @@ const OBJ = /* glsl */`
 
 const OPTICS = /* glsl */`${OBJ}
   uniform highp sampler2D tItem, tBucket; uniform float uCell, uShell; uniform int uBounces;
-  uniform sampler2D tDay, tNight; uniform vec3 uSun; uniform float uLight, uIor, uDisp, uRim, uGain;
+  uniform sampler2D tDay, tNight; uniform highp sampler2D tDepth; uniform vec3 uSun; uniform float uLight, uIor, uDisp, uRim, uGain;
   const float RE = 6378.137;
   vec3 surface(vec3 n, float lod) {
     vec3 e = vec3(n.x, -n.z, n.y);
@@ -128,11 +133,11 @@ const OPTICS = /* glsl */`${OBJ}
     vec3 tDelta = uCell / ard;
     vec3 tNext = (vec3(c) + max(sg, 0.0) - p) * sg * uCell / ard;
     ivec3 st = ivec3(sg);
-    for (int s = 0; s < 48; s++) {
+    for (int s = 0; s < 32; s++) {
       int h = cellHash(c);
       vec2 b = texelFetch(tBucket, ivec2(h & ${HB_W - 1}, h >> ${Math.log2(HB_W)}), 0).xy;
-      int i0 = int(b.x), n = min(int(b.y), 32);
-      for (int k = 0; k < 32; k++) {
+      int i0 = int(b.x), n = min(int(b.y), 24);
+      for (int k = 0; k < 24; k++) {
         if (k >= n) break;
         int ii = i0 + k;
         int j = int(texelFetch(tItem, ivec2(ii & ${NITEM_W - 1}, ii >> ${Math.log2(NITEM_W)}), 0).r);
@@ -215,11 +220,17 @@ const glassFrag = /* glsl */`${OPTICS}
     float cov = clamp((vR - dm) / px + 0.5, 0.0, 1.0);
     if (cov <= 0.0) discard;
     float t = -b - sqrt(max(vR * vR - dm * dm, 0.0));
-    vec3 P = ro + rd * t, N = normalize(P - vC);
-    vec3 col = glass(P, N, rd, vId, vC, vR, vLod);
+    vec3 P = ro + rd * t;
     vec4 cp = uViewProj * vec4(P, 1.0);
-    gl_FragDepth = cp.z / cp.w * 0.5 + 0.5;
-    gl_FragColor = vec4(col, cov);
+    float depth = cp.z / cp.w * 0.5 + 0.5;
+  #ifdef PREPASS
+    if (cov < 0.5) discard;
+    gl_FragDepth = depth; gl_FragColor = vec4(0.0); return;
+  #else
+    if (depth > texelFetch(tDepth, ivec2(gl_FragCoord.xy), 0).r + 1e-6) discard; // hidden behind a nearer ball: skip the tracing
+    vec3 N = normalize(P - vC);
+    gl_FragColor = vec4(glass(P, N, rd, vId, vC, vR, vLod), cov);
+  #endif
   }`;
 
 // --- the minimal tablet: each object a small circle, a popped one an x ---
@@ -283,15 +294,29 @@ const eqFrag = /* glsl */`${OPTICS}
     float cov = clamp((vR - dm) / px + 0.5, 0.0, 1.0);
     if (cov <= 0.0) discard;
     float t = -b - sqrt(max(vR * vR - dm * dm, 0.0));
-    vec3 P = ro + rd * t, N = normalize(P - vC);
-    gl_FragDepth = 1.0 - length(P) / 2.0e5; // the highest surface (nearest the viewer outside) wins
+    vec3 P = ro + rd * t;
+    float depth = 1.0 - length(P) / 2.0e5; // the highest surface (nearest the viewer outside) wins
+  #ifdef PREPASS
+    if (cov < 0.5) discard;
+    gl_FragDepth = depth; gl_FragColor = vec4(0.0); return;
+  #else
+    if (depth > texelFetch(tDepth, ivec2(gl_FragCoord.xy), 0).r + 1e-6) discard;
+    vec3 N = normalize(P - vC);
     gl_FragColor = vec4(glass(P, N, rd, vId, vC, vR, vLod), cov);
+  #endif
   }`;
 
-const mk = (v, f, extra = {}) => new THREE.ShaderMaterial({ uniforms: { ...U, ...extra }, vertexShader: v, fragmentShader: f, transparent: true, depthTest: true, depthWrite: true });
-const glassMat = mk(glassVert, glassFrag);
-const linesMat = mk(linesVert, linesFrag); linesMat.depthWrite = false;
+// Two passes: a cheap pass finds the nearest ball surface per pixel (depth only); the full pass then traces light only
+// for that front surface and drops every hidden fragment at once (otherwise overlapping balls all get traced).
+const mk = (v, f, extra = {}, pre = false) => new THREE.ShaderMaterial({ uniforms: { ...U, ...extra }, vertexShader: v, fragmentShader: f, defines: pre ? { PREPASS: 1 } : {},
+  transparent: !pre, depthTest: pre, depthWrite: pre, colorWrite: !pre });
+const glassMat = mk(glassVert, glassFrag), glassPre = mk(glassVert, glassFrag, {}, true);
+const linesMat = mk(linesVert, linesFrag); linesMat.depthTest = true;
 const eqMats = [-1, 0, 1].map((k) => mk(eqVert, eqFrag, { uShift: { value: k } }));
+const eqPres = [-1, 0, 1].map((k) => mk(eqVert, eqFrag, { uShift: { value: k } }, true));
+const preRT = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: true, depthTexture: new THREE.DepthTexture(1, 1, THREE.FloatType) });
+const eqPreRT = new THREE.WebGLRenderTarget(1920, 1080, { depthBuffer: true, depthTexture: new THREE.DepthTexture(1920, 1080, THREE.FloatType) });
+const preScene = new THREE.Scene(), eqPreScene = new THREE.Scene();
 
 // Earth: always black. In the lines view it gets a single outline.
 const earthBlack = new THREE.Mesh(new THREE.SphereGeometry(RE, 96, 48), new THREE.MeshBasicMaterial({ color: 0x000000 }));
@@ -301,6 +326,7 @@ const earthLine = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), new THRE
 }));
 earthBlack.renderOrder = earthLine.renderOrder = -1;
 scene.add(earthBlack, earthLine);
+preScene.add(new THREE.Mesh(earthBlack.geometry, earthBlack.material));
 
 // the 360 frame is drawn into its own image (1920 × 1080), then shown flat or wrapped back onto a ball
 const eqRT = new THREE.WebGLRenderTarget(1920, 1080, { depthBuffer: true, samples: 0 });
@@ -353,28 +379,29 @@ function build() {
     const M = (mat) => { const m = new THREE.Mesh(geo, mat); m.frustumCulled = false; return m; };
     meshes = { glass: M(glassMat), lines: M(linesMat), eq: eqMats.map(M) };
     scene.add(meshes.glass, meshes.lines); eqScene.add(...meshes.eq);
+    preScene.add(M(glassPre)); eqPreScene.add(...eqPres.map(M));
   }
   geo.instanceCount = n;
 }
 function reweight() { if (weights) objs.forEach((o, j) => { weights[j] = weight(o); }); }
 const hashJ = (x, y, z) => ((Math.imul(x + 4096, 73856093) ^ Math.imul(y + 4096, 19349663) ^ Math.imul(z + 4096, 83492791)) >>> 0) & (HB - 1);
-const tmpE = [0, 0, 0];
+const tmpE = [0, 0, 0], shellS = [];
 // move every object to now and rebuild the grid (all on the CPU: ~29k orbits, a few ms)
 function update() {
   const n = objs.length, dt = (simT - T0) / 1000, rot = -ORB.gmst(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   const size = SIZE_KM(), maxAlt = S.range === 'leo' ? 2000 : 1e9, now = wallS(), rv = REVIVE();
-  let rmax = 1, shell = RE;
+  let rmax = 1; shellS.length = 0;
   for (let j = 0; j < n; j++) {
     ORB.posEci(catQ[j], dt, tmpE);
     const x = cr * tmpE[0] - sr * tmpE[1], y = sr * tmpE[0] + cr * tmpE[1], z = tmpE[2];
     const L = Math.hypot(x, y, z), k = j * 4;
     objArr[k] = x; objArr[k + 1] = z; objArr[k + 2] = -y;
     let r = size * weights[j];
-    if (L - RE > maxAlt) r = 0;
+    if (L - RE > maxAlt || S.types[objs[j].type] === '0') r = 0;
     else {
       const p = popped.get(objs[j].norad);
       if (p && p.t > 0) { const age = now - p.t - rv; if (age <= 0) r = -r; else if (age < 0.8) { const e = age / 0.8; r *= Math.max(0.01, e * e * (3 - 2 * e)); } } // popped (<0), or growing back
-      if (r > 0) { if (r > rmax) rmax = r; if (L + r > shell) shell = L + r; }
+      if (r > 0) { if (r > rmax) rmax = r; if ((j & 7) === 0) shellS.push(L + r); }
     }
     objArr[k + 3] = r;
   }
@@ -393,7 +420,7 @@ function update() {
     }
     if (pass === 0) { let s = 0; for (let h = 0; h < HB; h++) { bucketArr[h * 2] = s; bucketArr[h * 2 + 1] = bCount[h]; bFill[h] = s; s += bCount[h]; } }
   }
-  U.uCell.value = cell; U.uShell.value = shell;
+  shellS.sort((a, b) => a - b); U.uCell.value = cell; U.uShell.value = shellS.length ? shellS[Math.floor(shellS.length * 0.98)] : RE + 2000;
   objTex.needsUpdate = true; itemTex.needsUpdate = true; bucketTex.needsUpdate = true;
 }
 const idx = new Map();
@@ -407,7 +434,7 @@ function ingest(parts) {
   objs = ORB.parseCatalogue(parts);
   idx.clear(); objs.forEach((o, j) => idx.set(o.norad, j));
   counts.fill(0); for (const o of objs) counts[o.type]++;
-  T0 = simT; build(); loaded = true;
+  T0 = simT; build(); loaded = true; panelSync();
 }
 const good = {};
 async function load() {
@@ -438,7 +465,7 @@ function pick(ro, rd, pxAt, wantPopped) {
   let best = -1, bestT = Infinity, near = -1, nearK = Infinity;
   for (let j = 0; j < objs.length; j++) {
     const o = objs[j], pp = popped.get(o.norad), isPop = !!(pp && pp.t > 0 && now - pp.t < REVIVE());
-    if (isPop !== wantPopped) continue;
+    if (isPop !== wantPopped || S.types[o.type] === '0') continue;
     ORB.eciToScene(ORB.posEci(catQ[j], dt, tmpP), rot, tmpS);
     if (Math.hypot(tmpS[0], tmpS[1], tmpS[2]) - RE > maxAlt) continue;
     const ox = tmpS[0] - ro[0], oy = tmpS[1] - ro[1], oz = tmpS[2] - ro[2];
@@ -564,30 +591,46 @@ function lookFromCamera() {
 }
 
 // ---------- panel (studio) ----------
-const SL = [['size', 'Size', 0, 100, () => SIZE_KM().toFixed(0) + ' km'], ['ior', 'Refraction', 0, 100, () => IOR().toFixed(2)], ['disp', 'Dispersion', 0, 100, () => S.disp + ''],
+const TYPES = ['Payloads', 'Rocket bodies', 'Debris', 'Unknown'];
+const SL = [['size', 'Size', 0, 100, () => fmtX(SIZE_KM() / 0.00079)], ['ior', 'Refraction', 0, 100, () => IOR().toFixed(2)], ['disp', 'Dispersion', 0, 100, () => S.disp + ''],
   ['rim', 'Edge', 0, 100, () => S.rim + ''], ['gain', 'Brightness', 50, 300, () => (S.gain / 100).toFixed(1) + '×'], ['bounces', 'Through', 0, 6, () => S.bounces ? '+' + S.bounces + ' balls' : '1 ball'], ['revive', 'Revive', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], 
   ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]], ['rcs', 'Size by', [['1', 'Radar size'], ['0', 'Same']]], ['range', 'Objects', [['all', 'All'], ['leo', 'Below 2,000 km']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
+    + `<div class="row"><label>Show</label><div class="checks">${TYPES.map((t, i) => `<label><input type="checkbox" data-ty="${i}"> ${t} <span data-cnt="${i}"></span></label>`).join('')}</div></div>`
     + `<div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
-    <div class="note">Earth is black. Its surface appears only inside the glass: each ball bends the line of sight onto the Earth below it (Blue Marble by day, Black Marble at night). Pop a ball and only black remains. Objects: every tracked payload, rocket body and debris in CelesTrak (US Space Force catalogue), at their real positions now. Ball size is chosen here, not measured.</div>`;
+    <div class="note">Earth is black. Its surface appears only inside the glass: each ball bends the line of sight onto the Earth below it (Blue Marble by day, Black Marble at night). Pop a ball and only black remains. Objects: every tracked payload, rocket body and debris in CelesTrak (US Space Force catalogue), at their real positions now. Ball size is ×N of each object's real size from its radar cross-section (kept between 0.3× and 2.5× of a typical object so debris stays visible).</div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight(); save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
+  $('panel').querySelectorAll('input[data-ty]').forEach((c) => c.onchange = () => { const a = S.types.split(''); a[+c.dataset.ty] = c.checked ? '1' : '0'; S.types = a.join(''); save(); });
   $('now').onclick = () => { simT = Date.now(); S.spd = 0; clock = null; sendClock(); save(); panelSync(); };
   $('reset').onclick = () => { S = { ...DEF }; reweight(); save(); panelSync(); resize(); };
 }
 function panelSync() {
   document.querySelectorAll('.seg[data-k]').forEach((s) => s.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(S[s.dataset.k]) === b.dataset.v)));
+  document.querySelectorAll('input[data-ty]').forEach((c) => { c.checked = S.types[+c.dataset.ty] !== '0'; });
+  document.querySelectorAll('span[data-cnt]').forEach((e) => { e.textContent = counts[+e.dataset.cnt] ? counts[+e.dataset.cnt].toLocaleString() : ''; });
   for (const [k, , , , f] of SL) { const r = document.querySelector(`input[data-k="${k}"]`); if (r) r.value = S[k]; const o = document.querySelector(`output[data-o="${k}"]`); if (o) o.textContent = f(); }
 }
 $('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').classList.toggle('on'); };
 panelBuild(); panelSync();
 
 // ---------- sizing ----------
+// adaptive resolution: drop the render scale when frames run slow, raise it again when there is room
+const dbs = new THREE.Vector2();
+const PR_MAX = ROLE === 'display' ? 1 : Math.min(devicePixelRatio || 1, 2);
+let pr = Math.min(PR_MAX, 1), eqScale = 1, slowT = 0, fastT = 0;
+function adapt(dtMs) {
+  if (TEST || Q.has('fixed')) return;
+  if (dtMs > 22) { slowT += dtMs; fastT = 0; } else if (dtMs < 17.5) { fastT += dtMs; slowT = 0; } else { slowT = fastT = 0; }
+  const v = S.view, eqMode = v === '360' || v === 'ball';
+  if (slowT > 500) { slowT = 0; if (eqMode) eqScale = Math.max(0.5, eqScale - 0.125); else if (pr > 0.5) { pr = Math.max(0.5, pr - 0.15); resize(); } }
+  if (fastT > 3000) { fastT = 0; if (eqMode) eqScale = Math.min(ROLE === 'display' ? 1 : 1, eqScale + 0.125); else if (pr < PR_MAX) { pr = Math.min(PR_MAX, pr + 0.1); resize(); } }
+}
 function resize() {
-  const dpr = ROLE === 'display' ? 1 : Math.min(devicePixelRatio || 1, 2);
+  const dpr = ROLE === 'display' ? 1 : pr;
   renderer.setPixelRatio(dpr); renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   ballCam.aspect = innerWidth / innerHeight; ballCam.updateProjectionMatrix();
@@ -595,18 +638,18 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 // ---------- frame ----------
-let last = performance.now(), fps = 60, lastSnap = 0;
+let last = performance.now(), fps = 60, lastSnap = 0, cpuMs = 0;
 const simNow = () => clock ? clock.sim0 + (Date.now() - clock.wall0) * clock.speed : simT;
 function frame(now) {
   if (!TEST) requestAnimationFrame(frame);
-  const dt = Math.min(0.1, (now - last) / 1000); last = now; fps = fps * 0.95 + 0.05 / Math.max(dt, 1e-3);
+  const dtMs = now - last, dt = Math.min(0.1, dtMs / 1000); last = now; adapt(dtMs); fps = fps * 0.95 + 0.05 / Math.max(dt, 1e-3);
   simT = clock ? simNow() : simT + dt * 1000 * SPEED();
   render();
 }
 function render() {
   if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; build(); }
   const rot = -ORB.gmst(simT);
-  if (loaded) update();
+  if (loaded) { const c0 = performance.now(); update(); cpuMs = cpuMs * 0.9 + (performance.now() - c0) * 0.1; }
   U.uIor.value = IOR(); U.uDisp.value = S.disp / 1000; U.uRim.value = S.rim / 100; U.uGain.value = S.gain / 100; U.uBounces.value = S.bounces;
   U.uLight.value = S.light === 'sun' ? 1 : 0;
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
@@ -619,13 +662,24 @@ function render() {
     camera.near = Math.max(5, (view.dist - RE - 2500) * 0.3); camera.far = view.dist + 60000; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
     U.uViewProj.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     U.uPxK.value = 2 * Math.tan(camera.fov / 2 * D2R) / (innerHeight * renderer.getPixelRatio());
-    earthLine.visible = v === 'lines'; earthBlack.visible = v === 'glass';
+    earthLine.visible = v === 'lines'; earthBlack.visible = v === 'lines';
     if (meshes.glass) { meshes.glass.visible = v === 'glass'; meshes.lines.visible = v === 'lines'; }
     lookFromCamera();
+    if (v === 'glass') {
+      renderer.getDrawingBufferSize(dbs);
+      if (preRT.width !== dbs.x || preRT.height !== dbs.y) preRT.setSize(dbs.x, dbs.y);
+      renderer.setRenderTarget(preRT); renderer.clear(); renderer.render(preScene, camera);
+      U.tDepth.value = preRT.depthTexture;
+    }
     renderer.setRenderTarget(null); renderer.render(scene, camera);
   } else {
     rot360M.setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rot360)); rot360T.copy(rot360M).transpose();
-    renderer.setRenderTarget(eqRT); renderer.setClearColor(0x000000, 1); renderer.clear();
+    const ew = Math.round(1920 * eqScale), eh = Math.round(1080 * eqScale);
+    if (eqRT.width !== ew) { eqRT.setSize(ew, eh); eqPreRT.setSize(ew, eh); }
+    U.uRes.value.set(ew, eh);
+    renderer.setRenderTarget(eqPreRT); renderer.setClearColor(0x000000, 1); renderer.clear(); renderer.render(eqPreScene, eqCam);
+    U.tDepth.value = eqPreRT.depthTexture;
+    renderer.setRenderTarget(eqRT); renderer.clear();
     renderer.render(eqScene, eqCam);
     renderer.setRenderTarget(null);
     if (v === '360') renderer.render(blitScene, eqCam);
@@ -643,7 +697,7 @@ function info() {
   const now = wallS(); let np = 0; for (const p of popped.values()) if (p.t > 0 && now - p.t < REVIVE()) np++;
   const d = new Date(simT), live = Math.abs(simT - Date.now()) < 5000;
   el.textContent = ROLE === 'tablet' ? `${objs.length.toLocaleString()}   ${np ? '× ' + np : ''}`
-    : `${objs.length.toLocaleString()} objects · ${np} popped\n${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
+    : `${objs.length.toLocaleString()} objects · ${np} popped\n${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps · cpu ${cpuMs.toFixed(1)} ms · res ${Math.round(100 * (S.view === '360' || S.view === 'ball' ? eqScale : pr))}%${ROOM ? ' · room ' + ROOM : ''}`;
 }
 
 if (TEST) window.__ref = { ingest, render, tap, S, view, rot360, setSim: (t) => { simT = t; }, pick, objs: () => objs, setView: (k) => { S.view = k; resize(); } };

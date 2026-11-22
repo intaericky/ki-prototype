@@ -1,5 +1,14 @@
 const PAGES = [
   {
+    group: "Refraction",
+    note: "Every tracked object as a glass ball. Earth is black: its surface shows only through the glass, and popping a ball leaves only black.",
+    links: [
+      { href: "/refraction", title: "Studio", text: "Glass, lines, 360 and sphere preview, with size, refraction, how many balls a ray passes through, revive time and speed." },
+      { href: "/refraction-tablet", title: "Tablet", text: "Minimal lines: turn, pinch to zoom, tap a circle to pop it (it becomes an x and returns after a while)." },
+      { href: "/refraction-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere. Same ?room= as the tablet shares pops and the turn." },
+    ],
+  },
+  {
     group: "Entangled",
     note: "Every tracked object in Earth orbit (payloads, rocket bodies, debris) in real time, each as its own colourful 3D mesh you can reshape and resize.",
     links: [
