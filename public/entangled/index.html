@@ -56,7 +56,7 @@
     <div class="row"><label>Cross size</label><input type="range" id="crossl" min="5" max="120" step="1"><output id="crosslO"></output></div>
     <div class="row"><label>Cross line</label><input type="range" id="crossw" min="1" max="10" step="0.5"><output id="crosswO"></output></div>
     <div class="row"><label>Orbit line</label><input type="range" id="pathw" min="0" max="12" step="0.5"><output id="pathwO"></output></div>
-    <div class="row"><label>Hit when</label><div class="seg" data-k="hit"><button data-v="alarm">Alarm distance</button><button data-v="box">Safety box</button><button data-v="true">True size</button></div></div>
+    <div class="row"><label>Hit when</label><div class="seg" data-k="hit"><button data-v="alarm">Within 1 km</button><button data-v="box">Safety box</button><button data-v="true">True size</button></div></div>
     <div class="sub" id="hitNote" style="margin:0 0 4px"></div>
     <div class="row"><label>Enlarge</label><input type="range" id="hitx" min="0" max="100" step="1"><output id="hitxO"></output></div>
     <div class="row"><label></label><div class="seg"><button class="btn" id="clearSats">Clear all launches</button></div></div>
@@ -156,7 +156,7 @@ const TEST = location.hash.includes('test');
 // ---------- settings (URL params override; studio remembers its own) ----------
 // defaults = Intae's preset of 2026-11-22 (360 from outside, altitude colours, spheres ×426k by RCS, 120×)
 const DEF = { view: '360', from: 'outside', earth: 'black', frame: 'fixed', range: 'leo', color: 'alt', shape: 'sphere', maxalt: 100, size: 74, rcs: '1', stretch: 0, spin: 40,
-  cross: '1', crossl: 36, crossw: 2, pathw: 3, hit: 'box', hitx: 0,
+  cross: '1', crossl: 36, crossw: 2, pathw: 3, hit: 'alarm', hitx: 0,
   grid: '0', gstyle: 'mesh', gridz: 'over', glat: 12, glon: 24, gridw: 2, gridc: 'ffffff', grida: 60,
   rough: 50, metal: 0, coat: 1, coatr: 0, irid: 0, iridt: 40, sheen: 0, glow: 0, flat: '0', detail: '2',
   env: 25, amb: 35, key: 60, keyaz: 35, keyel: 60, keyc: 'ffffff', rim: 0, rimc: 'ffffff',
@@ -592,7 +592,7 @@ function syncUI() {
   $('pause').classList.toggle('on', paused); $('pause').style.background = paused ? '#ffffffe0' : ''; $('pause').style.color = paused ? '#000' : '';
   for (const k of Object.keys(fmt)) { const i = $(k); if (i) { i.value = S[k]; $(k + 'O').textContent = fmt[k](); } }
   for (const k of ['keyc', 'rimc', 'bg', 'gridc']) $(k).value = '#' + S[k];
-  const hn = $('hitNote'); if (hn) hn.textContent = S.hit === 'alarm' ? `Hit = any object within ${(ORB.ALARM_HIT_KM * HITX()).toFixed(1)} km: the 1 km at which real operators dodge (Starlink's real rate), widened for the ~${Math.round(ORB.LETHAL_RATIO)}× more lethal debris too small to track (ESA). Time stays real.` : S.hit === 'box' ? `Hit = an object inside the ISS avoidance box (±0.75 km radial, ±25 km along and across)${HITX() > 1 ? ', ×' + HITX() : ''}.` : `Hit = touching at true radar size${HITX() > 1 ? ', ×' + HITX() : ''}.`;
+  const hn = $('hitNote'); if (hn) hn.textContent = S.hit === 'alarm' ? `Hit = any object within ${(ORB.ALARM_HIT_KM * HITX()).toLocaleString()} km, about the size of public tracking error (closer than this, nobody can say a pass is safe).` : S.hit === 'box' ? `Hit = an object inside the ISS avoidance box (±0.75 km radial, ±25 km along and across)${HITX() > 1 ? ', ×' + HITX() : ''}.` : `Hit = touching at true radar size${HITX() > 1 ? ', ×' + HITX() : ''}.`;
 }
 document.querySelectorAll('.seg[data-k]').forEach((seg) => seg.addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;

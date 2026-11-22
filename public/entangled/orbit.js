@@ -119,13 +119,9 @@ export const trueRadiusKm = (o) => Math.sqrt((Number.isFinite(o.rcs) && o.rcs > 
 export const SAT_RADIUS_KM = 0.001; // the audience's satellite: ~2 m across, a typical small satellite
 // the ISS debris-avoidance box (NASA): ±0.75 km radial, ±25 km along and across track; tested here as the ellipsoid inside it
 export const BOX = [0.75, 25, 25];
-// Calibrated alarm distance (the default hit rule):
-// - 1 km reproduces how often real Starlink satellites must dodge: 148,696 manoeuvres in Jun-Nov 2025 for ~10,000
-//   satellites (~one every 12 days, SpaceX FCC reports via KeepTrack); passes within 1 km of a 550 km orbit in this
-//   catalogue come about once per ~10 days. It is also about the accuracy of public catalogue positions.
-// - ×√(lethal / tracked): ESA (MASTER-8, 02/2026) estimates ~68,450 objects >10 cm and ~1.5 million of 1-10 cm, against
-//   ~47,360 tracked. Debris above 1 cm can end a mission but cannot be dodged, so each shown object stands in for ~33.
-export const ALARM_KM = 1, LETHAL_RATIO = (68450 + 1.5e6) / 47360, ALARM_HIT_KM = ALARM_KM * Math.sqrt(LETHAL_RATIO);
+// Default hit rule (Intae, 2026-11-22): any object within 1 km. About the size of public tracking error: closer than
+// this, nobody can say a pass is safe (what is usually meant by a near miss). A round convention, not an official rule.
+export const ALARM_HIT_KM = 1;
 
 // closest approach of a relative motion a→b (linear within one step); returns [min distance², fraction 0..1]
 export function sweepMin(ax, ay, az, bx, by, bz) {
