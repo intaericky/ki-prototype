@@ -63,7 +63,7 @@
     <div id="satList" class="sub" style="margin:4px 0 0;white-space:pre-wrap"></div>
   </details>
   <details class="sec" open><summary>View</summary>
-    <div class="row"><label>View</label><div class="seg" data-k="view"><button data-v="3d">3D</button><button data-v="360">360 frame</button></div></div>
+    <div class="row"><label>View</label><div class="seg" data-k="view"><button data-v="3d">3D</button><button data-v="360">360 frame</button><button data-v="ball">Sphere preview</button></div></div>
     <div class="row"><label>360 seen from</label><div class="seg" data-k="from"><button data-v="outside">Outside</button><button data-v="center">Center</button></div></div>
     <div class="row"><label>Earth</label><div class="seg" data-k="earth"><button data-v="black">Black</button><button data-v="image">Image</button><button data-v="off">Off</button></div></div>
     <div class="row"><label>Frame</label><div class="seg" data-k="frame"><button data-v="fixed">Earth-fixed</button><button data-v="inertial">Inertial</button></div></div>
@@ -411,6 +411,17 @@ composer.addPass(new RenderPass(scene, camera)); composer.addPass(bloom); compos
 const composer360 = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
 const bloom360 = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.5, 0.9);
 composer360.addPass(new ShaderPass(unwrapMat)); composer360.addPass(bloom360); composer360.addPass(new OutputPass());
+// sphere preview: the equirect frame mapped per pixel onto a ball (same mapping as the unwrap, so it is exact)
+const ball = { yaw: Math.PI / 2, pitch: 0.12, dist: 4.8 }; // starts facing the frame centre (the cross)
+const ballScene = new THREE.Scene(), ballCam = new THREE.PerspectiveCamera(32, 16 / 9, 0.05, 100);
+const ballMat = new THREE.ShaderMaterial({
+  uniforms: { tFrame: { value: null } },
+  vertexShader: `varying vec3 vN; void main(){ vN = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform sampler2D tFrame; varying vec3 vN;
+    void main(){ vec3 n = normalize(vN); float lo = atan(-n.z, n.x), la = asin(clamp(n.y, -1.0, 1.0));
+      gl_FragColor = vec4(texture2D(tFrame, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5)).rgb, 1.0); }`,
+});
+ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), ballMat));
 
 // ---------- catalogue ----------
 let objs = [];
@@ -632,23 +643,25 @@ canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clie
 canvas.addEventListener('pointermove', (e) => {
   if (!drag) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY };
-  if (S.view === '360') {
+  if (S.view === '360' || (S.view === 'ball' && e.shiftKey)) {
     // turn about the frame's own up axis (left/right) and its horizontal axis (up/down), so the sphere rolls freely
     rot360.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -dx / innerWidth * TAU));
     rot360.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), dy / innerHeight * Math.PI)).normalize();
     sendLook();
   }
+  else if (S.view === 'ball') { ball.yaw -= dx * 0.006; ball.pitch = Math.max(-1.4, Math.min(1.4, ball.pitch + dy * 0.006)); }
   else { look.yaw -= dx * 0.005; look.pitch = Math.max(-1.5, Math.min(1.5, look.pitch + dy * 0.005)); }
 });
 canvas.addEventListener('pointerup', () => drag = null);
-canvas.addEventListener('dblclick', () => { if (S.view === '360') { rot360.identity(); sendLook(); } }); // double-click: back to the upright view
-canvas.addEventListener('wheel', (e) => { look.dist = Math.max(0.2, Math.min(4, look.dist * Math.exp(e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
+canvas.addEventListener('dblclick', () => { if (S.view === '360') { rot360.identity(); sendLook(); } if (S.view === 'ball') { ball.yaw = Math.PI / 2; ball.pitch = 0.12; ball.dist = 4.8; } }); // double-click: back to the upright view
+canvas.addEventListener('wheel', (e) => { if (S.view === 'ball') { ball.dist = Math.max(1.4, Math.min(12, ball.dist * Math.exp(e.deltaY * 0.001))); e.preventDefault(); return; } look.dist = Math.max(0.2, Math.min(4, look.dist * Math.exp(e.deltaY * 0.001))); e.preventDefault(); }, { passive: false });
 
 // ---------- sizing ----------
 function resize() {
   const s = S.scale / 100;
-  const [w, h] = S.view === '360' ? [1920, 1080] : [innerWidth, innerHeight]; // 360: the LED sphere's equirect frame, stretched to the window
-  renderer.setSize(w, h, false);
+  const [w, h] = S.view === '360' || S.view === 'ball' ? [1920, 1080] : [innerWidth, innerHeight]; // 360: the LED sphere's equirect frame, stretched to the window
+  if (S.view === 'ball') { renderer.setSize(innerWidth, innerHeight, false); ballCam.aspect = innerWidth / innerHeight; ballCam.updateProjectionMatrix(); }
+  else renderer.setSize(w, h, false);
   canvas.style.width = '100vw'; canvas.style.height = '100vh';
   W = Math.max(64, Math.round(w * s)); H = Math.max(36, Math.round(h * s));
   composer.setSize(W, H); composer360.setSize(W, H);
@@ -676,7 +689,7 @@ function render(time) {
   if (W === 0) resize();
   if (objs.length && Math.abs(simT - T0) > 432e5) { T0 = simT; buildInstances(); } // re-anchor every half sim-day for float precision
   const g = gmst(simT), fixed = S.frame === 'fixed', rot = fixed ? -g : 0;
-  const mode360 = S.view === '360', size = SIZE_KM();
+  const mode360 = S.view === '360' || S.view === 'ball', size = SIZE_KM();
 
   ENT_U.uDt.value = (simT - T0) / 1000; ENT_U.uRot.value = rot; ENT_U.uShown.value.set(...SHOWN);
   ENT_U.uSize.value = size; ENT_U.uMaxAlt.value = mode360 && S.range === 'leo' ? Math.min(2000, MAXALT()) : MAXALT();
@@ -693,7 +706,7 @@ function render(time) {
   renderer.toneMapping = { standard: THREE.LinearToneMapping, aces: THREE.ACESFilmicToneMapping, agx: THREE.AgXToneMapping, reinhard: THREE.ReinhardToneMapping, cineon: THREE.CineonToneMapping }[S.tone] ?? THREE.LinearToneMapping;
   for (const b of [bloom, bloom360]) { b.radius = S.bloomr / 100; b.threshold = 0.2 + 1.6 * S.bloomt / 100; }
   const bg = new THREE.Color('#' + S.bg); bg.r **= 2.2; bg.g **= 2.2; bg.b **= 2.2;
-  if (!S.view || S.view !== '360') look.yaw += (S.orbit / 100) * 0.004;
+  if (!mode360) look.yaw += (S.orbit / 100) * 0.004;
   if (camera.fov !== 10 + S.fov * 0.8) { camera.fov = 10 + S.fov * 0.8; camera.updateProjectionMatrix(); }
   renderer.toneMappingExposure = Math.pow(2, (S.expo - 50) / 25);
 
@@ -721,7 +734,16 @@ function render(time) {
     earth.visible = true;
     rot360M.setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rot360)); unwrapMat.uniforms.uBg.value.copy(bg); unwrapMat.uniforms.uMode.value = S.earth === 'image' ? 1 : 0;
     bloom360.strength = 1.6 * S.bloom / 100; bloom360.enabled = S.bloom > 0;
+    composer360.renderToScreen = S.view !== 'ball';
     composer360.render();
+    if (S.view === 'ball') {
+      // preview: the finished frame wrapped back onto a ball, as the LED sphere shows it from outside
+      ballMat.uniforms.tFrame.value = composer360.readBuffer.texture;
+      ballCam.position.set(Math.cos(ball.pitch) * Math.sin(ball.yaw), Math.sin(ball.pitch), Math.cos(ball.pitch) * Math.cos(ball.yaw)).multiplyScalar(ball.dist);
+      ballCam.lookAt(0, 0, 0);
+      renderer.setRenderTarget(null); renderer.setClearColor(0x050505, 1); renderer.clear();
+      renderer.render(ballScene, ballCam);
+    }
   } else {
     earth.visible = S.earth !== 'off' || (S.grid === '1' && S.gstyle === 'flat');
     const dist = (S.range === 'all' ? 150000 : 34000) * look.dist * Math.tan(20 * D2R) / Math.tan(camera.fov / 2 * D2R);
