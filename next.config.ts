@@ -21,6 +21,11 @@ const nextConfig: NextConfig = {
         source: `/${page}`,
         destination: "/entangled/index.html",
       })),
+      // Refraction: every tracked object as a glass ball; Earth is black and shows only through the glass
+      ...["refraction", "refraction-display", "refraction-tablet"].map((page) => ({
+        source: `/${page}`,
+        destination: "/refraction/index.html",
+      })),
       // the audience's launch tablet
       { source: "/entangled-tablet", destination: "/entangled-tablet/index.html" },
     ];
