@@ -518,7 +518,7 @@ function ingest(parts) {
   objs = ORB.parseCatalogue(parts);
   idx.clear(); objs.forEach((o, j) => idx.set(o.norad, j));
   counts.fill(0); for (const o of objs) counts[o.type]++;
-  T0 = simT; build(); loaded = true; panelSync();
+  T0 = simT; build(); if (!loaded) loadedAt = performance.now(); loaded = true; panelSync();
 }
 const good = {};
 async function load() {
@@ -712,9 +712,9 @@ panelBuild(); panelSync();
 // adaptive resolution: drop the render scale when frames run slow, raise it again when there is room
 const dbs = new THREE.Vector2();
 const PR_MAX = ROLE === 'display' ? 1 : Math.min(devicePixelRatio || 1, 2);
-let pr = Math.min(PR_MAX, 1), eqScale = 1, slowT = 0, fastT = 0;
+let pr = Math.min(PR_MAX, 1), eqScale = 1, slowT = 0, fastT = 0, loadedAt = 0;
 function adapt(dtMs) {
-  if (TEST || Q.has('fixed')) return;
+  if (TEST || Q.has('fixed') || !loaded || performance.now() - loadedAt < 2500) { slowT = fastT = 0; return; }
   if (dtMs > 22) { slowT += dtMs; fastT = 0; } else if (dtMs < 17.5) { fastT += dtMs; slowT = 0; } else { slowT = fastT = 0; }
   const v = S.view, eqMode = v === '360' || v === 'ball';
   if (slowT > 500) { slowT = 0; if (eqMode) eqScale = Math.max(0.5, eqScale - 0.125); else if (pr > 0.5) { pr = Math.max(0.5, pr - 0.15); resize(); } }
