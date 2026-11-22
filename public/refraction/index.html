@@ -56,7 +56,7 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: 'glass', size: 50, rcs: '1', ior: 50, disp: 0, rim: 25, gain: 100, lift: 100, bounces: 2, light: 'day', range: 'all', types: '1111', revive: 30, spd: 0 };
+const DEF = { view: 'glass', size: 50, rcs: '1', ior: 50, disp: 0, rim: 25, gain: 100, lift: 100, q360: 100, bounces: 2, light: 'day', range: 'all', types: '1111', revive: 30, spd: 0 };
 let S = { ...DEF };
 const KEY = 'refraction-v1';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -208,7 +208,7 @@ const glassVert = /* glsl */`${OBJ}
     vW = C + (s * position.x + u * position.y) * k;
     vC = C; vR = r; vId = gl_InstanceID;
     float rpx = r / (uPxK * d);
-    vLod = max(0.0, log2(1.5 * (length(C) - 6378.0) / 9.8 / max(rpx * 2.0, 1.0))); // ground the ball shows (≈1.5 × its height, 9.8 km per texel) over its size on screen
+    vLod = max(0.0, log2(1.5 * (length(C) - 6378.0) / 9.8 / max(rpx * 2.0, 1.0)) - 0.75); // ground the ball shows (≈1.5 × its height, 9.8 km per texel) over its size on screen
     gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.0);
   }`;
 const glassFrag = /* glsl */`${OPTICS}
@@ -279,7 +279,7 @@ const eqVert = /* glsl */`${OBJ}
     float hw = abs(la) + a >= 1.5707 ? 3.1415927 : asin(min(1.0, sin(a) / cos(la)));
     vec2 p = vec2(lo + position.x * hw, la + position.y * a);
     vC = C; vR = r; vId = gl_InstanceID;
-    vLod = max(0.0, log2(1.5 * (L - 6378.0) / 9.8 / max(2.0 * r / L * uRes.y / 3.1415927, 1.0)));
+    vLod = max(0.0, log2(1.5 * (L - 6378.0) / 9.8 / max(2.0 * r / L * uRes.y / 3.1415927, 1.0)) - 0.75);
     gl_Position = vec4(p.x / 3.1415927 + uShift * 2.0, p.y / 1.5707963, 0.0, 1.0);
   }`;
 const eqFrag = /* glsl */`${OPTICS}
@@ -619,6 +619,8 @@ const up = (e) => {
   ptrs.delete(e.pointerId); pinch0 = null;
   if (ptrs.size === 0 && gesture) { if (!gesture.multi && gesture.moved < 10 && performance.now() - gesture.t0 < 500) tap(e.clientX, e.clientY); gesture = null; }
 };
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', (e) => { if (e.target === canvas) e.preventDefault(); }, { passive: false });
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { zoom(Math.exp(e.deltaY * 0.0012)); e.preventDefault(); }, { passive: false });
 function turn(dx, dy) {
@@ -681,7 +683,7 @@ function lookFromCamera() {
 // ---------- panel (studio) ----------
 const TYPES = ['Payloads', 'Rocket bodies', 'Debris', 'Unknown'];
 const SL = [['size', 'Size', 0, 100, () => fmtX(SIZE_KM() / 0.00079)], ['ior', 'Refraction', 0, 100, () => IOR().toFixed(2)], ['disp', 'Dispersion', 0, 100, () => S.disp + ''],
-  ['rim', 'Edge', 0, 100, () => S.rim + ''], ['gain', 'Brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['bounces', 'Through', 0, 6, () => S.bounces ? '+' + S.bounces + ' balls' : '1 ball'], ['revive', 'Revive', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
+  ['rim', 'Edge', 0, 100, () => S.rim + ''], ['gain', 'Brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['bounces', 'Through', 0, 6, () => S.bounces ? '+' + S.bounces + ' balls' : '1 ball'], ['revive', 'Revive', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], 
   ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]], ['rcs', 'Size by', [['1', 'Radar size'], ['0', 'Same']]], ['range', 'Objects', [['all', 'All'], ['leo', 'Below 2,000 km']]]];
 function panelBuild() {
@@ -722,7 +724,7 @@ function adapt(dtMs) {
   if (TEST || Q.has('fixed') || !loaded || performance.now() - loadedAt < 2500) { slowT = fastT = 0; return; }
   if (dtMs > 22) { slowT += dtMs; fastT = 0; } else if (dtMs < 17.5) { fastT += dtMs; slowT = 0; } else { slowT = fastT = 0; }
   const v = S.view, eqMode = v === '360' || v === 'ball';
-  if (slowT > 500) { slowT = 0; if (eqMode) eqScale = Math.max(0.5, eqScale - 0.125); else if (pr > 0.5) { pr = Math.max(0.5, pr - 0.15); resize(); } }
+  if (slowT > 500) { slowT = 0; if (eqMode) { if (ROLE !== 'display' && dtMs > 30) eqScale = Math.max(0.5, eqScale - 0.125); } else if (pr > 0.5) { pr = Math.max(0.5, pr - 0.15); resize(); } }
   if (fastT > 3000) { fastT = 0; if (eqMode) eqScale = Math.min(ROLE === 'display' ? 1 : 1, eqScale + 0.125); else if (pr < PR_MAX) { pr = Math.min(PR_MAX, pr + 0.1); resize(); } }
 }
 function resize() {
@@ -770,7 +772,7 @@ function render() {
     renderer.setRenderTarget(null); renderer.render(scene, camera);
   } else {
     rot360M.setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rot360)); rot360T.copy(rot360M).transpose();
-    const ew = Math.round(1920 * eqScale), eh = Math.round(1080 * eqScale);
+    const qs = S.q360 / 100 * (ROLE === 'display' ? 1 : eqScale), ew = Math.round(1920 * qs), eh = Math.round(1080 * qs);
     if (eqRT.width !== ew) { eqRT.setSize(ew, eh); eqPreRT.setSize(ew, eh); }
     U.uRes.value.set(ew, eh);
     renderer.setRenderTarget(eqPreRT); renderer.setClearColor(0x000000, 1); renderer.clear(); renderer.render(eqPreScene, eqCam);
