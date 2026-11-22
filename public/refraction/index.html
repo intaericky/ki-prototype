@@ -424,7 +424,7 @@ const worker = new Worker(URL.createObjectURL(new Blob([`
     }
     const cell = 2 * (rmax + pad), inv = 1 / cell;
     cnt.fill(0);
-    const items = new Float32Array(d.cap), buckets = new Float32Array(HB * 2);
+    const items = d.items && d.items.length === d.cap ? d.items : new Float32Array(d.cap), buckets = d.buckets || new Float32Array(HB * 2);
     for (let pass = 0; pass < 2; pass++) {
       for (let j = 0; j < n; j++) {
         const k = j * 4, r0 = pos[k + 3]; if (r0 <= 0) continue;
@@ -440,20 +440,24 @@ const worker = new Worker(URL.createObjectURL(new Blob([`
     sh.sort((a, b) => a - b);
     postMessage({ items, buckets, cell, shell: sh.length ? sh[Math.floor(sh.length * 0.93)] + pad : ${RE} + 2000, id: d.id }, [items.buffer, buckets.buffer]);
   };`], { type: 'text/javascript' })), { type: 'module' });
-let gridBusy = false, gridSent = 0, gridRtt = 30, gridId = 0;
+let gridBusy = false, gridSent = 0, gridRtt = 30, gridId = 0, spare = null;
 worker.onmessage = (ev) => {
   const d = ev.data; gridBusy = false; gridRtt = gridRtt * 0.8 + (performance.now() - gridSent) * 0.2;
-  if (d.id !== gridId) return; // a catalogue change since the request
-  itemTex?.dispose(); itemTex = dataTex(d.items, NITEM_W, 1, THREE.RedFormat);
-  bucketTex.dispose(); bucketTex = new THREE.DataTexture(d.buckets, HB_W, HB / HB_W, THREE.RGFormat, THREE.FloatType); bucketTex.needsUpdate = true;
-  U.tItem.value = itemTex; U.tBucket.value = bucketTex; U.uCell.value = d.cell; U.uShell.value = d.shell;
+  if (d.id !== gridId) { spare = null; return; } // a catalogue change since the request
+  // copy into the textures' own arrays (no new GPU textures), then hand the buffers back to the worker (no garbage)
+  if (!itemTex || itemTex.image.data.length !== d.items.length) { itemTex?.dispose(); itemTex = dataTex(new Float32Array(d.items.length), NITEM_W, 1, THREE.RedFormat); U.tItem.value = itemTex; }
+  itemTex.image.data.set(d.items); itemTex.needsUpdate = true;
+  bucketTex.image.data.set(d.buckets); bucketTex.needsUpdate = true;
+  U.tBucket.value = bucketTex; U.uCell.value = d.cell; U.uShell.value = d.shell;
+  spare = { items: d.items, buckets: d.buckets };
 };
 function requestGrid() {
-  if (gridBusy || !objs.length || S.view === 'lines') return;
+  if (gridBusy || !objs.length || S.view === 'lines' || performance.now() - gridSent < 30) return;
   gridBusy = true; gridSent = performance.now();
   // balls move while the worker works: grow each ball's grid footprint by how far anything can travel in that time
   const pad = 0.5 + 11 * SPEED() * (gridRtt * 2) / 1000;
-  worker.postMessage({ cmd: 'grid', id: gridId, dt: (simT - T0) / 1000, rot: -ORB.gmst(simT), size: SIZE_KM(), maxAlt: S.range === 'leo' ? 2000 : 1e9, types: S.types, now: wallS(), revive: REVIVE(), pad, cap: Math.ceil(objs.length * 8 / NITEM_W) * NITEM_W });
+  worker.postMessage({ cmd: 'grid', id: gridId, dt: (simT - T0) / 1000, rot: -ORB.gmst(simT), size: SIZE_KM(), maxAlt: S.range === 'leo' ? 2000 : 1e9, types: S.types, now: wallS(), revive: REVIVE(), pad, cap: Math.ceil(objs.length * 8 / NITEM_W) * NITEM_W, items: spare?.items, buckets: spare?.buckets }, spare ? [spare.items.buffer, spare.buckets.buffer] : []);
+  spare = null;
 }
 function sendPops() {
   if (!objs.length) return;
@@ -714,6 +718,7 @@ const dbs = new THREE.Vector2();
 const PR_MAX = ROLE === 'display' ? 1 : Math.min(devicePixelRatio || 1, 2);
 let pr = Math.min(PR_MAX, 1), eqScale = 1, slowT = 0, fastT = 0, loadedAt = 0;
 function adapt(dtMs) {
+  if (dtMs > 250) return; // a hiccup (tab switch, load), not the render
   if (TEST || Q.has('fixed') || !loaded || performance.now() - loadedAt < 2500) { slowT = fastT = 0; return; }
   if (dtMs > 22) { slowT += dtMs; fastT = 0; } else if (dtMs < 17.5) { fastT += dtMs; slowT = 0; } else { slowT = fastT = 0; }
   const v = S.view, eqMode = v === '360' || v === 'ball';
