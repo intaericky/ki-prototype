@@ -657,7 +657,7 @@ function sendPop(n, t) {
 function sendSnapshot() { const now = wallS(), list = []; for (const [n, p] of popped) if (p.t > 0 && now - p.t < REVIVE() + 2) list.push([n, p.t, p.ev]); publish('/pops', { list, by: ME }, true); }
 function sendLook(force) {
   if (ROLE === 'display') return;
-  const n = performance.now(); if (!force && n - lookT < 60) return; lookT = n;
+  const n = performance.now(); if (!force && n - lookT < 50) return; lookT = n;
   publish('/look', { q: rot360.toArray(), by: ME }, true);
 }
 function sendClock() { clock = { wall0: Date.now(), sim0: simT, speed: SPEED(), by: ME }; publish('/clock', clock, true); }
@@ -682,8 +682,12 @@ function lookFromCamera() {
   const v = camera.position.clone().normalize(), up = camera.up.clone().applyQuaternion(camera.quaternion).normalize(), z = new THREE.Vector3().crossVectors(v, up);
   const m = new THREE.Matrix4().makeBasis(v, up, z);
   const q = new THREE.Quaternion().setFromRotationMatrix(m);
-  if (q.angleTo(rot360) > 1e-4) { rot360.copy(q); sendLook(false); }
+  // publish only when THIS page's view moved (a page left open elsewhere must not keep overriding the tablet)
+  if (!camQ) { camQ = q.clone(); return; } // opening a page doesn't move the sphere
+  if (q.angleTo(camQ) > 1e-4) { camQ = (camQ || new THREE.Quaternion()).copy(q); rot360.copy(q); lookDirty = true; }
+  if (lookDirty && performance.now() - lookT >= 50) { lookDirty = false; sendLook(true); } // throttled, and the final position always goes out
 }
+let camQ = null, lookDirty = false;
 
 // ---------- panel (studio) ----------
 const TYPES = ['Payloads', 'Rocket bodies', 'Debris', 'Unknown'];
