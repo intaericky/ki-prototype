@@ -671,7 +671,7 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
     if (!d || d.by === ME) return;
     const k = t.slice(TOPIC.length);
     if (k === '/pop' && Number.isFinite(d.n) && Number.isFinite(d.t)) setPop(d.n, d.t, d.ev || Date.now());
-    else if (k === '/pops' && Array.isArray(d.list)) for (const e of d.list) if (Array.isArray(e) && e.every(Number.isFinite)) setPop(e[0], e[1], e[2]);
+    else if (k === '/pops' && Array.isArray(d.list)) { for (const e of d.list) { if (Array.isArray(e) && e.every(Number.isFinite)) setPop(e[0], e[1], e[2]); } } // braces: a dangling else here once swallowed every /look and /clock
     else if (k === '/look' && Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size) rot360.fromArray(d.q).normalize();
     else if (k === '/clock' && [d.wall0, d.sim0, d.speed].every(Number.isFinite)) { clock = d; S.spd = Math.log10(Math.max(1, d.speed)) * 25; panelSync(); }
   });
@@ -808,6 +808,7 @@ function info() {
 }
 
 if (TEST) window.__ref = { grid: () => ({ cell: U.uCell.value, shell: U.uShell.value, rtt: gridRtt, items: U.tItem.value?.image.width * U.tItem.value?.image.height }), ingest, render, tap, S, view, rot360, setSim: (t) => { simT = t; }, pick, objs: () => objs, setView: (k) => { S.view = k; resize(); } };
+window.__refr = { rot360, S, ptrs: () => ptrs.size, relay: () => relayOk };
 load();
 requestAnimationFrame(frame);
 </script>
