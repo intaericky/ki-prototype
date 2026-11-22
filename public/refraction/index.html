@@ -56,7 +56,7 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: 'glass', size: 50, rcs: '1', ior: 50, disp: 0, rim: 25, gain: 100, bounces: 2, light: 'sun', range: 'all', types: '1111', revive: 30, spd: 0 };
+const DEF = { view: 'glass', size: 50, rcs: '1', ior: 50, disp: 0, rim: 25, gain: 100, lift: 100, bounces: 2, light: 'day', range: 'all', types: '1111', revive: 30, spd: 0 };
 let S = { ...DEF };
 const KEY = 'refraction-v1';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -95,7 +95,7 @@ const NOBJ_W = 1024, NITEM_W = 4096, HB = 65536, HB_W = 256; // texture widths, 
 const U = {
   tObj: { value: null }, tItem: { value: null }, tBucket: { value: null }, uCell: { value: 250 }, uShell: { value: 9000 }, uBounces: { value: 3 },
   tDepth: { value: null }, tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 1 },
-  uIor: { value: 1.5 }, uDisp: { value: 0 }, uRim: { value: 0.25 }, uGain: { value: 1 }, uPxK: { value: 0.001 },
+  uIor: { value: 1.5 }, uDisp: { value: 0 }, uRim: { value: 0.25 }, uGain: { value: 1 }, uLift: { value: 1 }, uPxK: { value: 0.001 },
   uViewProj: { value: new THREE.Matrix4() }, uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) },
 };
 const OBJ = /* glsl */`
@@ -104,7 +104,7 @@ const OBJ = /* glsl */`
 
 const OPTICS = /* glsl */`${OBJ}
   uniform highp sampler2D tItem, tBucket; uniform float uCell, uShell; uniform int uBounces;
-  uniform sampler2D tDay, tNight; uniform highp sampler2D tDepth; uniform vec3 uSun; uniform float uLight, uIor, uDisp, uRim, uGain;
+  uniform sampler2D tDay, tNight; uniform highp sampler2D tDepth; uniform vec3 uSun; uniform float uLight, uIor, uDisp, uRim, uGain, uLift;
   const float RE = 6378.137;
   vec3 surface(vec3 n, float lod) {
     vec3 e = vec3(n.x, -n.z, n.y);
@@ -192,7 +192,7 @@ const OPTICS = /* glsl */`${OBJ}
     vec3 rr = reflect(rd, N), Pr = P + N * 0.01;
     float tE = earthT(Pr, rr);
     vec3 refl = tE < 1e8 ? surface(normalize(Pr + rr * tE), lod) : vec3(0.0);
-    return uGain * ((1.0 - F) * refr + F * refl) + uRim * pow(1.0 - ci, 3.0);
+    return pow(clamp(uGain * ((1.0 - F) * refr + F * refl), 0.0, 1.0), vec3(1.0 / uLift)) + uRim * pow(1.0 - ci, 3.0);
   }`;
 
 // --- glass balls seen by a perspective camera: one camera-facing quad per object, the ball itself is ray-traced ---
@@ -359,20 +359,125 @@ function weight(o) {
   const r = Number.isFinite(o.rcs) && o.rcs > 0 ? o.rcs : ORB.RCS_DEFAULT[o.type];
   return Math.min(2.5, Math.max(0.3, Math.sqrt(r) / 1.4));
 }
-// per-frame data the shaders read: objects (xyzr), grid items (object index per cell) and hash buckets (start, count)
-let objArr = null, objTex = null, itemArr = null, itemTex = null;
-const bucketArr = new Float32Array(HB * 2), bucketTex = new THREE.DataTexture(bucketArr, HB_W, HB / HB_W, THREE.RGFormat, THREE.FloatType);
-const bCount = new Int32Array(HB), bFill = new Int32Array(HB);
+// ---------- per-frame data the shaders read ----------
+// Positions: a GPU pass moves every object on its orbit (one pixel per object) into a float texture (xyz, radius;
+// radius < 0 popped, 0 hidden). Grid: a background worker moves the same objects on the CPU and bins them into the
+// spatial hash grid (object index per cell + bucket start/count), so the page's main thread does almost nothing.
+const elW = NOBJ_W;
+let elTex = [], stArr = null, stTex = null, itemTex = null, posRT = null, nRows = 1;
+let bucketTex = new THREE.DataTexture(new Float32Array(HB * 2), HB_W, HB / HB_W, THREE.RGFormat, THREE.FloatType); bucketTex.needsUpdate = true;
 const dataTex = (arr, w, ch, fmt) => { const t = new THREE.DataTexture(arr, w, arr.length / w / ch, fmt, THREE.FloatType); t.needsUpdate = true; return t; };
 let weights = null;
+const posMat = new THREE.ShaderMaterial({
+  uniforms: { tE0: { value: null }, tE1: { value: null }, tE2: { value: null }, tSt: { value: null }, uDt: { value: 0 }, uRot: { value: 0 }, uSize: { value: 50 }, uMaxAlt: { value: 1e9 }, uNow: { value: 0 }, uRevive: { value: 30 }, uN: { value: 0 }, uTypes: { value: new THREE.Vector4(1, 1, 1, 1) } },
+  vertexShader: `void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: /* glsl */`
+  uniform highp sampler2D tE0, tE1, tE2, tSt; uniform float uDt, uRot, uSize, uMaxAlt, uNow, uRevive; uniform int uN; uniform vec4 uTypes;
+  void main() {
+    ivec2 px = ivec2(gl_FragCoord.xy); int id = px.y * ${elW} + px.x;
+    if (id >= uN) { gl_FragColor = vec4(0.0); return; }
+    vec4 e0 = texelFetch(tE0, px, 0), e1 = texelFetch(tE1, px, 0), e2 = texelFetch(tE2, px, 0), st = texelFetch(tSt, px, 0);
+    // e0: a, e, i, type · e1: raan, argp, M at T0, ndot/2 · e2: raan rate, argp rate, M rate, size weight · st: popped at (wall s)
+    float e = e0.y;
+    float M = mod(e1.z + e2.z * uDt + e1.w * uDt * uDt, 6.2831853);
+    float O = e1.x + e2.x * uDt, w = e1.y + e2.y * uDt;
+    float E = M + e * sin(M);
+    for (int k = 0; k < 4; k++) E -= (E - e * sin(E) - M) / (1.0 - e * cos(E));
+    float x = e0.x * (cos(E) - e), y = e0.x * sqrt(max(0.0, 1.0 - e * e)) * sin(E);
+    float cO = cos(O), sO = sin(O), ci = cos(e0.z), si = sin(e0.z), cw = cos(w), sw = sin(w);
+    vec3 p = vec3((cO*cw - sO*sw*ci) * x + (-cO*sw - sO*cw*ci) * y, (sO*cw + cO*sw*ci) * x + (-sO*sw + cO*cw*ci) * y, (sw*si) * x + (cw*si) * y);
+    float cr = cos(uRot), sr = sin(uRot);
+    p.xy = vec2(cr * p.x - sr * p.y, sr * p.x + cr * p.y);
+    float r = uSize * e2.w;
+    int t = int(e0.w + 0.5);
+    float vis = t == 0 ? uTypes.x : t == 1 ? uTypes.y : t == 2 ? uTypes.z : uTypes.w;
+    if (length(p) - 6378.137 > uMaxAlt || vis < 0.5) r = 0.0;
+    else if (st.x > 0.0) {
+      float age = uNow - st.x - uRevive;
+      if (age <= 0.0) r = -r; else if (age < 0.8) { float k = age / 0.8; r *= max(0.01, k * k * (3.0 - 2.0 * k)); }
+    }
+    gl_FragColor = vec4(p.x, p.z, -p.y, r); // scene: y up
+  }`, depthTest: false, depthWrite: false });
+const posScene = new THREE.Scene(), posQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), posMat); posQuad.frustumCulled = false; posScene.add(posQuad);
+
+// the grid worker (same orbit model as orbit.js)
+const worker = new Worker(URL.createObjectURL(new Blob([`
+  import * as ORB from '${location.origin}/entangled/orbit.js';
+  const HB = ${HB}; let q = null, w = null, ty = null, pop = null, n = 0;
+  const cnt = new Int32Array(HB), fill = new Int32Array(HB), tmp = [0, 0, 0];
+  const hash = (x, y, z) => ((Math.imul(x + 4096, 73856093) ^ Math.imul(y + 4096, 19349663) ^ Math.imul(z + 4096, 83492791)) >>> 0) & (HB - 1);
+  onmessage = (ev) => {
+    const d = ev.data;
+    if (d.cmd === 'cat') { q = d.q; w = d.w; ty = d.ty; n = d.n; return; }
+    if (d.cmd === 'pop') { pop = d.pop; return; }
+    if (d.cmd !== 'grid' || !q) return;
+    const { dt, rot, size, maxAlt, types, now, revive, pad } = d, cr = Math.cos(rot), sr = Math.sin(rot);
+    const pos = new Float32Array(n * 4); let rmax = 1; const sh = [];
+    for (let j = 0; j < n; j++) {
+      const b = j * 10, k = j * 4;
+      ORB.posEci({ a: q[b], e: q[b + 1], i: q[b + 2], O: q[b + 3], w: q[b + 4], M: q[b + 5], nd: q[b + 6], dO: q[b + 7], dw: q[b + 8], dM: q[b + 9] }, dt, tmp);
+      const x = cr * tmp[0] - sr * tmp[1], y = sr * tmp[0] + cr * tmp[1], z = tmp[2], L = Math.hypot(x, y, z);
+      let r = size * w[j];
+      if (L - ${RE} > maxAlt || types[ty[j]] === '0' || (pop && pop[j] > 0 && now - pop[j] < revive)) r = 0;
+      pos[k] = x; pos[k + 1] = z; pos[k + 2] = -y; pos[k + 3] = r;
+      if (r > 0) { if (r > rmax) rmax = r; if ((j & 7) === 0) sh.push(L + r); }
+    }
+    const cell = 2 * (rmax + pad), inv = 1 / cell;
+    cnt.fill(0);
+    const items = new Float32Array(d.cap), buckets = new Float32Array(HB * 2);
+    for (let pass = 0; pass < 2; pass++) {
+      for (let j = 0; j < n; j++) {
+        const k = j * 4, r0 = pos[k + 3]; if (r0 <= 0) continue;
+        const r = r0 + pad, x = pos[k], y = pos[k + 1], z = pos[k + 2];
+        const x0 = Math.floor((x - r) * inv), x1 = Math.floor((x + r) * inv), y0 = Math.floor((y - r) * inv), y1 = Math.floor((y + r) * inv), z0 = Math.floor((z - r) * inv), z1 = Math.floor((z + r) * inv);
+        for (let a = x0; a <= x1; a++) for (let b = y0; b <= y1; b++) for (let c = z0; c <= z1; c++) {
+          const h = hash(a, b, c);
+          if (pass === 0) cnt[h]++; else items[fill[h]++] = j;
+        }
+      }
+      if (pass === 0) { let s = 0; for (let h = 0; h < HB; h++) { buckets[h * 2] = s; buckets[h * 2 + 1] = cnt[h]; fill[h] = s; s += cnt[h]; } }
+    }
+    sh.sort((a, b) => a - b);
+    postMessage({ items, buckets, cell, shell: sh.length ? sh[Math.floor(sh.length * 0.93)] + pad : ${RE} + 2000, id: d.id }, [items.buffer, buckets.buffer]);
+  };`], { type: 'text/javascript' })), { type: 'module' });
+let gridBusy = false, gridSent = 0, gridRtt = 30, gridId = 0;
+worker.onmessage = (ev) => {
+  const d = ev.data; gridBusy = false; gridRtt = gridRtt * 0.8 + (performance.now() - gridSent) * 0.2;
+  if (d.id !== gridId) return; // a catalogue change since the request
+  itemTex?.dispose(); itemTex = dataTex(d.items, NITEM_W, 1, THREE.RedFormat);
+  bucketTex.dispose(); bucketTex = new THREE.DataTexture(d.buckets, HB_W, HB / HB_W, THREE.RGFormat, THREE.FloatType); bucketTex.needsUpdate = true;
+  U.tItem.value = itemTex; U.tBucket.value = bucketTex; U.uCell.value = d.cell; U.uShell.value = d.shell;
+};
+function requestGrid() {
+  if (gridBusy || !objs.length || S.view === 'lines') return;
+  gridBusy = true; gridSent = performance.now();
+  // balls move while the worker works: grow each ball's grid footprint by how far anything can travel in that time
+  const pad = 0.5 + 11 * SPEED() * (gridRtt * 2) / 1000;
+  worker.postMessage({ cmd: 'grid', id: gridId, dt: (simT - T0) / 1000, rot: -ORB.gmst(simT), size: SIZE_KM(), maxAlt: S.range === 'leo' ? 2000 : 1e9, types: S.types, now: wallS(), revive: REVIVE(), pad, cap: Math.ceil(objs.length * 8 / NITEM_W) * NITEM_W });
+}
+function sendPops() {
+  if (!objs.length) return;
+  const a = new Float32Array(objs.length); objs.forEach((o, j) => { a[j] = popped.get(o.norad)?.t || 0; });
+  stArr.fill(0); a.forEach((t, j) => { stArr[j * 4] = t; }); stTex.needsUpdate = true;
+  worker.postMessage({ cmd: 'pop', pop: a });
+}
 function build() {
-  const n = objs.length, rows = Math.ceil(n / NOBJ_W);
+  const n = objs.length; nRows = Math.max(1, Math.ceil(n / elW));
   catQ = objs.map((o) => ORB.prep(o, T0));
   weights = Float32Array.from(objs, weight);
-  objTex?.dispose(); objArr = new Float32Array(rows * NOBJ_W * 4); objTex = dataTex(objArr, NOBJ_W, 4, THREE.RGBAFormat);
-  const irows = Math.ceil(n * 8 / NITEM_W);
-  itemTex?.dispose(); itemArr = new Float32Array(irows * NITEM_W); itemTex = dataTex(itemArr, NITEM_W, 1, THREE.RedFormat);
-  U.tObj.value = objTex; U.tItem.value = itemTex; U.tBucket.value = bucketTex;
+  const e0 = new Float32Array(nRows * elW * 4), e1 = new Float32Array(nRows * elW * 4), e2 = new Float32Array(nRows * elW * 4), qq = new Float64Array(n * 10), ty = new Uint8Array(n);
+  catQ.forEach((q, j) => {
+    e0.set([q.a, q.e, q.i, objs[j].type], j * 4); e1.set([q.O, q.w, q.M, q.nd], j * 4); e2.set([q.dO, q.dw, q.dM, weights[j]], j * 4);
+    qq.set([q.a, q.e, q.i, q.O, q.w, q.M, q.nd, q.dO, q.dw, q.dM], j * 10); ty[j] = objs[j].type;
+  });
+  elTex.forEach((t) => t.dispose()); elTex = [e0, e1, e2].map((a) => dataTex(a, elW, 4, THREE.RGBAFormat));
+  stTex?.dispose(); stArr = new Float32Array(nRows * elW * 4); stTex = dataTex(stArr, elW, 4, THREE.RGBAFormat);
+  posMat.uniforms.tE0.value = elTex[0]; posMat.uniforms.tE1.value = elTex[1]; posMat.uniforms.tE2.value = elTex[2]; posMat.uniforms.tSt.value = stTex; posMat.uniforms.uN.value = n;
+  posRT?.dispose(); posRT = new THREE.WebGLRenderTarget(elW, nRows, { type: THREE.FloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, generateMipmaps: false });
+  U.tObj.value = posRT.texture;
+  gridId++; gridBusy = false;
+  worker.postMessage({ cmd: 'cat', q: qq, w: Float32Array.from(weights), ty, n });
+  sendPops();
   if (!geo) {
     geo = new THREE.InstancedBufferGeometry();
     geo.setIndex(quad.index); geo.setAttribute('position', quad.attributes.position);
@@ -382,52 +487,31 @@ function build() {
     preScene.add(M(glassPre)); eqPreScene.add(...eqPres.map(M));
   }
   geo.instanceCount = n;
+  if (!itemTex) { itemTex = dataTex(new Float32Array(NITEM_W), NITEM_W, 1, THREE.RedFormat); U.tItem.value = itemTex; U.tBucket.value = bucketTex; }
 }
-function reweight() { if (weights) objs.forEach((o, j) => { weights[j] = weight(o); }); }
-const hashJ = (x, y, z) => ((Math.imul(x + 4096, 73856093) ^ Math.imul(y + 4096, 19349663) ^ Math.imul(z + 4096, 83492791)) >>> 0) & (HB - 1);
-const tmpE = [0, 0, 0], shellS = [];
-// move every object to now and rebuild the grid (all on the CPU: ~29k orbits, a few ms)
+function reweight() {
+  if (!weights) return;
+  objs.forEach((o, j) => { weights[j] = weight(o); });
+  const e2 = elTex[2].image.data; weights.forEach((w, j) => { e2[j * 4 + 3] = w; }); elTex[2].needsUpdate = true;
+  worker.postMessage({ cmd: 'cat', q: new Float64Array(catQ.flatMap((q) => [q.a, q.e, q.i, q.O, q.w, q.M, q.nd, q.dO, q.dw, q.dM])), w: Float32Array.from(weights), ty: Uint8Array.from(objs, (o) => o.type), n: objs.length });
+}
+// each frame: move everything on the GPU, ask the worker for a fresh grid when it is free
 function update() {
-  const n = objs.length, dt = (simT - T0) / 1000, rot = -ORB.gmst(simT), cr = Math.cos(rot), sr = Math.sin(rot);
-  const size = SIZE_KM(), maxAlt = S.range === 'leo' ? 2000 : 1e9, now = wallS(), rv = REVIVE();
-  let rmax = 1; shellS.length = 0;
-  for (let j = 0; j < n; j++) {
-    ORB.posEci(catQ[j], dt, tmpE);
-    const x = cr * tmpE[0] - sr * tmpE[1], y = sr * tmpE[0] + cr * tmpE[1], z = tmpE[2];
-    const L = Math.hypot(x, y, z), k = j * 4;
-    objArr[k] = x; objArr[k + 1] = z; objArr[k + 2] = -y;
-    let r = size * weights[j];
-    if (L - RE > maxAlt || S.types[objs[j].type] === '0') r = 0;
-    else {
-      const p = popped.get(objs[j].norad);
-      if (p && p.t > 0) { const age = now - p.t - rv; if (age <= 0) r = -r; else if (age < 0.8) { const e = age / 0.8; r *= Math.max(0.01, e * e * (3 - 2 * e)); } } // popped (<0), or growing back
-      if (r > 0) { if (r > rmax) rmax = r; if ((j & 7) === 0) shellS.push(L + r); }
-    }
-    objArr[k + 3] = r;
-  }
-  // spatial hash grid: cells twice the largest ball, each ball listed in every cell its box touches (at most 8)
-  const cell = 2 * rmax, inv = 1 / cell;
-  bCount.fill(0);
-  for (let pass = 0; pass < 2; pass++) {
-    for (let j = 0; j < n; j++) {
-      const k = j * 4, r = objArr[k + 3]; if (r <= 0) continue;
-      const x = objArr[k], y = objArr[k + 1], z = objArr[k + 2];
-      const x0 = Math.floor((x - r) * inv), x1 = Math.floor((x + r) * inv), y0 = Math.floor((y - r) * inv), y1 = Math.floor((y + r) * inv), z0 = Math.floor((z - r) * inv), z1 = Math.floor((z + r) * inv);
-      for (let a = x0; a <= x1; a++) for (let b = y0; b <= y1; b++) for (let c = z0; c <= z1; c++) {
-        const h = hashJ(a, b, c);
-        if (pass === 0) bCount[h]++; else itemArr[bFill[h]++] = j;
-      }
-    }
-    if (pass === 0) { let s = 0; for (let h = 0; h < HB; h++) { bucketArr[h * 2] = s; bucketArr[h * 2 + 1] = bCount[h]; bFill[h] = s; s += bCount[h]; } }
-  }
-  shellS.sort((a, b) => a - b); U.uCell.value = cell; U.uShell.value = shellS.length ? shellS[Math.floor(shellS.length * 0.98)] : RE + 2000;
-  objTex.needsUpdate = true; itemTex.needsUpdate = true; bucketTex.needsUpdate = true;
+  const pu = posMat.uniforms;
+  pu.uDt.value = (simT - T0) / 1000; pu.uRot.value = -ORB.gmst(simT); pu.uSize.value = SIZE_KM(); pu.uMaxAlt.value = S.range === 'leo' ? 2000 : 1e9;
+  pu.uNow.value = wallS(); pu.uRevive.value = REVIVE(); pu.uTypes.value.set(...[0, 1, 2, 3].map((i) => S.types[i] === '0' ? 0 : 1));
+  renderer.setRenderTarget(posRT); renderer.render(posScene, eqCam);
+  requestGrid();
 }
 const idx = new Map();
+let popsT = null;
 function setPop(norad, t, ev = Date.now()) {
   const cur = popped.get(norad);
   if (cur && cur.ev > ev) return false;
   popped.set(norad, { t, ev });
+  const j = idx.get(norad);
+  if (stArr && j != null) { stArr[j * 4] = t; stTex.needsUpdate = true; }
+  clearTimeout(popsT); popsT = setTimeout(sendPops, 50);
   return true;
 }
 function ingest(parts) {
@@ -593,7 +677,7 @@ function lookFromCamera() {
 // ---------- panel (studio) ----------
 const TYPES = ['Payloads', 'Rocket bodies', 'Debris', 'Unknown'];
 const SL = [['size', 'Size', 0, 100, () => fmtX(SIZE_KM() / 0.00079)], ['ior', 'Refraction', 0, 100, () => IOR().toFixed(2)], ['disp', 'Dispersion', 0, 100, () => S.disp + ''],
-  ['rim', 'Edge', 0, 100, () => S.rim + ''], ['gain', 'Brightness', 50, 300, () => (S.gain / 100).toFixed(1) + '×'], ['bounces', 'Through', 0, 6, () => S.bounces ? '+' + S.bounces + ' balls' : '1 ball'], ['revive', 'Revive', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
+  ['rim', 'Edge', 0, 100, () => S.rim + ''], ['gain', 'Brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['bounces', 'Through', 0, 6, () => S.bounces ? '+' + S.bounces + ' balls' : '1 ball'], ['revive', 'Revive', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], 
   ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]], ['rcs', 'Size by', [['1', 'Radar size'], ['0', 'Same']]], ['range', 'Objects', [['all', 'All'], ['leo', 'Below 2,000 km']]]];
 function panelBuild() {
@@ -601,11 +685,18 @@ function panelBuild() {
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
     + `<div class="row"><label>Show</label><div class="checks">${TYPES.map((t, i) => `<label><input type="checkbox" data-ty="${i}"> ${t} <span data-cnt="${i}"></span></label>`).join('')}</div></div>`
     + `<div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
+    <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
     <div class="note">Earth is black. Its surface appears only inside the glass: each ball bends the line of sight onto the Earth below it (Blue Marble by day, Black Marble at night). Pop a ball and only black remains. Objects: every tracked payload, rocket body and debris in CelesTrak (US Space Force catalogue), at their real positions now. Ball size is ×N of each object's real size from its radar cross-section (kept between 0.3× and 2.5× of a typical object so debris stays visible).</div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight(); save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
   $('panel').querySelectorAll('input[data-ty]').forEach((c) => c.onchange = () => { const a = S.types.split(''); a[+c.dataset.ty] = c.checked ? '1' : '0'; S.types = a.join(''); save(); });
   $('now').onclick = () => { simT = Date.now(); S.spd = 0; clock = null; sendClock(); save(); panelSync(); };
+  $('copy').onclick = () => {
+    const q = new URLSearchParams(); for (const k of Object.keys(DEF)) if (k !== 'view' && String(S[k]) !== String(DEF[k])) q.set(k, S[k]);
+    if (ROOM) q.set('room', ROOM);
+    const url = location.origin + '/refraction-display' + (q.toString() ? '?' + q : '');
+    navigator.clipboard?.writeText(url).then(() => { $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy display URL'; }, 1500); }, () => { $('copy').textContent = url; });
+  };
   $('reset').onclick = () => { S = { ...DEF }; reweight(); save(); panelSync(); resize(); };
 }
 function panelSync() {
@@ -650,7 +741,7 @@ function render() {
   if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; build(); }
   const rot = -ORB.gmst(simT);
   if (loaded) { const c0 = performance.now(); update(); cpuMs = cpuMs * 0.9 + (performance.now() - c0) * 0.1; }
-  U.uIor.value = IOR(); U.uDisp.value = S.disp / 1000; U.uRim.value = S.rim / 100; U.uGain.value = S.gain / 100; U.uBounces.value = S.bounces;
+  U.uIor.value = IOR(); U.uDisp.value = S.disp / 1000; U.uRim.value = S.rim / 100; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uBounces.value = S.bounces;
   U.uLight.value = S.light === 'sun' ? 1 : 0;
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
@@ -700,7 +791,7 @@ function info() {
     : `${objs.length.toLocaleString()} objects · ${np} popped\n${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps · cpu ${cpuMs.toFixed(1)} ms · res ${Math.round(100 * (S.view === '360' || S.view === 'ball' ? eqScale : pr))}%${ROOM ? ' · room ' + ROOM : ''}`;
 }
 
-if (TEST) window.__ref = { ingest, render, tap, S, view, rot360, setSim: (t) => { simT = t; }, pick, objs: () => objs, setView: (k) => { S.view = k; resize(); } };
+if (TEST) window.__ref = { grid: () => ({ cell: U.uCell.value, shell: U.uShell.value, rtt: gridRtt, items: U.tItem.value?.image.width * U.tItem.value?.image.height }), ingest, render, tap, S, view, rot360, setSim: (t) => { simT = t; }, pick, objs: () => objs, setView: (k) => { S.view = k; resize(); } };
 load();
 requestAnimationFrame(frame);
 </script>
