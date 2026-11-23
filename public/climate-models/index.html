@@ -76,7 +76,7 @@ const CMAPS = {
 const lutTex = new THREE.DataTexture(new Uint8Array(256 * 4), 256, 1, THREE.RGBAFormat);
 lutTex.magFilter = lutTex.minFilter = THREE.NearestFilter; // raw bytes: the colour on screen is the colour in the table
 function setLut() {
-  const f = S.show === 'change' ? CMAPS.diverging : CMAPS[S.cmap] || CMAPS.viridis, d = lutTex.image.data, ctx = $('lg').getContext('2d'), img = ctx.createImageData(256, 1);
+  const f = S.cmap === 'white' ? CMAPS.white : S.show === 'change' ? CMAPS.diverging : CMAPS[S.cmap] || CMAPS.viridis, d = lutTex.image.data, ctx = $('lg').getContext('2d'), img = ctx.createImageData(256, 1);
   for (let i = 0; i < 256; i++) { const c = f(i / 255).map((x) => Math.round(255 * Math.min(1, Math.max(0, x)))); d.set([...c, 255], i * 4); img.data.set([...c, 255], i * 4); }
   lutTex.needsUpdate = true; ctx.putImageData(img, 0, 0);
 }
