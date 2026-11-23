@@ -36,6 +36,11 @@ const nextConfig: NextConfig = {
         source: `/${page}`,
         destination: "/climate-models/index.html",
       })),
+      // Telescope: the LED sphere as a mechanical eye in Daejeon that looks up at every tracked object overhead
+      ...["telescope", "telescope-display", "telescope-tablet"].map((page) => ({
+        source: `/${page}`,
+        destination: "/telescope/index.html",
+      })),
       // the audience's launch tablet
       { source: "/entangled-tablet", destination: "/entangled-tablet/index.html" },
     ];
