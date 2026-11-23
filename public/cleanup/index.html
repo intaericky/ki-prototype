@@ -55,7 +55,7 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: '3d', size: 84, rcs: '1', shape: 'shard', jag: 45, irreg: 100, tumble: 20, color: '#c8c8c8', light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
+const DEF = { view: '3d', size: 84, rcs: '1', shape: 'shard', jag: 45, irreg: 100, tumble: 60, color: '#c8c8c8', light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
 let S = { ...DEF };
 const KEY = 'cleanup-v2';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -572,7 +572,7 @@ function lookFromCamera() {
 }
 
 // ---------- panel (studio) ----------
-const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['jag', 'Jagged', 0, 90, () => S.jag + ''], ['irreg', 'Flatten', 0, 100, () => S.irreg + ''], ['tumble', 'Tumble', 0, 100, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
+const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['jag', 'Jagged', 0, 90, () => S.jag + ''], ['irreg', 'Flatten', 0, 100, () => S.irreg + ''], ['tumble', 'Tumble', 0, 300, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
 const SHAPE_ROWS = [[['shard', 'Shard'], ['rock', 'Rock'], ['sphere', 'Sphere']], [['cube', 'Cube'], ['diamond', 'Diamond'], ['shardlet', 'Tetra']], [['plate', 'Plate'], ['rod', 'Rod'], ['spike', 'Spike']]];
 const SEG = [['view', 'View', [['3d', '3D'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], ...SHAPE_ROWS.map((o, i) => ['shape', i ? '' : 'Shape', o]), ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
   ['rcs', 'Size by', [['1', 'Radar (capped)'], ['exact', 'Radar (exact)'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]], ['flash', 'Return glow', [['1', 'On'], ['0', 'Off']]]];
