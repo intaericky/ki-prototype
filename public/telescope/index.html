@@ -80,7 +80,7 @@ const OBS = [(Nrad + SITE.h) * cφ * cλ, (Nrad + SITE.h) * cφ * sλ, (Nrad * (
 const EAST = [-sλ, cλ, 0], NORTH = [-sφ * cλ, -sφ * sλ, cφ], UP = [cφ * cλ, cφ * sλ, sφ];
 
 // ---------- settings ----------
-const DEF = { view: 'scope', look: 'eye', dot: 3, lens: 42, show: 'all', shadow: '0', ring: 1, spd: 0, labels: '1', c0: '3d8bff', c1: 'ffb21f', c2: 'ff2d6f', c3: 'b9c2cc', body: 22 };
+const DEF = { view: 'scope', look: 'eye', dot: 3, lens: 30, show: 'all', shadow: '0', ring: 1, spd: 0, labels: '1', c0: '3d8bff', c1: 'ffb21f', c2: 'ff2d6f', c3: 'b9c2cc', body: 22, front: 180 };
 let S = { ...DEF };
 const KEY = 'telescope-v1';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -218,10 +218,11 @@ function drawScope(ctx, w, h, style, round) {
   for (let i = fx.length - 1; i >= 0; i--) {
     const e = fx[i], age = now - e.t0;
     if (age > 1400) { fx.splice(i, 1); continue; }
-    if (age < 260) { // the beam: from both lower corners of the view to the cross
-      const a = 1 - age / 260;
-      ctx.strokeStyle = lines ? `rgba(255,255,255,${a})` : `rgba(255,60,40,${a})`; ctx.lineWidth = 3 * px;
-      for (const sx of [0.18, 0.82]) { ctx.beginPath(); ctx.moveTo(w * sx, h); ctx.lineTo(cx, cy); ctx.stroke(); }
+    if (age < 240) { // the shot: a ring closing on the cross, and a brief flash of the field
+      const k = age / 240;
+      ctx.strokeStyle = lines ? `rgba(255,255,255,${1 - k})` : `rgba(255,90,60,${1 - k})`; ctx.lineWidth = 2 * px;
+      ctx.beginPath(); ctx.arc(cx, cy, HIT_PX(R) + (R * 0.85 - HIT_PX(R)) * (1 - k) * (1 - k), 0, TAU); ctx.stroke();
+      if (age < 60) { ctx.fillStyle = lines ? 'rgba(255,255,255,0.18)' : 'rgba(255,120,90,0.12)'; ctx.fillRect(0, 0, w, h); }
     }
     if (e.hit >= 0 && age > 120) { // the hit: a ring bursting at the object, where it was when hit
       const k = (age - 120) / 1280, j = e.hit;
@@ -237,14 +238,31 @@ function drawScope(ctx, w, h, style, round) {
       ctx.fillText('miss', cx, cy + 34 * px);
     }
   }
-  // the cross, fixed at the centre
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * px;
-  const g = 7 * px, L = 26 * px;
+  // the reticle, fixed at the centre: fine cross with a gap, a scale every tenth of the field, the hit circle
+  const hr = HIT_PX(R), ink = lines ? '#fff' : '#ffffffcc', soft = lines ? '#ffffff80' : '#ffffff50';
+  ctx.strokeStyle = soft; ctx.lineWidth = px;
   ctx.beginPath();
-  ctx.moveTo(cx - L, cy); ctx.lineTo(cx - g, cy); ctx.moveTo(cx + g, cy); ctx.lineTo(cx + L, cy);
-  ctx.moveTo(cx, cy - L); ctx.lineTo(cx, cy - g); ctx.moveTo(cx, cy + g); ctx.lineTo(cx, cy + L);
+  ctx.moveTo(cx - R, cy); ctx.lineTo(cx - hr * 2.2, cy); ctx.moveTo(cx + hr * 2.2, cy); ctx.lineTo(cx + R, cy);
+  ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy - hr * 2.2); ctx.moveTo(cx, cy + hr * 2.2); ctx.lineTo(cx, cy + R);
+  for (let i = 1; i < 10; i++) { const o = R * i / 10, t = (i % 5 ? 3 : 7) * px; ctx.moveTo(cx - o, cy - t); ctx.lineTo(cx - o, cy + t); ctx.moveTo(cx + o, cy - t); ctx.lineTo(cx + o, cy + t); ctx.moveTo(cx - t, cy - o); ctx.lineTo(cx + t, cy - o); ctx.moveTo(cx - t, cy + o); ctx.lineTo(cx + t, cy + o); }
   ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx, cy, HIT_PX(R) , 0, TAU); ctx.lineWidth = px; ctx.strokeStyle = '#ffffff40'; ctx.stroke();
+  ctx.strokeStyle = ink; ctx.lineWidth = 1.2 * px;
+  ctx.beginPath(); ctx.arc(cx, cy, hr, 0, TAU); ctx.stroke();
+  ctx.beginPath(); for (const a of [0, 1, 2, 3]) { const t = a * Math.PI / 2; ctx.moveTo(cx + Math.cos(t) * hr, cy + Math.sin(t) * hr); ctx.lineTo(cx + Math.cos(t) * hr * 1.9, cy + Math.sin(t) * hr * 1.9); } ctx.stroke();
+  // lock: brackets on whatever a Zap would hit now
+  const tj = target();
+  if (tj >= 0) {
+    const z = dirE[tj] * B.f[0] + dirN[tj] * B.f[1] + dirU[tj] * B.f[2];
+    if (z > 0.01) {
+      const x = cx + (dirE[tj] * B.r[0] + dirN[tj] * B.r[1] + dirU[tj] * B.r[2]) / z * F, y = cy - (dirE[tj] * B.u[0] + dirN[tj] * B.u[1] + dirU[tj] * B.u[2]) / z * F;
+      const q = 9 * px, l = 4 * px;
+      ctx.strokeStyle = lines ? '#fff' : '#ff6a4a'; ctx.lineWidth = 1.5 * px; ctx.beginPath();
+      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { ctx.moveTo(x + sx * q, y + sy * (q - l)); ctx.lineTo(x + sx * q, y + sy * q); ctx.lineTo(x + sx * (q - l), y + sy * q); }
+      ctx.stroke();
+      ctx.fillStyle = ctx.strokeStyle; ctx.font = `${Math.round(10 * px)}px Pretendard, sans-serif`; ctx.textAlign = 'left';
+      ctx.fillText(['PAYLOAD', 'ROCKET BODY', 'DEBRIS', 'UNKNOWN'][objs[tj].type] + '  ' + objs[tj].norad, x + q + 4 * px, y - q + 8 * px);
+    }
+  }
   if (round) { ctx.restore(); ctx.save(); ctx.strokeStyle = lines ? '#fff' : '#ffffff60'; ctx.lineWidth = px; ctx.beginPath(); ctx.arc(cx, cy, R - px / 2, 0, TAU); ctx.stroke(); }
   // readout
   if (S.labels === '1') {
@@ -299,44 +317,90 @@ const skyX = skyC.getContext('2d');
 const lensT = new THREE.CanvasTexture(lensC), skyT = new THREE.CanvasTexture(skyC);
 for (const t of [lensT, skyT]) { t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; }
 // The eye, drawn on the sphere's own surface (p: unit vector, +z = the point facing the viewer, +y up, +x to the right):
-// a round lens at the front showing the telescope view, a bright rim, a dark body whose seams turn with the aim (so the
+// a lens that turns to point where the telescope looks (lon = front azimuth - azimuth, lat = elevation), showing the view,
 // ball visibly rolls), a fixed pedestal below and a fixed back cap.
 const EYE = /* glsl */`
-  uniform sampler2D tLens, tSky; uniform float uLens, uMode, uAz, uEl, uBody;
-  float seam(float a, float stepDeg, float w) { float s = mod(a / radians(stepDeg) + 0.5, 1.0) - 0.5; return 1.0 - smoothstep(0.0, w, abs(s)); }
+  uniform sampler2D tLens, tSky; uniform float uLens, uMode, uAz, uEl, uBody, uOff, uFov, uTime, uZap;
+  float hash(vec2 v) { return fract(sin(dot(v, vec2(127.1, 311.7))) * 43758.5453); }
+  float band(float x, float a, float b, float w) { return smoothstep(a - w, a + w, x) * (1.0 - smoothstep(b - w, b + w, x)); }
+  float line(float x, float c, float w) { return 1.0 - smoothstep(0.0, w, abs(x - c)); }
   vec3 eye(vec3 p) {
     if (uMode > 0.5) { // whole sky: the sky itself, aim at the front
       float lon = atan(p.x, p.z), lat = asin(clamp(p.y, -1.0, 1.0));
       return texture2D(tSky, vec2(lon / 6.2831853 + 0.5, lat / 3.1415927 + 0.5)).rgb;
     }
-    float rho = acos(clamp(p.z, -1.0, 1.0)), L = radians(uLens);
-    if (rho < L) { // lens: azimuthal equidistant, the lens's edge is the edge of the view
-      vec2 d = length(p.xy) > 1e-6 ? normalize(p.xy) : vec2(0.0);
-      vec2 uv = 0.5 + 0.5 * d * (rho / L);
-      return texture2D(tLens, uv).rgb;
-    }
-    float body = uBody / 100.0, shade = 0.55 + 0.45 * p.y;
-    if (rho < L + radians(2.5)) return vec3(0.75 * (0.7 + 0.3 * p.y)); // rim
-    if (rho < L + radians(7.0)) return vec3(0.04);                       // black gap around the rim
-    float lat = asin(clamp(p.y, -1.0, 1.0));
-    if (lat < radians(-56.0)) { // pedestal: fixed, does not turn
+    // light: a soft key from above front left, so the ball reads as a solid object
+    vec3 Ld = normalize(vec3(-0.45, 0.75, 0.5));
+    float diff = 0.28 + 0.72 * max(0.0, dot(p, Ld)), spec = pow(max(0.0, dot(p, normalize(Ld + vec3(0.0, 0.0, 1.0)))), 40.0);
+    float lat = asin(clamp(p.y, -1.0, 1.0)), body = uBody / 100.0;
+    // pedestal: fixed yoke below, vertical ribs and a collar
+    if (lat < radians(-58.0)) {
       float lon = atan(p.x, p.z);
-      float l = max(seam(lon, 45.0, 0.04), 1.0 - smoothstep(0.0, radians(0.5), abs(lat - radians(-60.0))));
-      return vec3(body * 0.55) * shade + l * 0.18;
+      float rib = line(fract(lon / radians(6.0)), 0.5, 0.08), collar = line(lat, radians(-61.0), radians(0.4)) + line(lat, radians(-63.0), radians(0.25));
+      return vec3(0.07 + 0.05 * rib) * (0.4 + 0.6 * diff) + collar * 0.35;
     }
-    if (p.z < -cos(radians(24.0))) { // back cap
-      float b = acos(clamp(-p.z, -1.0, 1.0));
-      return vec3(body * 0.8) * shade + (1.0 - smoothstep(0.0, radians(0.5), abs(b - radians(16.0)))) * 0.2;
+    if (lat < radians(-56.5)) return vec3(0.01); // the gap the ball turns in
+    // the ball turns so its lens points where the telescope looks: lon = front azimuth - azimuth, lat = elevation
+    float lo = radians(uOff - uAz), el = radians(uEl), cl = cos(lo), sl = sin(lo), ce = cos(el), se = sin(el);
+    vec3 q = vec3(cl * p.x - sl * p.z, p.y, sl * p.x + cl * p.z);
+    q = vec3(q.x, ce * q.y - se * q.z, se * q.y + ce * q.z); // ball frame: the lens at +z
+    float rho = acos(clamp(q.z, -1.0, 1.0)), L = radians(uLens), t = rho / L;
+    vec2 d = length(q.xy) > 1e-6 ? normalize(q.xy) : vec2(0.0, 1.0);
+    float ang = atan(d.y, d.x);
+    float zap = uZap; // 1 at the moment of a zap, fading
+    if (t < 0.70) { // the objective: the live view behind dark coated glass
+      vec3 v = texture2D(tLens, 0.5 + 0.5 * d * (t / 0.70)).rgb;
+      float vig = 1.0 - 0.55 * pow(t / 0.70, 3.0);
+      vec3 coat = mix(vec3(0.06, 0.03, 0.09), vec3(0.02, 0.07, 0.06), 0.5 + 0.5 * q.x) * smoothstep(0.45, 0.7, t);
+      float hl = pow(max(0.0, dot(normalize(vec3(q.x, q.y, 0.6)), normalize(vec3(-0.5, 0.6, 0.6)))), 60.0) * smoothstep(0.7, 0.3, t);
+      return v * vig + coat + hl * 0.35 + vec3(1.0, 0.25, 0.15) * zap * 0.25 * (1.0 - t / 0.7);
     }
-    // body seams in the ball's own frame: it rolls with the aim (turn by azimuth, then tilt by elevation)
-    float ca = cos(radians(uAz)), sa = sin(radians(uAz)), ce = cos(radians(uEl)), se = sin(radians(uEl));
-    vec3 q = vec3(ca * p.x + sa * p.z, p.y, -sa * p.x + ca * p.z);
-    q = vec3(q.x, ce * q.y - se * q.z, se * q.y + ce * q.z);
-    float blon = atan(q.x, q.z), blat = asin(clamp(q.y, -1.0, 1.0));
-    float l = max(seam(blon, 30.0, 0.035), seam(blat, 30.0, 0.05));
-    return vec3(body) * shade + l * 0.12;
+    if (t < 0.86) { // the iris: nine blades, turning as the field narrows
+      float k = (t - 0.70) / 0.16, n = 9.0, rot = log(uFov) * 0.6;
+      float s = fract((ang + rot + k * 0.9) / (6.2831853 / n));
+      float edge = line(s, 0.0, 0.03) + line(s, 1.0, 0.03);
+      return vec3(0.035 + 0.05 * s) * (0.6 + 0.4 * diff) + edge * 0.10 + line(k, 0.0, 0.08) * 0.08;
+    }
+    if (t < 1.0) { // the barrel: stepped black rings going down into the lens
+      float k = (t - 0.86) / 0.14, step = fract(k * 4.0);
+      return vec3(0.02 + 0.10 * step * step) * (0.5 + 0.5 * (0.5 - 0.5 * d.y)) + vec3(0.9, 0.15, 0.08) * zap * 0.6 * step;
+    }
+    float g = rho - L; // degrees beyond the lens edge
+    if (g < radians(1.6)) { // polished bezel
+      float k = g / radians(1.6);
+      float c = 0.35 + 0.5 * (0.5 + 0.5 * dot(d, normalize(vec2(-0.5, 0.8)))) * (1.0 - 0.6 * abs(k - 0.4));
+      return vec3(c) * (0.6 + 0.4 * diff) + spec * 0.4;
+    }
+    if (g < radians(5.0)) { // the graduated ring: a tick every 5 degrees, longer every 30, and the status lamp
+      float k = (g - radians(1.6)) / radians(3.4);
+      float a = mod(degrees(ang) + 360.0, 360.0);
+      float tick = line(fract(a / 5.0), 0.0, 0.05) + line(fract(a / 5.0), 1.0, 0.05);
+      float big = line(fract(a / 30.0), 0.0, 0.012) + line(fract(a / 30.0), 1.0, 0.012);
+      float m = tick * band(k, 0.15, 0.45, 0.04) + big * band(k, 0.15, 0.75, 0.04);
+      float lamp = 1.0 - smoothstep(0.0, radians(0.7), distance(q.xy, normalize(vec2(0.62, 0.78)) * sin(L + radians(3.3))));
+      vec3 lampC = vec3(1.0, 0.12, 0.06) * (0.35 + 0.65 * max(zap, 0.5 + 0.5 * sin(uTime * 2.2)));
+      return vec3(0.025) + m * 0.55 + lamp * lampC;
+    }
+    if (g < radians(6.2)) { float k = (g - radians(5.0)) / radians(1.2); return vec3(0.22 + 0.3 * (1.0 - k)) * (0.5 + 0.5 * diff) + spec * 0.3; } // outer lip
+    if (g < radians(7.2)) return vec3(0.008); // shadow line where the housing meets the lens
+    // the housing: armour plates in the ball's own frame, each a slightly different grey, with fine seams and a trench
+    float blat = asin(clamp(q.y, -1.0, 1.0)), blon = atan(q.x, q.z);
+    float rows = 14.0, ri = floor((blat / 3.1415927 + 0.5) * rows);
+    float cols = max(4.0, floor(28.0 * cos((ri + 0.5) / rows * 3.1415927 - 1.5707963) + 0.5));
+    float ci = floor((blon / 6.2831853 + 0.5) * cols + hash(vec2(ri, 3.0)));
+    float h = hash(vec2(ri, ci));
+    float fy = fract((blat / 3.1415927 + 0.5) * rows), fxp = fract((blon / 6.2831853 + 0.5) * cols + hash(vec2(ri, 3.0)));
+    float seamW = 0.035;
+    float seam = max(line(fy, 0.0, seamW) + line(fy, 1.0, seamW), (line(fxp, 0.0, seamW * 0.8) + line(fxp, 1.0, seamW * 0.8)));
+    float trench = band(abs(blat), -1.0, radians(1.2), radians(0.15));
+    float trenchEdge = line(abs(blat), radians(1.2), radians(0.25));
+    float inset = step(0.9, h) * band(fy, 0.25, 0.75, 0.02) * band(fxp, 0.2, 0.8, 0.02); // the odd recessed hatch
+    vec3 base = vec3(body * (0.78 + 0.35 * h)) * mix(vec3(1.0), vec3(0.95, 0.98, 1.04), 0.6);
+    base *= 1.0 - 0.22 * inset;
+    base = mix(base, vec3(0.012), max(seam * 0.85, trench * 0.92));
+    return base * diff + spec * 0.12 * (1.0 - seam) + trenchEdge * 0.08;
   }`;
-const EU = { tLens: { value: lensT }, tSky: { value: skyT }, uLens: { value: 42 }, uMode: { value: 0 }, uAz: { value: 0 }, uEl: { value: 0 }, uBody: { value: 22 } };
+const EU = { tLens: { value: lensT }, tSky: { value: skyT }, uLens: { value: 42 }, uMode: { value: 0 }, uAz: { value: 0 }, uEl: { value: 0 }, uBody: { value: 22 }, uOff: { value: 180 }, uFov: { value: 60 }, uTime: { value: 0 }, uZap: { value: 0 } };
 const frameMat = new THREE.ShaderMaterial({ uniforms: EU, depthTest: false, depthWrite: false,
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
   fragmentShader: EYE + `varying vec2 vUv; void main(){ float lon = (vUv.x - 0.5) * 6.2831853, lat = (vUv.y - 0.5) * 3.1415927;
@@ -549,7 +613,7 @@ $('zap').addEventListener('pointerdown', (e) => { e.preventDefault(); zap(); });
 addEventListener('keydown', (e) => { if (e.key === 'f' && ROLE === 'display') document.documentElement.requestFullscreen?.(); });
 
 // ---------- panel (studio) ----------
-const SL = [['dot', 'Dot size', 1, 12, () => S.dot + ' px'], ['lens', 'Lens', 15, 80, () => S.lens + '°'], ['body', 'Body grey', 0, 60, () => S.body + '%'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
+const SL = [['dot', 'Dot size', 1, 12, () => S.dot + ' px'], ['lens', 'Lens', 15, 80, () => S.lens + '°'], ['body', 'Body grey', 0, 60, () => S.body + '%'], ['front', 'Front faces', 0, 359, () => dirName(S.front) + ' ' + S.front + '°'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
 const SEG = [['view', 'View', [['scope', 'Telescope'], ['3d', '3D'], ['360', '360'], ['ball', 'Sphere']]], ['look', 'On sphere', [['eye', 'Eye + lens'], ['sky', 'Whole sky']]],
   ['show', 'Objects', [['all', 'All'], ['pay', 'Payloads'], ['deb', 'Debris'], ['junk', 'Not payloads']]], ['shadow', 'Earth shadow', [['0', 'Ignore'], ['1', 'Dim']]], ['labels', 'Readout', [['1', 'On'], ['0', 'Off']]]];
 function panelBuild() {
@@ -597,21 +661,30 @@ addEventListener('orientationchange', () => { setTimeout(resize, 150); setTimeou
 
 // ---------- tablet: the trackball, in lines ----------
 function drawBall(ctx, b) {
+  // the sphere seen from the front, in lines: the housing seams and the lens, turned to where the telescope looks
   ctx.save();
   ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2;
   ctx.beginPath(); ctx.arc(b.cx, b.cy, b.r, 0, TAU); ctx.stroke();
-  // the ball's seams, turned by the aim like the sphere's body (orthographic, front half only)
-  const ca = Math.cos(aim.az * D2R), sa = Math.sin(aim.az * D2R), ce = Math.cos(aim.el * D2R), se = Math.sin(aim.el * D2R);
-  const proj = (blat, blon) => { // ball frame → view
-    let q = [Math.cos(blat) * Math.sin(blon), Math.sin(blat), Math.cos(blat) * Math.cos(blon)];
-    q = [q[0], ce * q[1] + se * q[2], -se * q[1] + ce * q[2]]; // undo the tilt
-    q = [ca * q[0] - sa * q[2], q[1], sa * q[0] + ca * q[2]]; // undo the turn
-    return q;
+  const lo = (S.front - aim.az) * D2R, el = aim.el * D2R, cl = Math.cos(lo), sl = Math.sin(lo), ce = Math.cos(el), se = Math.sin(el);
+  const toView = (q) => { // ball frame (lens at +z) → world, the inverse of the eye shader's turn
+    const y = ce * q[1] + se * q[2], z1 = -se * q[1] + ce * q[2];
+    return [cl * q[0] + sl * z1, y, -sl * q[0] + cl * z1];
   };
-  ctx.strokeStyle = '#ffffff70'; ctx.lineWidth = 1;
-  const line = (f) => { let on = false; ctx.beginPath(); for (let i = 0; i <= 72; i++) { const p = f(i / 72); if (p[2] > 0) { const x = b.cx + p[0] * b.r, y = b.cy - p[1] * b.r; on ? ctx.lineTo(x, y) : ctx.moveTo(x, y); on = true; } else on = false; } ctx.stroke(); };
-  for (let la = -60; la <= 60; la += 30) line((t) => proj(la * D2R, t * TAU));
-  for (let lo = 0; lo < 360; lo += 30) line((t) => proj((t - 0.5) * Math.PI, lo * D2R));
+  const sph = (blat, blon) => toView([Math.cos(blat) * Math.sin(blon), Math.sin(blat), Math.cos(blat) * Math.cos(blon)]);
+  const path = (f, n) => { let on = false; ctx.beginPath(); for (let i = 0; i <= n; i++) { const p = f(i / n); if (p[2] > 0) { const x = b.cx + p[0] * b.r, y = b.cy - p[1] * b.r; on ? ctx.lineTo(x, y) : ctx.moveTo(x, y); on = true; } else on = false; } ctx.stroke(); };
+  ctx.strokeStyle = '#ffffff40'; ctx.lineWidth = 1;
+  for (let la = -60; la <= 60; la += 30) if (la) path((t) => sph(la * D2R, t * TAU), 96);
+  for (let lo2 = 0; lo2 < 360; lo2 += 30) path((t) => sph((t - 0.5) * Math.PI, lo2 * D2R), 72);
+  ctx.strokeStyle = '#ffffff90'; path((t) => sph(0, t * TAU), 120); // the trench
+  // the lens: three rings around its axis
+  const ring = (deg) => path((t) => { const r = deg * D2R; return toView([Math.sin(r) * Math.cos(t * TAU), Math.sin(r) * Math.sin(t * TAU), Math.cos(r)]); }, 96);
+  const L = S.lens;
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.6; ring(L + 6.2);
+  ctx.lineWidth = 1; ring(L); ring(L * 0.7);
+  const c = toView([0, 0, 1]);
+  if (c[2] > 0) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.cx + c[0] * b.r, b.cy - c[1] * b.r, 2.5, 0, TAU); ctx.fill(); }
+  // the pedestal below
+  ctx.strokeStyle = '#ffffff70'; path((t) => [Math.cos(-58 * D2R) * Math.sin((t - 0.5) * Math.PI), Math.sin(-58 * D2R), Math.cos(-58 * D2R) * Math.cos((t - 0.5) * Math.PI)], 48);
   ctx.restore();
 }
 
@@ -627,6 +700,8 @@ function render() {
   const w = VW, h = VH;
   octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, over.width, over.height);
   EU.uLens.value = S.lens; EU.uAz.value = aim.az; EU.uEl.value = aim.el; EU.uBody.value = S.body; EU.uMode.value = S.look === 'sky' ? 1 : 0;
+  EU.uOff.value = S.front; EU.uFov.value = aim.fov; EU.uTime.value = performance.now() / 1000;
+  { const lz = fx.length ? performance.now() - fx[fx.length - 1].t0 : 1e9; EU.uZap.value = Math.max(0, 1 - lz / 900); }
   let inView = 0;
   const needFrame = S.view === '360' || S.view === 'ball';
   if (needFrame) {
