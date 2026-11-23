@@ -1,11 +1,11 @@
 const PAGES = [
   {
     group: "Telescope",
-    note: "The sphere as a big mechanical eye standing in Daejeon. Turn it like a trackball and it looks at the real sky overhead, which holds only what people put there: every tracked satellite, rocket body and piece of debris. A cross sits in the middle; Zap whatever is under it.",
+    note: "The sphere as an observatory in Daejeon: a fixed pedestal with a round screen facing the audience, a dome that turns, and a telescope that tilts in its slit. Its camera sees the real sky overhead, which holds only what people put there: every tracked satellite, rocket body and piece of debris.",
     links: [
-      { href: "/telescope-tablet", title: "Tablet", text: "The eyepiece and the trackball: roll the ball or drag the view to aim, pinch to zoom, ZAP to fire at what is under the cross." },
-      { href: "/telescope-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere: the eye with its lens, body seams that roll with the aim, pedestal and back cap." },
-      { href: "/telescope", title: "Studio", text: "Telescope, 3D, 360 and sphere preview, with lens size, dot size, which objects, Earth shadow, colours, speed, and Put all back." },
+      { href: "/telescope-tablet", title: "Tablet", text: "The eyepiece in lines and the apparatus in see-through wireframe: drag the view or push the dome to aim, pinch to zoom. The object under the cross shows its card." },
+      { href: "/telescope-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere: a 360 capture of the observatory from its centre. Click once for the motor sound, F for full screen." },
+      { href: "/telescope", title: "Studio", text: "Apparatus, Telescope, 360, Sphere and Earth views, with seams, screen size, paint, front direction (calibration), objects, dot size, cross and speed." },
     ],
   },
   {

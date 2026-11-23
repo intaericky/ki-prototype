@@ -29,14 +29,11 @@
   input[type=range]::-moz-range-track { height: 1px; background: var(--dim); }
   input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: #000; border: 1px solid var(--fg); }
   .note { color: var(--dim); font-size: 12px; margin-top: 12px; line-height: 1.5; }
-  #card { position: fixed; left: 20px; top: 16px; max-width: 340px; color: var(--fg); font-variant-numeric: tabular-nums; pointer-events: none; opacity: 0; transition: opacity .4s; line-height: 1.6; background: #000000d9; padding: 10px 14px 12px; margin: -10px -14px; }
+  #card { position: fixed; left: 20px; top: 16px; max-width: 320px; color: var(--fg); font-variant-numeric: tabular-nums; pointer-events: none; opacity: 0; transition: opacity .25s; line-height: 1.6; font-size: 12px; }
   #card.on { opacity: 1; }
-  #card .nm { font-size: 17px; margin-bottom: 6px; }
-  #card .r { display: grid; grid-template-columns: 84px 1fr; gap: 8px; }
+  #card .nm { font-size: 15px; margin-bottom: 4px; letter-spacing: .02em; }
+  #card .r { display: grid; grid-template-columns: 74px 1fr; gap: 8px; }
   #card .r span:first-child { color: var(--dim); }
-  #zap { position: fixed; display: none; background: #000; color: var(--fg); border: 1px solid var(--fg); font: inherit; font-size: 15px; letter-spacing: .12em; border-radius: 50%; cursor: pointer; touch-action: none; }
-  #zap:active { background: var(--fg); color: #000; }
-  body.tablet #zap { display: block; }
   body.display #toggle, body.display #panel, body.display #info, body.display #card { display: none; }
   body.tablet #toggle, body.tablet #panel { display: none; }
   body.tablet #info { left: 16px; bottom: 12px; font-size: 12px; }
@@ -48,7 +45,6 @@
 <canvas id="o"></canvas>
 <div id="info"></div>
 <div id="card"></div>
-<button id="zap">ZAP</button>
 <button id="toggle">Settings</button>
 <div id="panel"></div>
 <script type="importmap">{ "imports": { "three": "/sphere-assets/vendor/three.module.min.js" } }</script>
@@ -58,19 +54,26 @@ import * as ORB from '/entangled/orbit.js';
 const { RE, D2R, TAU } = ORB;
 THREE.ColorManagement.enabled = false;
 
-// Telescope: the LED sphere as an imaginary apparatus, a big mechanical eye on a pedestal standing in Daejeon. Turning it
-// (like a trackball) points it at the real sky above Daejeon, and what it sees is only what people put up there: every
-// tracked payload, rocket body and piece of debris (CelesTrak, the US Space Force public catalogue), at its real
-// position now, seen from the ground. No stars, Sun or Moon (Intae, 2026-11-24): a telescope that looks back only at the
-// artificial objects. A cross sits at the centre of the view; Zap fires at whatever is under it.
+// Telescope: the LED sphere as an observatory standing in Daejeon. The lower half is a fixed pedestal with a round screen
+// facing the audience; the upper half is a dome that turns around the vertical axis, with a slit in which a telescope
+// tilts around the horizontal axis. A camera rides in the telescope and looks at the real sky over Daejeon, which holds
+// only what people put there: every tracked payload, rocket body and piece of debris (CelesTrak, the US Space Force
+// public catalogue), at its real position now. The audience screen shows what that camera sees.
+//
+// The scene is built the way it will be built in Unreal (see /mnt/project-files/.../telescope/UNREAL.md):
+//   Observatory: Pedestal (fixed) + Screen (fixed, shows the eye camera) + Dome (yaw = azimuth) + Telescope (pitch =
+//   elevation) carrying the Eye camera. Sky: a black world around the eye with one emissive mesh per object, placed by
+//   its direction from Daejeon. LED frame: a 360 capture of the observatory from its centre, keeping the outermost
+//   surface in each direction (reversed depth), so the frame is the outside of the apparatus wrapped on the sphere.
 const Q = new URLSearchParams(location.search);
 const ROLE = location.pathname.includes('display') || Q.has('display') ? 'display' : location.pathname.includes('tablet') || Q.has('tablet') ? 'tablet' : 'studio';
 document.body.classList.add(ROLE);
 const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 let VW = innerWidth, VH = innerHeight; // visible size, set in resize()
 
-// ---------- where the telescope stands ----------
+// ---------- where the observatory stands ----------
 // Daejeon, KAIST main campus (WGS84)
 const SITE = { name: 'Daejeon', lat: 36.3721, lon: 127.3604, h: 0.07 };
 const WGS_F = 1 / 298.257223563, WGS_E2 = WGS_F * (2 - WGS_F);
@@ -80,9 +83,11 @@ const OBS = [(Nrad + SITE.h) * cφ * cλ, (Nrad + SITE.h) * cφ * sλ, (Nrad * (
 const EAST = [-sλ, cλ, 0], NORTH = [-sφ * cλ, -sφ * sλ, cφ], UP = [cφ * cλ, cφ * sλ, sφ];
 
 // ---------- settings ----------
-const DEF = { view: 'scope', look: 'eye', dot: 3, lens: 30, show: 'all', shadow: '0', ring: 1, spd: 0, labels: '1', c0: '3d8bff', c1: 'ffb21f', c2: 'ff2d6f', c3: 'b9c2cc', body: 22, front: 180 };
+// front: the compass direction the audience side of the sphere faces in the room (calibration). seams: vertical seams of
+// the pedestal; the slit is as wide as one pedestal panel. screen: the audience screen's diameter, % of the sphere's.
+const DEF = { view: 'app', dot: 5, show: 'all', shadow: '0', spd: 0, cross: '1', front: 180, seams: 8, screen: 33, tone: 82, c0: 'ffffff', c1: 'ffffff', c2: 'ffffff', c3: 'ffffff' };
 let S = { ...DEF };
-const KEY = 'telescope-v1';
+const KEY = 'telescope-v2';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
@@ -92,22 +97,39 @@ const SPEED = () => Math.round(Math.pow(10, S.spd / 25)); // 1× .. 10,000×
 const TYPES = [['Payloads', 'c0'], ['Rocket bodies', 'c1'], ['Debris', 'c2'], ['Unknown', 'c3']];
 const showType = (t) => S.show === 'all' || (S.show === 'deb' ? t === 2 : S.show === 'pay' ? t === 0 : t !== 0);
 
-// aim: azimuth (0 = north, clockwise), elevation above the horizon, field of view across the lens (degrees)
-const aim = { az: 180, el: 35, fov: 60 };
-const clampAim = () => { aim.az = ((aim.az % 360) + 360) % 360; aim.el = Math.max(-5, Math.min(89.9, aim.el)); aim.fov = Math.max(0.5, Math.min(140, aim.fov)); };
+// ---------- the mount: what the controls ask for (tgt) and where the machine actually is (mnt) ----------
+// Azimuth is 0 = north, clockwise, and never wrapped (the dome turns freely; 370 is 10 past north, one turn on).
+// Elevation is held between the horizon and the zenith: the telescope cannot look into the ground or at the audience.
+const LIM = { elMin: 0, elMax: 90, vAz: 80, vEl: 55, acc: 220, fovMin: 0.5, fovMax: 100 };
+const tgt = { az: 180, el: 35, fov: 50 };
+const mnt = { az: 180, el: 35, fov: 50, vAz: 0, vEl: 0 };
+const clampTgt = () => { if (!Number.isFinite(tgt.az)) tgt.az = mnt.az; tgt.el = clamp(tgt.el, LIM.elMin, LIM.elMax); tgt.fov = clamp(tgt.fov, LIM.fovMin, LIM.fovMax); };
+// each axis is driven like a motor: it accelerates, cruises at its top speed and settles on the target without a jump
+function slew(dt) {
+  for (const [k, v, vmax] of [['az', 'vAz', LIM.vAz], ['el', 'vEl', LIM.vEl]]) {
+    const err = tgt[k] - mnt[k];
+    const want = clamp(err * 6, -vmax, vmax);
+    mnt[v] += clamp(want - mnt[v], -LIM.acc * dt, LIM.acc * dt);
+    mnt[k] += mnt[v] * dt;
+    if (Math.abs(err) < 0.002 && Math.abs(mnt[v]) < 0.05) { mnt[k] = tgt[k]; mnt[v] = 0; }
+  }
+  mnt.el = clamp(mnt.el, LIM.elMin, LIM.elMax);
+  mnt.fov += (tgt.fov - mnt.fov) * (1 - Math.exp(-dt * 12)); // the zoom is optical and quick
+}
+const azN = () => ((mnt.az % 360) + 360) % 360;
 
 // ---------- catalogue ----------
 let objs = [], catQ = [], T0 = Date.now(), simT = Date.now(), loaded = false, meta = null;
-const zapped = new Map(); // norad → zap time (sim ms)
-let gen = 0;
 // per object: unit direction from Daejeon in east/north/up, range km, height km; only filled for objects near the sky
 let dirE, dirN, dirU, rng, alt, cand = [], above = 0, aboveBy = [0, 0, 0, 0], lastFull = -1e9;
 function ingest(parts) {
   objs = ORB.parseCatalogue(parts);
   catQ = objs.map((o) => ORB.prep(o, simT)); T0 = simT;
   const n = objs.length; dirE = new Float32Array(n); dirN = new Float32Array(n); dirU = new Float32Array(n); rng = new Float32Array(n); alt = new Float32Array(n);
-  lastFull = -1e9; loaded = true; build3d(); panelSync();
+  lastFull = -1e9; loaded = true; build3d(); buildSky(); panelSync();
 }
+// CelesTrak updates its element sets about every 2 hours and asks not to be fetched more often; the site's API keeps
+// one copy for 2 hours, so the page reloads the catalogue every 2 hours too.
 const good = {};
 async function load() {
   const names = ['active', 'rocket', 'debris', 'satcat'];
@@ -116,7 +138,7 @@ async function load() {
   names.forEach((p, i) => { if (res[i].rows?.length) good[p] = res[i]; else failed.push(p); });
   meta = { fetched: Object.values(good).map((r) => r.fetched).filter(Boolean).sort()[0] ?? null, errors: failed };
   if (good.active || good.debris) ingest(good);
-  if (failed.length) setTimeout(load, 10 * 60e3);
+  setTimeout(load, failed.length ? 10 * 60e3 : 2 * 3600e3);
 }
 
 const tmpP = [0, 0, 0];
@@ -138,7 +160,7 @@ function step() {
     for (let j = 0; j < objs.length; j++) { locate(j, dt, c, s); if (dirU[j] > -0.12) cand.push(j); }
   } else for (const j of cand) locate(j, dt, c, s);
   above = 0; aboveBy = [0, 0, 0, 0];
-  for (const j of cand) if (dirU[j] > 0 && !zapped.has(objs[j].norad)) { above++; aboveBy[objs[j].type]++; }
+  for (const j of cand) if (dirU[j] > 0) { above++; aboveBy[objs[j].type]++; }
 }
 // sunlit or in the Earth's shadow (cylindrical shadow), for the optional Earth shadow dimming
 function sunEci(ms) {
@@ -153,282 +175,231 @@ function lit(j, sun) {
   return Math.hypot(tmpP[0] - d * sun[0], tmpP[1] - d * sun[1], tmpP[2] - d * sun[2]) > RE;
 }
 
-// ---------- the view through the telescope (gnomonic: straight lines stay straight, the horizon is a straight line) ----------
+// ---------- the view through the telescope ----------
 function basis() {
-  const a = aim.az * D2R, e = aim.el * D2R;
+  const a = mnt.az * D2R, e = mnt.el * D2R;
   const f = [Math.cos(e) * Math.sin(a), Math.cos(e) * Math.cos(a), Math.sin(e)]; // east, north, up
   const r = [Math.cos(a), -Math.sin(a), 0];
   const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]]; // r × f: up in the view
   return { f, r, u };
 }
 const hexRgb = (h) => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-const COMPASS = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
-const fx = []; // laser shots and hits: { t0 (wall ms), hit: j or -1, x, y (last screen spot) }
-// style: 'color' (studio, lens) or 'lines' (tablet: black and white lines)
-function drawScope(ctx, w, h, style, round) {
-  const B = basis(), cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2, F = R / Math.tan(aim.fov * D2R / 2);
-  const lines = style === 'lines', px = Math.max(1, R / 400);
-  ctx.save();
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
-  if (round) { ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.clip(); }
-  // ground: below the horizon line y = -tan(el)
-  const hy = cy + Math.tan(aim.el * D2R) * F;
-  if (hy < h + 2) {
-    if (!lines) { ctx.fillStyle = '#0c0c0c'; ctx.fillRect(0, Math.max(0, hy), w, h - Math.max(0, hy)); }
-    ctx.strokeStyle = lines ? '#fff' : '#ffffff55'; ctx.lineWidth = px; ctx.beginPath(); ctx.moveTo(0, hy); ctx.lineTo(w, hy); ctx.stroke();
-    // azimuth ticks along the horizon
-    ctx.fillStyle = lines ? '#fff' : '#ffffff88'; ctx.font = `${Math.round(11 * px)}px Pretendard, sans-serif`; ctx.textAlign = 'center';
-    const step = aim.fov > 60 ? 10 : aim.fov > 15 ? 5 : 1;
-    for (let az = 0; az < 360; az += step) {
-      const a = az * D2R, d = [Math.sin(a), Math.cos(a), 0], z = d[0] * B.f[0] + d[1] * B.f[1];
-      if (z <= 0.05) continue;
-      const x = cx + (d[0] * B.r[0] + d[1] * B.r[1]) / z * F;
-      if (x < -20 || x > w + 20) continue;
-      const big = az % 45 === 0;
-      ctx.beginPath(); ctx.moveTo(x, hy); ctx.lineTo(x, hy + (big ? 9 : 4) * px); ctx.stroke();
-      if (big || (step === 10 && az % 30 === 0)) ctx.fillText(COMPASS[az] || String(az), x, hy + 22 * px);
-    }
-  }
-  // objects
-  const cols = TYPES.map(([, k]) => hexRgb(S[k]));
-  const sun = S.shadow === '1' ? sunEci(simT) : null;
-  const rr = S.dot * px;
-  let inView = 0;
+const dirName = (az) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round((((az % 360) + 360) % 360) / 45) % 8];
+// the object under the cross: within 2.5% of the field (at least 0.15°)
+const NEAR_DEG = () => Math.max(0.15, mnt.fov * 0.025);
+function target() {
+  const B = basis(), lim = Math.cos(NEAR_DEG() * D2R);
+  let best = -1, bc = lim;
   for (const j of cand) {
-    if (dirU[j] <= 0) continue;
-    const o = objs[j]; if (!showType(o.type) || zapped.has(o.norad)) continue;
-    const z = dirE[j] * B.f[0] + dirN[j] * B.f[1] + dirU[j] * B.f[2];
-    if (z <= 0.01) continue;
-    const x = cx + (dirE[j] * B.r[0] + dirN[j] * B.r[1] + dirU[j] * B.r[2]) / z * F;
-    const y = cy - (dirE[j] * B.u[0] + dirN[j] * B.u[1] + dirU[j] * B.u[2]) / z * F;
-    if (x < -rr || x > w + rr || y < -rr || y > h + rr) continue;
-    inView++;
-    const dim = sun && !lit(j, sun);
-    if (lines) {
-      ctx.strokeStyle = dim ? '#ffffff66' : '#fff'; ctx.lineWidth = px;
-      ctx.beginPath(); ctx.arc(x, y, rr + 1.5 * px, 0, TAU); ctx.stroke();
-    } else {
-      const c = cols[o.type], k = dim ? 0.25 : 1;
-      ctx.fillStyle = `rgb(${c[0] * k | 0},${c[1] * k | 0},${c[2] * k | 0})`;
-      ctx.beginPath(); ctx.arc(x, y, rr, 0, TAU); ctx.fill();
-    }
+    if (dirU[j] <= 0 || !showType(objs[j].type)) continue;
+    const c = dirE[j] * B.f[0] + dirN[j] * B.f[1] + dirU[j] * B.f[2];
+    if (c > bc) { bc = c; best = j; }
   }
-  // laser and hits
-  const now = performance.now();
-  for (let i = fx.length - 1; i >= 0; i--) {
-    const e = fx[i], age = now - e.t0;
-    if (age > 1400) { fx.splice(i, 1); continue; }
-    if (age < 240) { // the shot: a ring closing on the cross, and a brief flash of the field
-      const k = age / 240;
-      ctx.strokeStyle = lines ? `rgba(255,255,255,${1 - k})` : `rgba(255,90,60,${1 - k})`; ctx.lineWidth = 2 * px;
-      ctx.beginPath(); ctx.arc(cx, cy, HIT_PX(R) + (R * 0.85 - HIT_PX(R)) * (1 - k) * (1 - k), 0, TAU); ctx.stroke();
-      if (age < 60) { ctx.fillStyle = lines ? 'rgba(255,255,255,0.18)' : 'rgba(255,120,90,0.12)'; ctx.fillRect(0, 0, w, h); }
-    }
-    if (e.hit >= 0 && age > 120) { // the hit: a ring bursting at the object, where it was when hit
-      const k = (age - 120) / 1280, j = e.hit;
-      const z = dirE[j] * B.f[0] + dirN[j] * B.f[1] + dirU[j] * B.f[2];
-      if (z > 0.01) {
-        const x = cx + (dirE[j] * B.r[0] + dirN[j] * B.r[1] + dirU[j] * B.r[2]) / z * F, y = cy - (dirE[j] * B.u[0] + dirN[j] * B.u[1] + dirU[j] * B.u[2]) / z * F;
-        ctx.strokeStyle = lines ? `rgba(255,255,255,${1 - k})` : `rgba(255,220,180,${1 - k})`; ctx.lineWidth = 2 * px;
-        ctx.beginPath(); ctx.arc(x, y, (4 + 60 * Math.sqrt(k)) * px, 0, TAU); ctx.stroke();
-        ctx.beginPath(); ctx.arc(x, y, (2 + 24 * k) * px, 0, TAU); ctx.stroke();
-      }
-    } else if (e.hit < 0 && age > 120 && age < 700) {
-      ctx.fillStyle = lines ? '#fff' : '#ffffffaa'; ctx.font = `${Math.round(12 * px)}px Pretendard, sans-serif`; ctx.textAlign = 'center';
-      ctx.fillText('miss', cx, cy + 34 * px);
-    }
-  }
-  // the reticle, fixed at the centre: fine cross with a gap, a scale every tenth of the field, the hit circle
-  const hr = HIT_PX(R), ink = lines ? '#fff' : '#ffffffcc', soft = lines ? '#ffffff80' : '#ffffff50';
-  ctx.strokeStyle = soft; ctx.lineWidth = px;
-  ctx.beginPath();
-  ctx.moveTo(cx - R, cy); ctx.lineTo(cx - hr * 2.2, cy); ctx.moveTo(cx + hr * 2.2, cy); ctx.lineTo(cx + R, cy);
-  ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy - hr * 2.2); ctx.moveTo(cx, cy + hr * 2.2); ctx.lineTo(cx, cy + R);
-  for (let i = 1; i < 10; i++) { const o = R * i / 10, t = (i % 5 ? 3 : 7) * px; ctx.moveTo(cx - o, cy - t); ctx.lineTo(cx - o, cy + t); ctx.moveTo(cx + o, cy - t); ctx.lineTo(cx + o, cy + t); ctx.moveTo(cx - t, cy - o); ctx.lineTo(cx + t, cy - o); ctx.moveTo(cx - t, cy + o); ctx.lineTo(cx + t, cy + o); }
-  ctx.stroke();
-  ctx.strokeStyle = ink; ctx.lineWidth = 1.2 * px;
-  ctx.beginPath(); ctx.arc(cx, cy, hr, 0, TAU); ctx.stroke();
-  ctx.beginPath(); for (const a of [0, 1, 2, 3]) { const t = a * Math.PI / 2; ctx.moveTo(cx + Math.cos(t) * hr, cy + Math.sin(t) * hr); ctx.lineTo(cx + Math.cos(t) * hr * 1.9, cy + Math.sin(t) * hr * 1.9); } ctx.stroke();
-  // lock: brackets on whatever a Zap would hit now
-  const tj = target();
-  if (tj >= 0) {
-    const z = dirE[tj] * B.f[0] + dirN[tj] * B.f[1] + dirU[tj] * B.f[2];
-    if (z > 0.01) {
-      const x = cx + (dirE[tj] * B.r[0] + dirN[tj] * B.r[1] + dirU[tj] * B.r[2]) / z * F, y = cy - (dirE[tj] * B.u[0] + dirN[tj] * B.u[1] + dirU[tj] * B.u[2]) / z * F;
-      const q = 9 * px, l = 4 * px;
-      ctx.strokeStyle = lines ? '#fff' : '#ff6a4a'; ctx.lineWidth = 1.5 * px; ctx.beginPath();
-      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { ctx.moveTo(x + sx * q, y + sy * (q - l)); ctx.lineTo(x + sx * q, y + sy * q); ctx.lineTo(x + sx * (q - l), y + sy * q); }
-      ctx.stroke();
-      ctx.fillStyle = ctx.strokeStyle; ctx.font = `${Math.round(10 * px)}px Pretendard, sans-serif`; ctx.textAlign = 'left';
-      ctx.fillText(['PAYLOAD', 'ROCKET BODY', 'DEBRIS', 'UNKNOWN'][objs[tj].type] + '  ' + objs[tj].norad, x + q + 4 * px, y - q + 8 * px);
-    }
-  }
-  if (round) { ctx.restore(); ctx.save(); ctx.strokeStyle = lines ? '#fff' : '#ffffff60'; ctx.lineWidth = px; ctx.beginPath(); ctx.arc(cx, cy, R - px / 2, 0, TAU); ctx.stroke(); }
-  // readout
-  if (S.labels === '1') {
-    ctx.fillStyle = lines ? '#fff' : '#ffffffaa'; ctx.font = `${Math.round(11 * px)}px Pretendard, sans-serif`; ctx.textAlign = 'center';
-    ctx.fillText(`${dirName(aim.az)} ${aim.az.toFixed(1)}°  ·  ${aim.el.toFixed(1)}° up  ·  ${aim.fov < 10 ? aim.fov.toFixed(1) : Math.round(aim.fov)}° field`, cx, round ? cy + R * 0.82 : h - 16 * px);
-  }
-  ctx.restore();
-  return inView;
-}
-const dirName = (az) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(az / 45) % 8];
-// how near the cross an object must be to be hit: 2.5% of the field, at least 0.15°
-const HIT_DEG = () => Math.max(0.15, aim.fov * 0.025);
-const HIT_PX = (R) => Math.tan(HIT_DEG() * D2R) / Math.tan(aim.fov * D2R / 2) * R;
-
-// ---------- the whole sky as the sphere sees it: the aim at the front, the zenith above ----------
-function drawSky360(ctx, W, H) {
-  const B = basis();
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
-  const toPx = (d) => {
-    const lon = Math.atan2(d[0] * B.r[0] + d[1] * B.r[1] + d[2] * B.r[2], d[0] * B.f[0] + d[1] * B.f[1] + d[2] * B.f[2]);
-    const lat = Math.asin(Math.max(-1, Math.min(1, d[0] * B.u[0] + d[1] * B.u[1] + d[2] * B.u[2])));
-    return [W / 2 + lon / Math.PI * W / 2, H / 2 - lat / (Math.PI / 2) * H / 2, lat];
-  };
-  // horizon
-  ctx.fillStyle = '#ffffff55';
-  for (let a = 0; a < 360; a += 0.25) { const p = toPx([Math.sin(a * D2R), Math.cos(a * D2R), 0]); ctx.fillRect(p[0] - 1, p[1] - 1, 2, 2); }
-  const cols = TYPES.map(([, k]) => hexRgb(S[k]));
-  const sun = S.shadow === '1' ? sunEci(simT) : null;
-  const d = [0, 0, 0];
-  for (const j of cand) {
-    if (dirU[j] <= 0) continue;
-    const o = objs[j]; if (!showType(o.type) || zapped.has(o.norad)) continue;
-    d[0] = dirE[j]; d[1] = dirN[j]; d[2] = dirU[j];
-    const p = toPx(d), c = cols[o.type], k = sun && !lit(j, sun) ? 0.25 : 1;
-    ctx.fillStyle = `rgb(${c[0] * k | 0},${c[1] * k | 0},${c[2] * k | 0})`;
-    const rx = S.dot / Math.max(0.15, Math.cos(p[2])); // wider towards the poles, so each looks round on the sphere
-    ctx.beginPath(); ctx.ellipse(p[0], p[1], rx, S.dot, 0, 0, TAU); ctx.fill();
-  }
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(W / 2 - 30, H / 2); ctx.lineTo(W / 2 - 8, H / 2); ctx.moveTo(W / 2 + 8, H / 2); ctx.lineTo(W / 2 + 30, H / 2);
-  ctx.moveTo(W / 2, H / 2 - 30); ctx.lineTo(W / 2, H / 2 - 8); ctx.moveTo(W / 2, H / 2 + 8); ctx.lineTo(W / 2, H / 2 + 30); ctx.stroke();
+  return best;
 }
 
-// ---------- renderer: the LED frame (the eye), the sphere preview, the 3D view ----------
-const canvas = $('c'), over = $('o'), octx = over.getContext('2d');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: TEST });
-renderer.setClearColor(0x000000, 1);
-const lensC = document.createElement('canvas'); lensC.width = lensC.height = 1024;
-const lensX = lensC.getContext('2d');
-const skyC = document.createElement('canvas'); skyC.width = 1920; skyC.height = 1080;
-const skyX = skyC.getContext('2d');
-const lensT = new THREE.CanvasTexture(lensC), skyT = new THREE.CanvasTexture(skyC);
-for (const t of [lensT, skyT]) { t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; }
-// The eye, drawn on the sphere's own surface (p: unit vector, +z = the point facing the viewer, +y up, +x to the right):
-// a lens that turns to point where the telescope looks (lon = front azimuth - azimuth, lat = elevation), showing the view,
-// ball visibly rolls), a fixed pedestal below and a fixed back cap.
-const EYE = /* glsl */`
-  uniform sampler2D tLens, tSky; uniform float uLens, uMode, uAz, uEl, uBody, uOff, uFov, uTime, uZap;
-  float hash(vec2 v) { return fract(sin(dot(v, vec2(127.1, 311.7))) * 43758.5453); }
-  float band(float x, float a, float b, float w) { return smoothstep(a - w, a + w, x) * (1.0 - smoothstep(b - w, b + w, x)); }
-  float line(float x, float c, float w) { return 1.0 - smoothstep(0.0, w, abs(x - c)); }
-  vec3 eye(vec3 p) {
-    if (uMode > 0.5) { // whole sky: the sky itself, aim at the front
-      float lon = atan(p.x, p.z), lat = asin(clamp(p.y, -1.0, 1.0));
-      return texture2D(tSky, vec2(lon / 6.2831853 + 0.5, lat / 3.1415927 + 0.5)).rgb;
-    }
-    // light: a soft key from above front left, so the ball reads as a solid object
-    vec3 Ld = normalize(vec3(-0.45, 0.75, 0.5));
-    float diff = 0.28 + 0.72 * max(0.0, dot(p, Ld)), spec = pow(max(0.0, dot(p, normalize(Ld + vec3(0.0, 0.0, 1.0)))), 40.0);
-    float lat = asin(clamp(p.y, -1.0, 1.0)), body = uBody / 100.0;
-    // pedestal: fixed yoke below, vertical ribs and a collar
-    if (lat < radians(-58.0)) {
-      float lon = atan(p.x, p.z);
-      float rib = line(fract(lon / radians(6.0)), 0.5, 0.08), collar = line(lat, radians(-61.0), radians(0.4)) + line(lat, radians(-63.0), radians(0.25));
-      return vec3(0.07 + 0.05 * rib) * (0.4 + 0.6 * diff) + collar * 0.35;
-    }
-    if (lat < radians(-56.5)) return vec3(0.01); // the gap the ball turns in
-    // the ball turns so its lens points where the telescope looks: lon = front azimuth - azimuth, lat = elevation
-    float lo = radians(uOff - uAz), el = radians(uEl), cl = cos(lo), sl = sin(lo), ce = cos(el), se = sin(el);
-    vec3 q = vec3(cl * p.x - sl * p.z, p.y, sl * p.x + cl * p.z);
-    q = vec3(q.x, ce * q.y - se * q.z, se * q.y + ce * q.z); // ball frame: the lens at +z
-    float rho = acos(clamp(q.z, -1.0, 1.0)), L = radians(uLens), t = rho / L;
-    vec2 d = length(q.xy) > 1e-6 ? normalize(q.xy) : vec2(0.0, 1.0);
-    float ang = atan(d.y, d.x);
-    float zap = uZap; // 1 at the moment of a zap, fading
-    if (t < 0.70) { // the objective: the live view behind dark coated glass
-      vec3 v = texture2D(tLens, 0.5 + 0.5 * d * (t / 0.70)).rgb;
-      float vig = 1.0 - 0.55 * pow(t / 0.70, 3.0);
-      vec3 coat = mix(vec3(0.06, 0.03, 0.09), vec3(0.02, 0.07, 0.06), 0.5 + 0.5 * q.x) * smoothstep(0.45, 0.7, t);
-      float hl = pow(max(0.0, dot(normalize(vec3(q.x, q.y, 0.6)), normalize(vec3(-0.5, 0.6, 0.6)))), 60.0) * smoothstep(0.7, 0.3, t);
-      return v * vig + coat + hl * 0.35 + vec3(1.0, 0.25, 0.15) * zap * 0.25 * (1.0 - t / 0.7);
-    }
-    if (t < 0.86) { // the iris: nine blades, turning as the field narrows
-      float k = (t - 0.70) / 0.16, n = 9.0, rot = log(uFov) * 0.6;
-      float s = fract((ang + rot + k * 0.9) / (6.2831853 / n));
-      float edge = line(s, 0.0, 0.03) + line(s, 1.0, 0.03);
-      return vec3(0.035 + 0.05 * s) * (0.6 + 0.4 * diff) + edge * 0.10 + line(k, 0.0, 0.08) * 0.08;
-    }
-    if (t < 1.0) { // the barrel: stepped black rings going down into the lens
-      float k = (t - 0.86) / 0.14, step = fract(k * 4.0);
-      return vec3(0.02 + 0.10 * step * step) * (0.5 + 0.5 * (0.5 - 0.5 * d.y)) + vec3(0.9, 0.15, 0.08) * zap * 0.6 * step;
-    }
-    float g = rho - L; // degrees beyond the lens edge
-    if (g < radians(1.6)) { // polished bezel
-      float k = g / radians(1.6);
-      float c = 0.35 + 0.5 * (0.5 + 0.5 * dot(d, normalize(vec2(-0.5, 0.8)))) * (1.0 - 0.6 * abs(k - 0.4));
-      return vec3(c) * (0.6 + 0.4 * diff) + spec * 0.4;
-    }
-    if (g < radians(5.0)) { // the graduated ring: a tick every 5 degrees, longer every 30, and the status lamp
-      float k = (g - radians(1.6)) / radians(3.4);
-      float a = mod(degrees(ang) + 360.0, 360.0);
-      float tick = line(fract(a / 5.0), 0.0, 0.05) + line(fract(a / 5.0), 1.0, 0.05);
-      float big = line(fract(a / 30.0), 0.0, 0.012) + line(fract(a / 30.0), 1.0, 0.012);
-      float m = tick * band(k, 0.15, 0.45, 0.04) + big * band(k, 0.15, 0.75, 0.04);
-      float lamp = 1.0 - smoothstep(0.0, radians(0.7), distance(q.xy, normalize(vec2(0.62, 0.78)) * sin(L + radians(3.3))));
-      vec3 lampC = vec3(1.0, 0.12, 0.06) * (0.35 + 0.65 * max(zap, 0.5 + 0.5 * sin(uTime * 2.2)));
-      return vec3(0.025) + m * 0.55 + lamp * lampC;
-    }
-    if (g < radians(6.2)) { float k = (g - radians(5.0)) / radians(1.2); return vec3(0.22 + 0.3 * (1.0 - k)) * (0.5 + 0.5 * diff) + spec * 0.3; } // outer lip
-    if (g < radians(7.2)) return vec3(0.008); // shadow line where the housing meets the lens
-    // the housing: armour plates in the ball's own frame, each a slightly different grey, with fine seams and a trench
-    float blat = asin(clamp(q.y, -1.0, 1.0)), blon = atan(q.x, q.z);
-    float rows = 14.0, ri = floor((blat / 3.1415927 + 0.5) * rows);
-    float cols = max(4.0, floor(28.0 * cos((ri + 0.5) / rows * 3.1415927 - 1.5707963) + 0.5));
-    float ci = floor((blon / 6.2831853 + 0.5) * cols + hash(vec2(ri, 3.0)));
-    float h = hash(vec2(ri, ci));
-    float fy = fract((blat / 3.1415927 + 0.5) * rows), fxp = fract((blon / 6.2831853 + 0.5) * cols + hash(vec2(ri, 3.0)));
-    float seamW = 0.035;
-    float seam = max(line(fy, 0.0, seamW) + line(fy, 1.0, seamW), (line(fxp, 0.0, seamW * 0.8) + line(fxp, 1.0, seamW * 0.8)));
-    float trench = band(abs(blat), -1.0, radians(1.2), radians(0.15));
-    float trenchEdge = line(abs(blat), radians(1.2), radians(0.25));
-    float inset = step(0.9, h) * band(fy, 0.25, 0.75, 0.02) * band(fxp, 0.2, 0.8, 0.02); // the odd recessed hatch
-    vec3 base = vec3(body * (0.78 + 0.35 * h)) * mix(vec3(1.0), vec3(0.95, 0.98, 1.04), 0.6);
-    base *= 1.0 - 0.22 * inset;
-    base = mix(base, vec3(0.012), max(seam * 0.85, trench * 0.92));
-    return base * diff + spec * 0.12 * (1.0 - seam) + trenchEdge * 0.08;
+// The sky the eye camera sees (three.js axes: x east, y up, z south). Each object is one small emissive mesh at its
+// direction from Daejeon; its size is a fixed share of the field, so it stays a dot when zooming.
+const SKY_R = 1000;
+const skyScene = new THREE.Scene(); skyScene.background = new THREE.Color(0x000000);
+const ground = new THREE.Mesh(new THREE.SphereGeometry(SKY_R * 0.9, 96, 24, 0, TAU, Math.PI / 2, Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x080808, side: THREE.BackSide }));
+skyScene.add(ground);
+{ const p = []; for (let i = 0; i <= 360; i++) p.push(Math.sin(i * D2R) * SKY_R * 0.899, 0, -Math.cos(i * D2R) * SKY_R * 0.899);
+  skyScene.add(new THREE.Line(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(p, 3)), new THREE.LineBasicMaterial({ color: 0x5a5a5a }))); }
+let skyMesh = null;
+function buildSky() {
+  if (skyMesh) { skyScene.remove(skyMesh); skyMesh.dispose(); }
+  skyMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 2), new THREE.MeshBasicMaterial({ color: 0xffffff }), Math.max(1, objs.length));
+  skyMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, objs.length) * 3), 3);
+  skyMesh.count = 0; skyMesh.frustumCulled = false; skyScene.add(skyMesh);
+}
+function updateSky(frac = S.dot * 0.004) { // frac: the dot's radius as a share of the half field
+  if (!skyMesh || !loaded) return;
+  const M = skyMesh.instanceMatrix.array, C = skyMesh.instanceColor.array;
+  const s = SKY_R * Math.tan(mnt.fov * D2R / 2) * frac;
+  const cols = TYPES.map(([, k]) => hexRgb(S[k]).map((v) => v / 255));
+  const sun = S.shadow === '1' ? sunEci(simT) : null;
+  let n = 0;
+  for (const j of cand) {
+    if (dirU[j] <= -0.01 || !showType(objs[j].type)) continue;
+    const o = n * 16, c = cols[objs[j].type], k = sun && !lit(j, sun) ? 0.25 : 1;
+    M[o] = s; M[o + 5] = s; M[o + 10] = s; M[o + 12] = dirE[j] * SKY_R; M[o + 13] = dirU[j] * SKY_R; M[o + 14] = -dirN[j] * SKY_R;
+    C[n * 3] = c[0] * k; C[n * 3 + 1] = c[1] * k; C[n * 3 + 2] = c[2] * k;
+    n++;
+  }
+  skyMesh.count = n; skyMesh.instanceMatrix.needsUpdate = true; skyMesh.instanceColor.needsUpdate = true;
+}
+// the eye camera rides in the telescope: yaw by azimuth, then pitch by elevation (no roll)
+const EYE_PX = ROLE === 'display' ? 768 : 1024;
+const eyeCam = new THREE.PerspectiveCamera(50, 1, 1, SKY_R * 2), scopeCam = new THREE.PerspectiveCamera(50, 1, 1, SKY_R * 2);
+const eyeRT = new THREE.WebGLRenderTarget(EYE_PX, EYE_PX, { samples: 4 });
+function aimCam(cam) { cam.rotation.set(mnt.el * D2R, -mnt.az * D2R, 0, 'YXZ'); cam.fov = mnt.fov; cam.updateProjectionMatrix(); }
+
+// ---------- the observatory (radius 1; y up; the audience at +z) ----------
+const obsScene = new THREE.Scene();
+const PU = { uCap: { value: 0 }, uL: { value: new THREE.Vector3(-0.42, 0.78, 0.46).normalize() }, uTone: { value: 0.82 } };
+const PAINT_V = /* glsl */`
+  varying vec3 vW, vN, vL;
+  void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vN = normalize(mat3(modelMatrix) * normal); vL = position; gl_Position = projectionMatrix * viewMatrix * w; }`;
+// Plain painted metal under one soft key light and sky fill. uCap = 1 during the 360 capture from the centre: the
+// outside is what counts there, so faces are shaded as seen from outside along the radius.
+const PAINT_F = /* glsl */`
+  uniform vec3 uC, uL; uniform float uCap, uTone, uToned, uSpec, uIn, uSlit, uHalf, uExt;
+  varying vec3 vW, vN, vL;
+  void main() {
+    if (uSlit > 0.5 && abs(vL.x) < uHalf && vL.z > -uExt) discard; // the dome's slit, in the dome's own frame
+    vec3 n = normalize(vN);
+    vec3 V = uCap > 0.5 ? normalize(vW) : normalize(cameraPosition - vW);
+    float shade = uIn;
+    if (uCap < 0.5 && !gl_FrontFacing) { n = -n; shade *= 0.22; } // inside the dome: in its own shadow
+    shade *= mix(0.2, 1.0, smoothstep(0.72, 0.97, length(vW))); // the mechanism deep inside gets little light
+    vec3 base = uC * mix(1.0, uTone, uToned);
+    float amb = mix(0.20, 0.42, n.y * 0.5 + 0.5);
+    float dif = max(dot(n, uL), 0.0) * 0.72;
+    float sp = pow(max(dot(n, normalize(uL + V)), 0.0), 48.0) * uSpec;
+    float rim = pow(1.0 - clamp(dot(n, V), 0.0, 1.0), 4.0) * 0.05;
+    gl_FragColor = vec4((base * (amb + dif) + sp + rim) * shade, 1.0);
   }`;
-const EU = { tLens: { value: lensT }, tSky: { value: skyT }, uLens: { value: 42 }, uMode: { value: 0 }, uAz: { value: 0 }, uEl: { value: 0 }, uBody: { value: 22 }, uOff: { value: 180 }, uFov: { value: 60 }, uTime: { value: 0 }, uZap: { value: 0 } };
-const frameMat = new THREE.ShaderMaterial({ uniforms: EU, depthTest: false, depthWrite: false,
-  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-  fragmentShader: EYE + `varying vec2 vUv; void main(){ float lon = (vUv.x - 0.5) * 6.2831853, lat = (vUv.y - 0.5) * 3.1415927;
-    gl_FragColor = vec4(eye(vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon))), 1.0); }` });
+const SLIT = { uHalf: { value: 0.38 }, uExt: { value: Math.sin(14 * D2R) } };
+const mats = [];
+function paint(hex, o = {}) {
+  const m = new THREE.ShaderMaterial({ side: THREE.DoubleSide, vertexShader: PAINT_V, fragmentShader: PAINT_F,
+    uniforms: { ...PU, ...SLIT, uC: { value: new THREE.Color(hex) }, uToned: { value: o.toned ? 1 : 0 }, uSpec: { value: o.spec ?? 0.1 }, uIn: { value: o.inside ?? 1 }, uSlit: { value: o.slit ? 1 : 0 } } });
+  mats.push(m); return m;
+}
+const obs = new THREE.Group(), dome = new THREE.Group(), tel = new THREE.Group();
+obsScene.add(obs);
+// the screen: shows the eye camera, round, fixed on the pedestal facing the audience
+const SCREEN_V = /* glsl */`varying vec3 vL; void main() { vL = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const SCREEN_F = /* glsl */`
+  uniform sampler2D tV; uniform float uA, uCross;
+  varying vec3 vL;
+  void main() {
+    vec3 p = normalize(vL);
+    float r = acos(clamp(p.y, -1.0, 1.0)) / uA;
+    vec2 d = length(p.xz) > 1e-6 ? normalize(vec2(p.x, -p.z)) : vec2(0.0);
+    vec2 uv = 0.5 + 0.5 * d * min(r, 1.0);
+    vec3 c = texture2D(tV, uv).rgb;
+    if (uCross > 0.5) {
+      vec2 q = (uv - 0.5) * 2.0; float w = 0.0045, g = 0.05, L = 0.16;
+      float l = step(abs(q.y), w) * step(g, abs(q.x)) * step(abs(q.x), L) + step(abs(q.x), w) * step(g, abs(q.y)) * step(abs(q.y), L);
+      c = mix(c, vec3(1.0), clamp(l, 0.0, 1.0) * 0.85);
+    }
+    gl_FragColor = vec4(c * (1.0 - 0.2 * pow(r, 6.0)), 1.0);
+  }`;
+const SU = { tV: { value: eyeRT.texture }, uA: { value: 0.34 }, uCross: { value: 1 } };
+let builtKey = '';
+function disposeGroup(g) { for (const c of [...g.children]) { g.remove(c); c.traverse?.((x) => { x.geometry?.dispose(); }); } }
+function buildObs() {
+  const key = [S.seams, S.screen].join();
+  if (key === builtKey) return; builtKey = key;
+  disposeGroup(obs); disposeGroup(dome); disposeGroup(tel); mats.length = 0;
+  const white = paint(0xffffff, { toned: true, spec: 0.12 }), dark = paint(0x2a2b2d, { spec: 0.25 }), core = paint(0x0b0b0c, { spec: 0 });
+  const panelW = TAU / Math.max(3, S.seams), half = Math.sin(panelW / 2); // the slit is as wide as one pedestal panel
+  SLIT.uHalf.value = half;
+  // pedestal: panels with real gaps between them (the dark core shows through), centred so one panel faces the audience
+  const gap = 0.8 * D2R;
+  for (let k = 0; k < S.seams; k++) {
+    const lon0 = -panelW / 2 + k * panelW + gap / 2;
+    const g = new THREE.SphereGeometry(1, Math.max(8, Math.round(160 / S.seams)), 48, lon0 + Math.PI / 2, panelW - gap, Math.PI / 2 + 0.6 * D2R, Math.PI / 2 - 0.6 * D2R);
+    obs.add(new THREE.Mesh(g, white));
+  }
+  obs.add(new THREE.Mesh(new THREE.SphereGeometry(0.985, 128, 48, 0, TAU, Math.PI / 2, Math.PI / 2), core));
+  // the bearing: a dark ring where the turning dome meets the fixed pedestal, and a raised band just below it
+  const rail = new THREE.Mesh(new THREE.TorusGeometry(1.004, 0.009, 12, 256), dark); rail.rotation.x = Math.PI / 2; obs.add(rail);
+  obs.add(new THREE.Mesh(new THREE.SphereGeometry(1.008, 256, 2, 0, TAU, Math.PI / 2 + 1.0 * D2R, 2.6 * D2R), white));
+  // the audience screen: diameter = screen% of the sphere's, centred on the front panel, below the band
+  const capA = Math.asin(clamp(S.screen / 100, 0.1, 0.6)), lat = -(capA + 5.5 * D2R);
+  const axis = new THREE.Vector3(0, Math.sin(lat), Math.cos(lat));
+  SU.uA.value = capA;
+  const scrMat = new THREE.ShaderMaterial({ uniforms: SU, vertexShader: SCREEN_V, fragmentShader: SCREEN_F, side: THREE.DoubleSide }); mats.push(scrMat);
+  const scr = new THREE.Mesh(new THREE.SphereGeometry(1.003, 128, 32, 0, TAU, 0, capA), scrMat);
+  scr.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis); obs.add(scr);
+  const bez = new THREE.Mesh(new THREE.TorusGeometry(Math.sin(capA) * 1.004, 0.011, 12, 192), dark);
+  bez.position.copy(axis).multiplyScalar(Math.cos(capA) * 1.004); bez.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis); obs.add(bez);
+  // dome: the upper half, with a straight slit from the horizon over the zenith (shader cut), and two pairs of shutter
+  // ribs along the slit's edges
+  obs.add(dome);
+  dome.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 64, 0, TAU, 0, Math.PI / 2), paint(0xffffff, { toned: true, spec: 0.14, slit: true })));
+  const ribs = (x0, r, tube) => {
+    const R = Math.sqrt(r * r - x0 * x0), pts = [];
+    for (let i = 0; i <= 64; i++) { const t = i / 64 * (Math.PI / 2 + Math.asin(SLIT.uExt.value / R)); pts.push(new THREE.Vector3(x0, R * Math.sin(t), R * Math.cos(t))); }
+    return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 128, tube, 10, false);
+  };
+  for (const sgn of [-1, 1]) {
+    dome.add(new THREE.Mesh(ribs(sgn * (half + 0.012), 1.006, 0.012), white));
+    dome.add(new THREE.Mesh(ribs(sgn * (half + 0.05), 1.012, 0.014), white));
+  }
+  // the slit's far end: a crossbar behind the zenith
+  { const z = -SLIT.uExt.value, y = Math.sqrt(1 - z * z - half * half); const b = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, half * 2 + 0.1, 12), white); b.rotation.z = Math.PI / 2; b.position.set(0, y * 1.004, z * 1.004); dome.add(b); }
+  // the elevation axle across the dome, with its two bearings
+  const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, half * 2 + 0.2, 24), dark); axle.rotation.z = Math.PI / 2; dome.add(axle);
+  for (const sgn of [-1, 1]) { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.06, 40), dark); b.rotation.z = Math.PI / 2; b.position.x = sgn * (half + 0.02); dome.add(b); }
+  // the telescope: an open truss tube (front ring, middle ring, mirror cell) pointing along +z, pitched by elevation
+  dome.add(tel);
+  const TR = half * 0.76;
+  const ring = (r, z, tube, m) => { const t = new THREE.Mesh(new THREE.TorusGeometry(r, tube, 12, 128), m); t.position.z = z; tel.add(t); };
+  ring(TR, 0.9, 0.016, white); ring(TR * 0.97, 0.86, 0.008, dark); ring(TR * 0.92, 0.5, 0.012, white);
+  const lens = new THREE.Mesh(new THREE.CircleGeometry(TR * 0.95, 96), paint(0x07080a, { spec: 0.9 })); lens.position.z = 0.885; tel.add(lens);
+  const cell = new THREE.Mesh(new THREE.CylinderGeometry(TR * 0.88, TR * 0.8, 0.16, 64), paint(0x3b3c3f, { spec: 0.2, inside: 0.8 })); cell.rotation.x = Math.PI / 2; cell.position.z = 0.14; tel.add(cell);
+  const strut = (a, b, r, m) => { const d = b.clone().sub(a), c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 8), m); c.position.copy(a).add(b).multiplyScalar(0.5); c.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); tel.add(c); };
+  const P = (r, a, z) => new THREE.Vector3(r * Math.cos(a), r * Math.sin(a), z);
+  for (let i = 0; i < 8; i++) { const a = i * TAU / 8; strut(P(TR, a, 0.9), P(TR * 0.92, a + (i % 2 ? 1 : -1) * TAU / 8, 0.5), 0.007, white); }
+  for (let i = 0; i < 4; i++) { const a = i * TAU / 4 + TAU / 8; strut(P(TR * 0.92, a, 0.5), P(TR * 0.84, a, 0.22), 0.009, white); }
+  // the eye camera's housing, at the focus behind the lens
+  const cam = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.12, 32), dark); cam.rotation.x = Math.PI / 2; cam.position.z = 0.32; tel.add(cam);
+  for (const m of mats) m.depthFunc = THREE.LessEqualDepth;
+}
+function poseObs() {
+  dome.rotation.y = (S.front - mnt.az) * D2R; // the dome's slit faces the azimuth, wherever the room's front is
+  tel.rotation.x = -mnt.el * D2R;
+  PU.uTone.value = S.tone / 100;
+  SU.uCross.value = S.cross === '1' ? 1 : 0;
+}
+
+// ---------- the LED frame: 360 capture from the centre, outermost surface wins ----------
+const cubeRT = new THREE.WebGLCubeRenderTarget(ROLE === 'display' ? 1024 : 768, { generateMipmaps: false, minFilter: THREE.LinearFilter });
+const cubeCam = new THREE.CubeCamera(0.02, 4, cubeRT);
+const FRAME_F = /* glsl */`
+  uniform samplerCube tC; varying vec2 vUv;
+  void main() { float lon = (vUv.x - 0.5) * 6.2831853, lat = (vUv.y - 0.5) * 3.1415927;
+    vec3 p = vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon));
+    gl_FragColor = textureCube(tC, p); }`;
+const frameMat = new THREE.ShaderMaterial({ uniforms: { tC: { value: cubeRT.texture } }, depthTest: false, depthWrite: false,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`, fragmentShader: FRAME_F });
 const frameScene = new THREE.Scene(), flatCam = new THREE.Camera();
-const fq = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), frameMat); fq.frustumCulled = false; frameScene.add(fq);
-// the LED sphere preview: the same function on a ball seen from the front
+{ const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), frameMat); q.frustumCulled = false; frameScene.add(q); }
+const frameRT = new THREE.WebGLRenderTarget(1920, 1080);
+function capture() {
+  PU.uCap.value = 1;
+  for (const m of mats) m.depthFunc = THREE.GreaterEqualDepth;
+  renderer.state.buffers.depth.setClear(0);
+  cubeCam.update(renderer, obsScene);
+  renderer.state.buffers.depth.setClear(1);
+  for (const m of mats) m.depthFunc = THREE.LessEqualDepth;
+  PU.uCap.value = 0;
+}
+// the LED sphere preview: the frame wrapped on a ball
 const ballScene = new THREE.Scene(), ballCam = new THREE.PerspectiveCamera(32, 1, 0.05, 100);
-ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.ShaderMaterial({ uniforms: EU,
+ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.ShaderMaterial({ uniforms: { tF: { value: frameRT.texture } },
   vertexShader: `varying vec3 vN; void main(){ vN = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: EYE + `varying vec3 vN; void main(){ gl_FragColor = vec4(eye(normalize(vN)), 1.0); }` })));
-const ballView = { yaw: 0.35, pitch: 0.12, dist: 4.6 };
+  fragmentShader: `uniform sampler2D tF; varying vec3 vN; void main(){ vec3 p = normalize(vN); gl_FragColor = texture2D(tF, vec2(atan(p.x, p.z) / 6.2831853 + 0.5, asin(clamp(p.y, -1.0, 1.0)) / 3.1415927 + 0.5)); }` })));
+const orbit = { yaw: 0.5, pitch: 0.28, dist: 4.4 };
+const appCam = new THREE.PerspectiveCamera(32, 1, 0.05, 100);
 
 // 3D: the Earth (black), Daejeon, the telescope's line of sight, and every object (above Daejeon's horizon: bright)
 const scene3 = new THREE.Scene(), cam3 = new THREE.PerspectiveCamera(40, 1, 0.01, 200);
 const view3 = { yaw: 2.2, pitch: 0.5, dist: 4.2 };
-const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), new THREE.MeshBasicMaterial({ color: 0x050505 }));
-scene3.add(earth);
-const grat = []; for (let la = -60; la <= 60; la += 30) { const pts = []; for (let lo = 0; lo <= 360; lo += 4) pts.push(ll(la, lo, 1.001)); grat.push(...segs(pts)); }
-for (let lo = 0; lo < 360; lo += 30) { const pts = []; for (let la = -90; la <= 90; la += 4) pts.push(ll(la, lo, 1.001)); grat.push(...segs(pts)); }
-scene3.add(new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(grat, 3)), new THREE.LineBasicMaterial({ color: 0x333333 })));
-const siteDot = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-siteDot.position.fromArray(ll(SITE.lat, SITE.lon, 1)); scene3.add(siteDot);
+scene3.add(new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), new THREE.MeshBasicMaterial({ color: 0x050505 })));
+function ll(la, lo, r) { const a = la * D2R, b = lo * D2R; return [r * Math.cos(a) * Math.cos(b), r * Math.sin(a), -r * Math.cos(a) * Math.sin(b)]; } // Earth-fixed → scene (y north)
+function segs(p) { const o = []; for (let i = 0; i < p.length - 1; i++) o.push(...p[i], ...p[i + 1]); return o; }
+{ const grat = []; for (let la = -60; la <= 60; la += 30) { const pts = []; for (let lo = 0; lo <= 360; lo += 4) pts.push(ll(la, lo, 1.001)); grat.push(...segs(pts)); }
+  for (let lo = 0; lo < 360; lo += 30) { const pts = []; for (let la = -90; la <= 90; la += 4) pts.push(ll(la, lo, 1.001)); grat.push(...segs(pts)); }
+  scene3.add(new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(grat, 3)), new THREE.LineBasicMaterial({ color: 0x333333 }))); }
+{ const d = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 8), new THREE.MeshBasicMaterial({ color: 0xffffff })); d.position.fromArray(ll(SITE.lat, SITE.lon, 1)); scene3.add(d); }
 const ray = new THREE.Line(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3)), new THREE.LineBasicMaterial({ color: 0xffffff }));
 scene3.add(ray);
 let pts3 = null;
-function ll(la, lo, r) { const a = la * D2R, b = lo * D2R; return [r * Math.cos(a) * Math.cos(b), r * Math.sin(a), -r * Math.cos(a) * Math.sin(b)]; } // Earth-fixed → scene (y north)
-function segs(p) { const o = []; for (let i = 0; i < p.length - 1; i++) o.push(...p[i], ...p[i + 1]); return o; }
 function build3d() {
   if (pts3) { scene3.remove(pts3); pts3.geometry.dispose(); }
   const g = new THREE.BufferGeometry();
@@ -443,7 +414,7 @@ function update3d() {
   const P = pts3.geometry.attributes.position.array, C = pts3.geometry.attributes.color.array;
   const dt = (simT - T0) / 1000, th = ORB.gmst(simT), c = Math.cos(th), s = Math.sin(th), cols = TYPES.map(([, k]) => hexRgb(S[k]).map((v) => v / 255));
   for (let j = 0; j < objs.length; j++) {
-    const o = objs[j], hide = zapped.has(o.norad) || !showType(o.type);
+    const o = objs[j], hide = !showType(o.type);
     ORB.posEci(catQ[j], dt, tmpP);
     const x = c * tmpP[0] + s * tmpP[1], y = -s * tmpP[0] + c * tmpP[1], z = tmpP[2];
     P[j * 3] = hide ? 0 : x / RE; P[j * 3 + 1] = hide ? 0 : z / RE; P[j * 3 + 2] = hide ? 0 : -y / RE;
@@ -456,60 +427,81 @@ function update3d() {
   ray.geometry.attributes.position.array.set([...o0, o0[0] + d[0] * far, o0[1] + d[2] * far, o0[2] - d[1] * far]); ray.geometry.attributes.position.needsUpdate = true;
 }
 
-// ---------- zap ----------
-function target() {
-  const B = basis(), lim = Math.cos(HIT_DEG() * D2R);
-  let best = -1, bc = lim;
-  for (const j of cand) {
-    if (dirU[j] <= 0) continue;
-    const o = objs[j]; if (!showType(o.type) || zapped.has(o.norad)) continue;
-    const c = dirE[j] * B.f[0] + dirN[j] * B.f[1] + dirU[j] * B.f[2];
-    if (c > bc) { bc = c; best = j; }
-  }
-  return best;
-}
-const log = []; // the last zaps on this page: { norad, name, type, alt, rng, t }
-function zap(local = true, remote = null) {
-  let j = -1;
-  if (remote) { j = remote.n > 0 ? objs.findIndex((o) => o.norad === remote.n) : -1; }
-  else j = target();
-  fx.push({ t0: performance.now(), hit: j });
-  if (j >= 0) {
-    const o = objs[j]; zapped.set(o.norad, simT);
-    const e = { norad: o.norad, type: o.type, owner: o.owner, intl: o.intl, alt: alt[j], rng: rng[j], el: Math.asin(dirU[j]) / D2R, t: Date.now(), name: null };
-    log.unshift(e); if (log.length > 6) log.pop();
-    if (ROLE !== 'display') showCard(e);
-  }
-  if (local) { publish('/zap', { n: j >= 0 ? objs[j].norad : -1, gen, by: ME }); clearTimeout(snapT); snapT = setTimeout(sendSnapshot, 400); }
-}
+// ---------- renderer ----------
+const canvas = $('c'), over = $('o'), octx = over.getContext('2d');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: TEST });
+renderer.setClearColor(0x000000, 1);
+
+// ---------- the object under the cross: its card ----------
 const TYPE_NAME = ['Payload', 'Rocket body', 'Debris', 'Unknown'];
 const OWNERS = { US: 'United States', CIS: 'Soviet Union / Russia', PRC: 'China', FR: 'France', ESA: 'European Space Agency', JPN: 'Japan', IND: 'India', UK: 'United Kingdom', GER: 'Germany', ISS: 'ISS partners', IT: 'Italy', CA: 'Canada', SKOR: 'South Korea', ISRA: 'Israel', IRAN: 'Iran', NKOR: 'North Korea', BRAZ: 'Brazil', ARGN: 'Argentina', AUS: 'Australia', SPN: 'Spain', ITSO: 'Intelsat', EUME: 'EUMETSAT', CHBZ: 'China / Brazil', ORB: 'ORBCOMM', GLOB: 'Globalstar', TBD: 'unknown' };
-let cardT = null;
-function cardHtml(e) {
-  const r = (k, v) => `<div class="r"><span>${k}</span><span>${v}</span></div>`;
-  return `<div class="nm">${e.name || TYPE_NAME[e.type] + ' ' + e.norad}</div>` + r('Hit', TYPE_NAME[e.type] + (e.owner ? ', ' + (OWNERS[e.owner] || e.owner) : ''))
-    + r('Height', Math.round(e.alt).toLocaleString() + ' km') + r('Distance', Math.round(e.rng).toLocaleString() + ' km from ' + SITE.name)
-    + r('Catalogue', '#' + e.norad + (e.intl ? ' · ' + e.intl : '')) + (e.launch ? r('Launched', e.launch) : '');
+const names = new Map(); // norad → { name, launch } from CelesTrak, once per object
+let near = -1, nearSince = 0, cardFor = -1;
+function updateCard() {
+  if (ROLE === 'display') return;
+  const j = target();
+  if (j !== near) { near = j; nearSince = performance.now(); }
+  const c = $('card');
+  if (near < 0 || performance.now() - nearSince < 250) { if (near < 0) { c.classList.remove('on'); cardFor = -1; } return; }
+  const o = objs[near], nm = names.get(o.norad);
+  if (cardFor !== near || (nm && !c.dataset.named)) {
+    const r = (k, v) => `<div class="r"><span>${k}</span><span>${v}</span></div>`;
+    c.innerHTML = `<div class="nm">${nm?.name || TYPE_NAME[o.type] + ' ' + o.norad}</div>` + r('Type', TYPE_NAME[o.type]) + (o.owner ? r('Owner', OWNERS[o.owner] || o.owner) : '')
+      + r('Height', Math.round(alt[near]).toLocaleString() + ' km') + r('Distance', Math.round(rng[near]).toLocaleString() + ' km')
+      + r('Catalogue', '#' + o.norad + (o.intl ? ' · ' + o.intl : '')) + (nm?.launch ? r('Launched', nm.launch) : '');
+    c.dataset.named = nm ? '1' : ''; c.classList.add('on'); cardFor = near;
+    if (!nm && !TEST && !names.has(-o.norad)) {
+      names.set(-o.norad, 1);
+      fetch('/api/debris-info?n=' + o.norad).then((r) => r.json()).then((d) => { if (d.record) names.set(o.norad, { name: d.record.OBJECT_NAME, launch: d.record.LAUNCH_DATE }); }).catch(() => {});
+    }
+  } else { // keep the moving numbers fresh
+    const rows = c.querySelectorAll('.r span:last-child');
+    if (rows.length > 3) { const h = o.owner ? 2 : 1; rows[h].textContent = Math.round(alt[near]).toLocaleString() + ' km'; rows[h + 1].textContent = Math.round(rng[near]).toLocaleString() + ' km'; }
+  }
 }
-function showCard(e) {
-  const c = $('card'); c.innerHTML = cardHtml(e); c.classList.add('on');
-  clearTimeout(cardT); cardT = setTimeout(() => c.classList.remove('on'), 6000);
-  if (TEST) return;
-  fetch('/api/debris-info?n=' + e.norad).then((r) => r.json()).then((d) => {
-    if (!d.record) return; e.name = d.record.OBJECT_NAME; e.launch = d.record.LAUNCH_DATE;
-    if (log[0] === e) c.innerHTML = cardHtml(e);
-  }).catch(() => {});
-}
-function putBack() { gen = Date.now(); zapped.clear(); log.length = 0; sendSnapshot(); }
 
-// ---------- room: aim, zaps and the studio's settings are shared over the public relay (room code) ----------
+// ---------- the motors' sound: a low hum for the dome (azimuth), a higher one for the telescope (elevation) ----------
+// Each motor: a buzzing saw and a square an octave up, plus filtered noise for the gears, all louder and brighter with
+// the axis's speed. Silent when nothing turns. Needs one click (or key) on the page to start.
+let audio = null;
+function startAudio() {
+  if (audio || ROLE === 'tablet') return;
+  const A = new (window.AudioContext || window.webkitAudioContext)();
+  const master = A.createGain(); master.gain.value = 0.55; master.connect(A.destination);
+  const noiseBuf = A.createBuffer(1, A.sampleRate * 2, A.sampleRate); const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  const motor = (f0, band) => {
+    const out = A.createGain(); out.gain.value = 0; out.connect(master);
+    const lp = A.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 300; lp.Q.value = 0.7; lp.connect(out);
+    const o1 = A.createOscillator(); o1.type = 'sawtooth'; o1.frequency.value = f0; const g1 = A.createGain(); g1.gain.value = 0.5; o1.connect(g1).connect(lp); o1.start();
+    const o2 = A.createOscillator(); o2.type = 'square'; o2.frequency.value = f0 * 2.01; const g2 = A.createGain(); g2.gain.value = 0.12; o2.connect(g2).connect(lp); o2.start();
+    const o3 = A.createOscillator(); o3.type = 'sine'; o3.frequency.value = f0 * 11; const g3 = A.createGain(); g3.gain.value = 0.05; o3.connect(g3).connect(out); o3.start();
+    const n = A.createBufferSource(); n.buffer = noiseBuf; n.loop = true; const bp = A.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = band; bp.Q.value = 3; const gn = A.createGain(); gn.gain.value = 0.35; n.connect(bp).connect(gn).connect(out); n.start();
+    return { out, lp, o1, o2, o3, f0 };
+  };
+  audio = { A, az: motor(46, 700), el: motor(73, 1300) };
+}
+function updateAudio() {
+  if (!audio) return;
+  const t = audio.A.currentTime;
+  for (const [m, v, vmax] of [[audio.az, mnt.vAz, LIM.vAz], [audio.el, mnt.vEl, LIM.vEl]]) {
+    const s = Math.min(1, Math.abs(v) / vmax);
+    m.out.gain.setTargetAtTime(0.32 * Math.pow(s, 0.6), t, 0.06);
+    m.lp.frequency.setTargetAtTime(240 + 2200 * s, t, 0.06);
+    const f = m.f0 * (0.7 + 0.5 * s);
+    m.o1.frequency.setTargetAtTime(f, t, 0.08); m.o2.frequency.setTargetAtTime(f * 2.01, t, 0.08); m.o3.frequency.setTargetAtTime(f * 11, t, 0.08);
+  }
+}
+addEventListener('pointerdown', () => { startAudio(); audio?.A.resume(); });
+addEventListener('keydown', () => { startAudio(); audio?.A.resume(); });
+
+// ---------- room: the target aim and the studio's settings are shared over the public relay (room code) ----------
+// Every page runs the same motor model on the same targets, so the dome turns the same way everywhere.
 const ROOM = ORB.cleanRoom(Q.get('room'));
 const TOPIC = 'sampling-sphere/v1/telescope' + (ROOM ? '/' + ROOM : ''), ME = Math.random().toString(36).slice(2, 10);
-let mq = null, relayOk = false, aimT = 0, snapT = null, aimDirty = false, localAimAt = 0;
+let mq = null, relayOk = false, aimT = 0, aimDirty = false, localAimAt = 0, gotAim = false;
 const publish = (t, obj, retain = false) => { if (mq && relayOk) mq.publish(TOPIC + t, JSON.stringify(obj), { retain, qos: retain ? 1 : 0 }); };
 function aimChanged() { localAimAt = performance.now(); aimDirty = true; }
-function flushAim() { if (aimDirty && performance.now() - aimT >= 50) { aimDirty = false; aimT = performance.now(); publish('/aim', { az: aim.az, el: aim.el, fov: aim.fov, by: ME }, true); } }
-function sendSnapshot() { publish('/zapped', { gen, list: [...zapped.keys()], by: ME }, true); }
+function flushAim() { if (aimDirty && performance.now() - aimT >= 33) { aimDirty = false; aimT = performance.now(); publish('/aim', { az: tgt.az, el: tgt.el, fov: tgt.fov, by: ME }, true); } }
 const SYNC_SKIP = new Set(['view', 'spd']);
 let setT = null;
 function sendSettings() { clearTimeout(setT); setT = setTimeout(() => { const o = {}; for (const k of Object.keys(DEF)) if (!SYNC_SKIP.has(k)) o[k] = S[k]; publish('/settings', { s: o, by: ME }, true); }, 80); }
@@ -524,65 +516,69 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
   const mqtt = m.default || m;
   mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
   mq.on('close', () => { relayOk = false; panelSync(); }); mq.on('offline', () => { relayOk = false; });
-  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/aim', TOPIC + '/zap', TOPIC + '/zapped', TOPIC + '/settings', TOPIC + '/clock']); if (ROLE === 'studio') sendSettings(); panelSync(); });
+  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/aim', TOPIC + '/settings', TOPIC + '/clock']); if (ROLE === 'studio') sendSettings(); panelSync(); });
   mq.on('message', (t, msg) => {
     let d; try { d = JSON.parse(msg.toString()); } catch { return; }
     if (!d || d.by === ME) return;
     const k = t.slice(TOPIC.length);
     if (k === '/aim') {
-      if ([d.az, d.el, d.fov].every(Number.isFinite) && performance.now() - localAimAt > 600) { aim.az = d.az; aim.el = d.el; aim.fov = d.fov; clampAim(); }
-    } else if (k === '/zap') {
-      if (Number.isFinite(d.n) && Number.isFinite(d.gen)) { if (d.gen > gen) { gen = d.gen; zapped.clear(); } if (d.gen === gen) zap(false, { n: d.n }); }
-    } else if (k === '/zapped') {
-      if (Number.isFinite(d.gen) && Array.isArray(d.list) && d.gen >= gen) { if (d.gen > gen) { gen = d.gen; zapped.clear(); log.length = 0; } for (const n of d.list) if (Number.isFinite(n) && !zapped.has(n)) zapped.set(n, simT); }
+      if ([d.az, d.el, d.fov].every(Number.isFinite) && performance.now() - localAimAt > 600) {
+        tgt.az = d.az; tgt.el = d.el; tgt.fov = d.fov; clampTgt();
+        if (!gotAim) { gotAim = true; mnt.az = tgt.az; mnt.el = tgt.el; mnt.fov = tgt.fov; } // joining: start where the others are
+        else if (Math.abs(tgt.az - mnt.az) > 180) mnt.az += 360 * Math.round((tgt.az - mnt.az) / 360);
+      }
     } else if (k === '/settings') applySettings(d.s);
     else if (k === '/clock') { if ([d.wall0, d.sim0, d.speed].every(Number.isFinite)) { clock = d; S.spd = Math.log10(Math.max(1, d.speed)) * 25; panelSync(); } }
   });
 }).catch(() => {});
 
 // ---------- input ----------
-// Telescope / tablet view: drag the sky (it follows the finger). 360 / sphere: roll the ball (the eye turns the way
-// the front is pushed). 3D: drag turns the camera. Pinch or wheel: zoom. A tap (no drag) or Space: Zap.
+// Telescope / tablet view: drag the sky (it follows the finger). Apparatus (tablet), 360, Sphere: push the dome around
+// like a trackball. Studio apparatus / 3D: drag turns the camera. Pinch or wheel: zoom.
 const ptrs = new Map(); let gesture = null, pinch0 = null;
 function layout() {
   const w = VW, h = VH;
-  if (ROLE !== 'tablet') return { scope: { x: 0, y: 0, w, h }, ball: null };
-  // tablet: the view (round, like an eyepiece) and the trackball side by side (landscape) or stacked (portrait)
+  if (ROLE !== 'tablet') return { scope: { x: 0, y: 0, w, h }, rig: null };
+  // tablet: the eyepiece (round) and the apparatus in wireframe, side by side (landscape) or stacked (portrait)
   const land = w > h;
-  const sR = land ? Math.min(h * 0.44, w * 0.28) : Math.min(w * 0.44, h * 0.27);
-  const scope = land ? { x: w * 0.33 - sR, y: h / 2 - sR, w: sR * 2, h: sR * 2 } : { x: w / 2 - sR, y: h * 0.31 - sR, w: sR * 2, h: sR * 2 };
-  const bR = land ? Math.min(h * 0.26, w * 0.15) : Math.min(w * 0.3, h * 0.17);
-  const ball = land ? { cx: w * 0.81, cy: h * 0.4, r: bR } : { cx: w * 0.36, cy: h * 0.77, r: bR };
-  const zr = Math.max(30, Math.min(44, h * 0.09));
-  const zb = land ? { cx: w * 0.81, cy: Math.min(h * 0.4 + bR + zr + 24, h - zr - 12), r: zr } : { cx: w * 0.8, cy: h * 0.77, r: Math.min(56, w * 0.11) };
-  return { scope, ball, zb };
+  const sR = land ? Math.min(h * 0.44, w * 0.27) : Math.min(w * 0.44, h * 0.25);
+  const scope = land ? { x: w * 0.3 - sR, y: h / 2 - sR, w: sR * 2, h: sR * 2 } : { x: w / 2 - sR, y: h * 0.29 - sR, w: sR * 2, h: sR * 2 };
+  const bR = land ? Math.min(h * 0.34, w * 0.19) : Math.min(w * 0.34, h * 0.18);
+  const rig = land ? { cx: w * 0.76, cy: h * 0.5, r: bR } : { cx: w / 2, cy: h * 0.76, r: bR };
+  return { scope, rig };
 }
 let LY = layout();
 function where(x, y) {
-  if (ROLE !== 'tablet') return S.view === 'scope' ? 'sky' : S.view === '3d' ? 'cam' : 'ball';
-  const b = LY.ball; if (b && Math.hypot(x - b.cx, y - b.cy) < b.r * 1.35) return 'ball';
+  if (ROLE !== 'tablet') return S.view === 'scope' ? 'sky' : S.view === '3d' || S.view === 'app' ? 'cam' : 'ball';
+  const b = LY.rig; if (b && Math.hypot(x - b.cx, y - b.cy) < b.r * 1.35) return 'ball';
   return 'sky';
 }
 function dragBy(kind, dx, dy) {
-  if (kind === 'cam') { view3.yaw -= dx * 0.005; view3.pitch = Math.max(-1.5, Math.min(1.5, view3.pitch + dy * 0.005)); return; }
-  if (kind === 'sky') {
-    const sz = ROLE === 'tablet' ? LY.scope.w / 2 : Math.min(innerWidth, innerHeight) / 2;
-    const k = Math.atan(Math.tan(aim.fov * D2R / 2) / sz) / D2R; // degrees per pixel at the centre
-    aim.az -= dx * k / Math.max(0.2, Math.cos(aim.el * D2R)); aim.el += dy * k;
-  } else { // the ball rolls with the finger, like a trackball: its surface follows the drag
-    const r = ROLE === 'tablet' ? LY.ball.r : Math.min(innerWidth, innerHeight) * 0.3;
-    const k = 57.3 / r * 0.9;
-    aim.az -= dx * k; aim.el += dy * k;
+  if (kind === 'cam') {
+    const v = S.view === '3d' ? view3 : orbit;
+    v.yaw -= dx * 0.005; v.pitch = clamp(v.pitch + dy * 0.005, -1.4, 1.4); return;
   }
-  clampAim(); aimChanged();
+  if (kind === 'sky') {
+    const sz = ROLE === 'tablet' ? LY.scope.w / 2 : Math.min(VW, VH) / 2;
+    const k = Math.atan(Math.tan(tgt.fov * D2R / 2) / sz) / D2R; // degrees per pixel at the centre
+    tgt.az -= dx * k / Math.max(0.2, Math.cos(tgt.el * D2R)); tgt.el += dy * k;
+  } else { // the dome follows the finger: push it right and the slit moves right
+    const r = ROLE === 'tablet' ? LY.rig.r : Math.min(VW, VH) * 0.3;
+    const k = 57.3 / r * 0.9;
+    tgt.az -= dx * k; tgt.el += dy * k;
+  }
+  clampTgt(); aimChanged();
 }
-function zoomBy(f) { if (S.view === '3d' && ROLE !== 'tablet') { view3.dist = Math.max(1.3, Math.min(20, view3.dist * f)); return; } aim.fov *= f; clampAim(); aimChanged(); }
+function zoomBy(f) {
+  if (ROLE !== 'tablet' && (S.view === '3d' || S.view === 'app')) { const v = S.view === '3d' ? view3 : orbit; v.dist = clamp(v.dist * f, 1.3, 20); return; }
+  tgt.fov *= f; clampTgt(); aimChanged();
+}
 if (ROLE !== 'display') {
   canvas.addEventListener('pointerdown', (e) => {
     canvas.setPointerCapture(e.pointerId);
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (ptrs.size === 1) gesture = { t0: performance.now(), moved: 0, kind: where(e.clientX, e.clientY) };
-    else { gesture && (gesture.moved = 99); pinch0 = null; }
+    if (ptrs.size === 1) gesture = { kind: where(e.clientX, e.clientY) };
+    else pinch0 = null;
   });
   canvas.addEventListener('pointermove', (e) => {
     const p = ptrs.get(e.pointerId); if (!p) return;
@@ -591,45 +587,36 @@ if (ROLE !== 'display') {
       const [a, b] = [...ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
       if (pinch0) zoomBy(pinch0 / d); pinch0 = d; return;
     }
-    if (!gesture) return;
-    gesture.moved += Math.abs(dx) + Math.abs(dy);
-    dragBy(gesture.kind, dx, dy);
+    if (gesture) dragBy(gesture.kind, dx, dy);
   });
-  const up = (e) => {
-    if (!ptrs.has(e.pointerId)) return;
-    ptrs.delete(e.pointerId); pinch0 = null;
-    if (!ptrs.size && gesture) { if (gesture.moved < 6 && performance.now() - gesture.t0 < 400 && gesture.kind === 'sky' && ROLE !== 'tablet') zap(); gesture = null; }
-  };
+  const up = (e) => { if (!ptrs.has(e.pointerId)) return; ptrs.delete(e.pointerId); pinch0 = null; if (!ptrs.size) gesture = null; };
   canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
   canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomBy(Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))); }, { passive: false });
   addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
-    if (e.code === 'Space' || e.key === 'z') { e.preventDefault(); zap(); }
     const k = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
-    if (k) { aim.az += k[0] * aim.fov * 0.05; aim.el += k[1] * aim.fov * 0.05; clampAim(); aimChanged(); }
+    if (k) { e.preventDefault(); tgt.az += k[0] * Math.max(2, tgt.fov * 0.1); tgt.el += k[1] * Math.max(2, tgt.fov * 0.1); clampTgt(); aimChanged(); }
   });
 }
-$('zap').addEventListener('pointerdown', (e) => { e.preventDefault(); zap(); });
 addEventListener('keydown', (e) => { if (e.key === 'f' && ROLE === 'display') document.documentElement.requestFullscreen?.(); });
 
 // ---------- panel (studio) ----------
-const SL = [['dot', 'Dot size', 1, 12, () => S.dot + ' px'], ['lens', 'Lens', 15, 80, () => S.lens + '°'], ['body', 'Body grey', 0, 60, () => S.body + '%'], ['front', 'Front faces', 0, 359, () => dirName(S.front) + ' ' + S.front + '°'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
-const SEG = [['view', 'View', [['scope', 'Telescope'], ['3d', '3D'], ['360', '360'], ['ball', 'Sphere']]], ['look', 'On sphere', [['eye', 'Eye + lens'], ['sky', 'Whole sky']]],
-  ['show', 'Objects', [['all', 'All'], ['pay', 'Payloads'], ['deb', 'Debris'], ['junk', 'Not payloads']]], ['shadow', 'Earth shadow', [['0', 'Ignore'], ['1', 'Dim']]], ['labels', 'Readout', [['1', 'On'], ['0', 'Off']]]];
+const SL = [['dot', 'Dot size', 1, 20, () => S.dot], ['tone', 'Paint', 20, 100, () => S.tone + '%'], ['seams', 'Seams', 4, 16, () => S.seams], ['screen', 'Screen', 15, 50, () => S.screen + '%'],
+  ['front', 'Front faces', 0, 359, () => dirName(S.front) + ' ' + S.front + '°'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
+const SEG = [['view', 'View', [['app', 'Apparatus'], ['scope', 'Telescope'], ['360', '360'], ['ball', 'Sphere'], ['3d', 'Earth']]],
+  ['show', 'Objects', [['all', 'All'], ['pay', 'Payloads'], ['deb', 'Debris'], ['junk', 'Not payloads']]], ['shadow', 'Earth shadow', [['0', 'Ignore'], ['1', 'Dim']]], ['cross', 'Cross', [['1', 'On'], ['0', 'Off']]]];
 function panelBuild() {
   if (ROLE !== 'studio') return;
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
     + `<div class="row"><label>Field</label><input type="range" id="fov" min="0" max="100" step="0.5"><output id="fovo"></output></div>`
     + TYPES.map(([n, k]) => `<div class="row"><label>${n}</label><input type="color" data-c="${k}" style="grid-column:2/4;width:100%;height:22px;padding:0;border:1px solid var(--faint);background:none"></div>`).join('')
-    + `<div class="row"><label></label><div class="seg"><button id="again">Put all back</button><button id="copy">Copy display URL</button></div></div>
-    <div class="row"><label></label><div class="seg"><button id="reset">Defaults</button></div></div>
+    + `<div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button><button id="reset">Defaults</button></div></div>
     <div class="note" id="pnote"></div>`;
   $('panel').querySelectorAll('.seg[data-k]').forEach((g) => g.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S[g.dataset.k] = b.dataset.v; save(); panelSync(); resize(); }));
   $('panel').querySelectorAll('input[data-k]').forEach((i) => i.addEventListener('input', () => { S[i.dataset.k] = +i.value; if (i.dataset.k === 'spd') { sendClock(); } save(); panelSync(); }));
   $('panel').querySelectorAll('input[data-c]').forEach((i) => i.addEventListener('input', () => { S[i.dataset.c] = i.value.slice(1); save(); }));
-  $('fov').addEventListener('input', (e) => { aim.fov = 0.5 * Math.pow(280, +e.target.value / 100); clampAim(); aimChanged(); panelSync(); });
-  $('again').onclick = putBack;
+  $('fov').addEventListener('input', (e) => { tgt.fov = 0.5 * Math.pow(200, +e.target.value / 100); clampTgt(); aimChanged(); panelSync(); });
   $('copy').onclick = () => { const q = new URLSearchParams(); if (ROOM) q.set('room', ROOM); const u = location.origin + '/telescope-display' + (q.toString() ? '?' + q : ''); navigator.clipboard?.writeText(u).then(() => { $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy display URL'; }, 1500); }, () => { $('copy').textContent = u; }); };
   $('reset').onclick = () => { S = { ...DEF }; save(); panelSync(); resize(); };
   $('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').classList.toggle('on'); };
@@ -639,91 +626,152 @@ function panelSync() {
   $('panel').querySelectorAll('.seg[data-k]').forEach((g) => g.querySelectorAll('button').forEach((b) => b.classList.toggle('on', S[g.dataset.k] === b.dataset.v)));
   for (const [k, , , , f] of SL) { const i = $('panel').querySelector(`input[data-k="${k}"]`); i.value = S[k]; $('panel').querySelector(`output[data-o="${k}"]`).textContent = f(); }
   $('panel').querySelectorAll('input[data-c]').forEach((i) => { i.value = '#' + S[i.dataset.c]; });
-  $('fov').value = Math.log(aim.fov / 0.5) / Math.log(280) * 100; $('fovo').textContent = (aim.fov < 10 ? aim.fov.toFixed(1) : Math.round(aim.fov)) + '°';
-  $('pnote').innerHTML = `Standing in ${SITE.name} (${SITE.lat.toFixed(4)}° N, ${SITE.lon.toFixed(4)}° E), looking up. Every object is a real tracked object from CelesTrak (US Space Force public catalogue), placed from its latest orbital elements (Kepler + J2, about 15 km near the element epoch). No stars, Sun or Moon.<br><br>Drag the view to aim (or roll the ball in 360 / Sphere), wheel or pinch to zoom, click or Space to Zap whatever is inside the small circle at the cross.<br><br>Relay: ${Q.has('solo') ? 'off (solo)' : relayOk ? 'connected' : 'connecting…'}${ROOM ? ', room ' + ROOM : ''}. Tablet: /telescope-tablet${ROOM ? '?room=' + ROOM : ''}.`;
+  $('fov').value = Math.log(tgt.fov / 0.5) / Math.log(200) * 100; $('fovo').textContent = (tgt.fov < 10 ? tgt.fov.toFixed(1) : Math.round(tgt.fov)) + '°';
+  $('pnote').innerHTML = `An observatory standing in ${SITE.name} (${SITE.lat.toFixed(4)}° N, ${SITE.lon.toFixed(4)}° E). Every object is a real tracked object from CelesTrak (US Space Force public catalogue), placed from its latest orbital elements (Kepler + J2), reloaded every 2 hours. No stars, Sun or Moon.<br><br>Front faces: the compass direction the audience side of the sphere faces in the room.<br><br>Drag to aim (Telescope, 360, Sphere) or to look around (Apparatus, Earth); wheel or pinch to zoom; arrow keys move the telescope. Click once for the motor sound.<br><br>Relay: ${Q.has('solo') ? 'off (solo)' : relayOk ? 'connected' : 'connecting…'}${ROOM ? ', room ' + ROOM : ''}. Tablet: /telescope-tablet${ROOM ? '?room=' + ROOM : ''}.`;
 }
 
 // ---------- size ----------
 const PR = ROLE === 'display' ? 1 : Math.min(devicePixelRatio || 1, 2);
 function resize() {
-  // the real visible size (phones: the address bar and rotation change it), and both canvases styled to exactly that,
-  // so nothing is stretched
+  // the real visible size (phones: the address bar and rotation change it), and both canvases styled to exactly that
   const vv = window.visualViewport, w = Math.round(vv ? vv.width : innerWidth), h = Math.round(vv ? vv.height : innerHeight);
   VW = w; VH = h;
   renderer.setPixelRatio(PR); renderer.setSize(w, h, true);
   over.width = Math.round(w * PR); over.height = Math.round(h * PR); over.style.width = w + 'px'; over.style.height = h + 'px';
-  ballCam.aspect = cam3.aspect = w / h; ballCam.updateProjectionMatrix(); cam3.updateProjectionMatrix();
+  ballCam.aspect = cam3.aspect = appCam.aspect = scopeCam.aspect = w / h;
+  for (const c of [ballCam, cam3, appCam, scopeCam]) c.updateProjectionMatrix();
   LY = layout();
-  if (ROLE === 'tablet') { const z = $('zap'); z.style.left = (LY.zb.cx - LY.zb.r) + 'px'; z.style.top = (LY.zb.cy - LY.zb.r) + 'px'; z.style.width = z.style.height = LY.zb.r * 2 + 'px'; }
 }
 addEventListener('resize', resize); window.visualViewport?.addEventListener('resize', resize);
 addEventListener('orientationchange', () => { setTimeout(resize, 150); setTimeout(resize, 600); });
 
-// ---------- tablet: the trackball, in lines ----------
-function drawBall(ctx, b) {
-  // the sphere seen from the front, in lines: the housing seams and the lens, turned to where the telescope looks
+// ---------- tablet: the eyepiece in lines (gnomonic: straight lines stay straight) ----------
+function drawScope(ctx, w, h) {
+  const B = basis(), cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2, F = R / Math.tan(mnt.fov * D2R / 2), px = Math.max(1, R / 400);
   ctx.save();
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2;
-  ctx.beginPath(); ctx.arc(b.cx, b.cy, b.r, 0, TAU); ctx.stroke();
-  const lo = (S.front - aim.az) * D2R, el = aim.el * D2R, cl = Math.cos(lo), sl = Math.sin(lo), ce = Math.cos(el), se = Math.sin(el);
-  const toView = (q) => { // ball frame (lens at +z) → world, the inverse of the eye shader's turn
-    const y = ce * q[1] + se * q[2], z1 = -se * q[1] + ce * q[2];
-    return [cl * q[0] + sl * z1, y, -sl * q[0] + cl * z1];
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.clip();
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+  const hy = cy + Math.tan(mnt.el * D2R) * F; // the horizon
+  if (hy < h + 2) { ctx.strokeStyle = '#ffffff90'; ctx.lineWidth = px; ctx.beginPath(); ctx.moveTo(0, hy); ctx.lineTo(w, hy); ctx.stroke(); }
+  let inView = 0;
+  const rr = 2 * px;
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = px; ctx.beginPath();
+  for (const j of cand) {
+    if (dirU[j] <= 0 || !showType(objs[j].type)) continue;
+    const z = dirE[j] * B.f[0] + dirN[j] * B.f[1] + dirU[j] * B.f[2];
+    if (z <= 0.01) continue;
+    const x = cx + (dirE[j] * B.r[0] + dirN[j] * B.r[1] + dirU[j] * B.r[2]) / z * F;
+    const y = cy - (dirE[j] * B.u[0] + dirN[j] * B.u[1] + dirU[j] * B.u[2]) / z * F;
+    if (x < -rr || x > w + rr || y < -rr || y > h + rr) continue;
+    inView++;
+    if (j === near) continue;
+    ctx.moveTo(x + rr, y); ctx.arc(x, y, rr, 0, TAU);
+  }
+  ctx.stroke();
+  if (near >= 0) { // the one under the cross: filled
+    const j = near, z = dirE[j] * B.f[0] + dirN[j] * B.f[1] + dirU[j] * B.f[2];
+    if (z > 0.01) { const x = cx + (dirE[j] * B.r[0] + dirN[j] * B.r[1] + dirU[j] * B.r[2]) / z * F, y = cy - (dirE[j] * B.u[0] + dirN[j] * B.u[1] + dirU[j] * B.u[2]) / z * F; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, rr * 1.6, 0, TAU); ctx.fill(); }
+  }
+  if (S.cross === '1') {
+    const g = R * 0.05, L = R * 0.16;
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = px; ctx.beginPath();
+    ctx.moveTo(cx - L, cy); ctx.lineTo(cx - g, cy); ctx.moveTo(cx + g, cy); ctx.lineTo(cx + L, cy);
+    ctx.moveTo(cx, cy - L); ctx.lineTo(cx, cy - g); ctx.moveTo(cx, cy + g); ctx.lineTo(cx, cy + L); ctx.stroke();
+  }
+  ctx.restore();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = px; ctx.beginPath(); ctx.arc(cx, cy, R - px / 2, 0, TAU); ctx.stroke();
+  // readout under the eyepiece
+  ctx.fillStyle = '#ffffff90'; ctx.font = `${Math.round(11 * px)}px Pretendard, sans-serif`; ctx.textAlign = 'center';
+  ctx.fillText(`${dirName(mnt.az)} ${azN().toFixed(1)}°   ${mnt.el.toFixed(1)}°   ${mnt.fov < 10 ? mnt.fov.toFixed(1) : Math.round(mnt.fov)}°`, cx, cy + R * 0.9);
+  return inView;
+}
+
+// ---------- tablet: the apparatus in wireframe, see-through (far side faint), seen from the audience, a little above ----------
+function drawRig(ctx, b) {
+  const tilt = 18 * D2R, ct = Math.cos(tilt), st = Math.sin(tilt);
+  const proj = (p) => [b.cx + p[0] * b.r, b.cy - (p[1] * ct - p[2] * st) * b.r, p[1] * st + p[2] * ct];
+  const FRONT = '#ffffffe6', BACK = '#ffffff30';
+  // a path, split into front and back parts
+  const path = (f, n) => {
+    for (const side of [1, -1]) {
+      ctx.strokeStyle = side > 0 ? FRONT : BACK; ctx.beginPath(); let on = false;
+      for (let i = 0; i <= n; i++) { const q = proj(f(i / n)); if (q[2] * side >= 0) { on ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); on = true; } else on = false; }
+      ctx.stroke();
+    }
   };
-  const sph = (blat, blon) => toView([Math.cos(blat) * Math.sin(blon), Math.sin(blat), Math.cos(blat) * Math.cos(blon)]);
-  const path = (f, n) => { let on = false; ctx.beginPath(); for (let i = 0; i <= n; i++) { const p = f(i / n); if (p[2] > 0) { const x = b.cx + p[0] * b.r, y = b.cy - p[1] * b.r; on ? ctx.lineTo(x, y) : ctx.moveTo(x, y); on = true; } else on = false; } ctx.stroke(); };
-  ctx.strokeStyle = '#ffffff40'; ctx.lineWidth = 1;
-  for (let la = -60; la <= 60; la += 30) if (la) path((t) => sph(la * D2R, t * TAU), 96);
-  for (let lo2 = 0; lo2 < 360; lo2 += 30) path((t) => sph((t - 0.5) * Math.PI, lo2 * D2R), 72);
-  ctx.strokeStyle = '#ffffff90'; path((t) => sph(0, t * TAU), 120); // the trench
-  // the lens: three rings around its axis
-  const ring = (deg) => path((t) => { const r = deg * D2R; return toView([Math.sin(r) * Math.cos(t * TAU), Math.sin(r) * Math.sin(t * TAU), Math.cos(r)]); }, 96);
-  const L = S.lens;
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.6; ring(L + 6.2);
-  ctx.lineWidth = 1; ring(L); ring(L * 0.7);
-  const c = toView([0, 0, 1]);
-  if (c[2] > 0) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.cx + c[0] * b.r, b.cy - c[1] * b.r, 2.5, 0, TAU); ctx.fill(); }
-  // the pedestal below
-  ctx.strokeStyle = '#ffffff70'; path((t) => [Math.cos(-58 * D2R) * Math.sin((t - 0.5) * Math.PI), Math.sin(-58 * D2R), Math.cos(-58 * D2R) * Math.cos((t - 0.5) * Math.PI)], 48);
+  const sph = (la, lo, r = 1) => [r * Math.cos(la) * Math.sin(lo), r * Math.sin(la), r * Math.cos(la) * Math.cos(lo)];
+  ctx.save(); ctx.lineWidth = 1;
+  ctx.strokeStyle = FRONT; ctx.beginPath(); ctx.ellipse(b.cx, b.cy, b.r, b.r, 0, 0, TAU); ctx.stroke(); // outline
+  path((t) => sph(0, t * TAU), 160); // the bearing
+  path((t) => sph(-3.6 * D2R, t * TAU), 160);
+  const n = Math.max(3, S.seams), pw = TAU / n;
+  for (let k = 0; k < n; k++) { const lo = -pw / 2 + k * pw; path((t) => sph(-t * Math.PI / 2, lo), 40); } // pedestal seams
+  // audience screen
+  const capA = Math.asin(clamp(S.screen / 100, 0.1, 0.6)), lat = -(capA + 5.5 * D2R);
+  const ax = [0, Math.sin(lat), Math.cos(lat)], e1 = [1, 0, 0], e2 = [0, Math.cos(lat), -Math.sin(lat)];
+  path((t) => { const a = t * TAU, s = Math.sin(capA), c = Math.cos(capA); return [ax[0] * c + (e1[0] * Math.cos(a) + e2[0] * Math.sin(a)) * s, ax[1] * c + (e1[1] * Math.cos(a) + e2[1] * Math.sin(a)) * s, ax[2] * c + (e1[2] * Math.cos(a) + e2[2] * Math.sin(a)) * s]; }, 96);
+  // dome: slit edges and the telescope, turned by the mount
+  const lo = (S.front - mnt.az) * D2R, cl = Math.cos(lo), sl = Math.sin(lo);
+  const D = (p) => [cl * p[0] + sl * p[2], p[1], -sl * p[0] + cl * p[2]]; // dome frame → world
+  const half = Math.sin(pw / 2), ext = Math.sin(14 * D2R);
+  for (const sgn of [-1, 1]) { const x0 = sgn * half, R = Math.sqrt(1 - x0 * x0), T = Math.PI / 2 + Math.asin(ext / R); path((t) => D([x0, R * Math.sin(t * T), R * Math.cos(t * T)]), 64); }
+  const el = mnt.el * D2R, ce = Math.cos(el), se = Math.sin(el);
+  const T = (p) => D([p[0], p[1] * ce + p[2] * se, -p[1] * se + p[2] * ce]); // telescope frame → world
+  const TR = half * 0.76, ringAt = (r, z) => path((t) => T([r * Math.cos(t * TAU), r * Math.sin(t * TAU), z]), 64);
+  ringAt(TR, 0.9); ringAt(TR * 0.92, 0.5); ringAt(TR * 0.84, 0.22);
+  for (let i = 0; i < 4; i++) { const a = i * TAU / 4 + TAU / 8; path((t) => T([TR * (0.92 - 0.08 * t) * Math.cos(a), TR * (0.92 - 0.08 * t) * Math.sin(a), 0.9 - 0.68 * t]), 4); }
+  // where it looks: a thin line out of the lens
+  path((t) => T([0, 0, 0.9 + t * 0.35]), 6);
   ctx.restore();
 }
 
 // ---------- frame ----------
 let lastWall = performance.now();
 function frame() {
-  const now = performance.now(), dtw = Math.min(0.25, (now - lastWall) / 1000); lastWall = now;
+  const now = performance.now(), dtw = Math.min(0.1, (now - lastWall) / 1000); lastWall = now;
   if (clock) simT = ORB.clockNow(clock); else simT += dtw * 1000 * SPEED();
-  step(); flushAim(); render();
+  slew(dtw); step(); flushAim(); updateAudio(); render();
   requestAnimationFrame(frame);
+}
+function renderEye() {
+  updateSky(); aimCam(eyeCam);
+  renderer.setRenderTarget(eyeRT); renderer.render(skyScene, eyeCam); renderer.setRenderTarget(null);
+}
+function renderFrame(target) {
+  buildObs(); poseObs(); renderEye(); capture();
+  renderer.setRenderTarget(target); renderer.render(frameScene, flatCam); renderer.setRenderTarget(null);
 }
 function render() {
   const w = VW, h = VH;
   octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, over.width, over.height);
-  EU.uLens.value = S.lens; EU.uAz.value = aim.az; EU.uEl.value = aim.el; EU.uBody.value = S.body; EU.uMode.value = S.look === 'sky' ? 1 : 0;
-  EU.uOff.value = S.front; EU.uFov.value = aim.fov; EU.uTime.value = performance.now() / 1000;
-  { const lz = fx.length ? performance.now() - fx[fx.length - 1].t0 : 1e9; EU.uZap.value = Math.max(0, 1 - lz / 900); }
+  if (loaded) updateCard();
   let inView = 0;
-  const needFrame = S.view === '360' || S.view === 'ball';
-  if (needFrame) {
-    if (S.look === 'sky') { drawSky360(skyX, 1920, 1080); skyT.needsUpdate = true; }
-    else { inView = drawScope(lensX, 1024, 1024, 'color', true); lensT.needsUpdate = true; }
-  }
   if (ROLE === 'tablet') {
     renderer.clear();
     octx.setTransform(PR, 0, 0, PR, 0, 0);
     octx.fillStyle = '#000'; octx.fillRect(0, 0, w, h);
     const sc = LY.scope;
-    octx.save(); octx.translate(sc.x, sc.y); inView = drawScope(octx, sc.w, sc.h, 'lines', true); octx.restore();
-    drawBall(octx, LY.ball);
+    octx.save(); octx.translate(sc.x, sc.y); inView = drawScope(octx, sc.w, sc.h); octx.restore();
+    drawRig(octx, LY.rig);
   } else if (S.view === 'scope') {
-    renderer.clear();
-    octx.setTransform(1, 0, 0, 1, 0, 0);
-    inView = drawScope(octx, over.width, over.height, 'color', false);
+    updateSky(S.dot * 0.45 / (h / 2)); aimCam(scopeCam); scopeCam.aspect = w / h; scopeCam.updateProjectionMatrix();
+    renderer.render(skyScene, scopeCam);
+    if (S.cross === '1') {
+      const s = Math.min(w, h) / 2 * PR, cx = over.width / 2, cy = over.height / 2, g = s * 0.05, L = s * 0.16;
+      octx.strokeStyle = '#ffffffd9'; octx.lineWidth = PR; octx.beginPath();
+      octx.moveTo(cx - L, cy); octx.lineTo(cx - g, cy); octx.moveTo(cx + g, cy); octx.lineTo(cx + L, cy);
+      octx.moveTo(cx, cy - L); octx.lineTo(cx, cy - g); octx.moveTo(cx, cy + g); octx.lineTo(cx, cy + L); octx.stroke();
+    }
   } else if (S.view === '360') {
-    renderer.render(frameScene, flatCam);
+    renderFrame(null);
   } else if (S.view === 'ball') {
-    ballCam.position.set(Math.cos(ballView.pitch) * Math.sin(ballView.yaw), Math.sin(ballView.pitch), Math.cos(ballView.pitch) * Math.cos(ballView.yaw)).multiplyScalar(ballView.dist);
+    renderFrame(frameRT);
+    ballCam.position.set(Math.cos(orbit.pitch) * Math.sin(orbit.yaw), Math.sin(orbit.pitch), Math.cos(orbit.pitch) * Math.cos(orbit.yaw)).multiplyScalar(orbit.dist);
     ballCam.lookAt(0, 0, 0); renderer.render(ballScene, ballCam);
+  } else if (S.view === 'app') {
+    buildObs(); poseObs(); renderEye();
+    appCam.position.set(Math.cos(orbit.pitch) * Math.sin(orbit.yaw), Math.sin(orbit.pitch), Math.cos(orbit.pitch) * Math.cos(orbit.yaw)).multiplyScalar(orbit.dist);
+    appCam.lookAt(0, 0, 0); renderer.render(obsScene, appCam);
   } else if (S.view === '3d') {
     update3d();
     cam3.position.set(Math.cos(view3.pitch) * Math.sin(view3.yaw), Math.sin(view3.pitch), Math.cos(view3.pitch) * Math.cos(view3.yaw)).multiplyScalar(view3.dist);
@@ -735,16 +783,15 @@ function info(inView) {
   if (ROLE === 'display') return;
   if (!loaded) { $('info').textContent = meta?.errors?.length ? 'Could not load the catalogue (' + meta.errors.join(', ') + '). Retrying in 10 minutes.' : 'Loading every tracked object…'; return; }
   const d = new Date(simT), t = d.toLocaleString('en-GB', { timeZone: 'Asia/Seoul', hour12: false, year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const z = zapped.size ? `\nZapped ${zapped.size}` + (log[0] ? `, last: ${log[0].name || TYPE_NAME[log[0].type] + ' ' + log[0].norad}` : '') : '';
-  if (ROLE === 'tablet') { $('info').textContent = `${above.toLocaleString()} above ${SITE.name} now · ${inView.toLocaleString()} in view` + z; return; }
+  if (ROLE === 'tablet') { $('info').textContent = `${above.toLocaleString()} above ${SITE.name} now · ${inView.toLocaleString()} in view`; return; }
   $('info').textContent = `Above ${SITE.name} now: ${above.toLocaleString()} of ${objs.length.toLocaleString()} tracked objects (payloads ${aboveBy[0].toLocaleString()}, rocket bodies ${aboveBy[1].toLocaleString()}, debris ${aboveBy[2].toLocaleString()})`
-    + (S.view === 'scope' || S.view === '360' && S.look === 'eye' || S.view === 'ball' && S.look === 'eye' ? `\nIn the view: ${inView.toLocaleString()}` : '')
-    + `\n${t} KST${SPEED() > 1 ? ' · ' + SPEED().toLocaleString() + '×' : ''}` + z;
+    + `\nLooking ${dirName(mnt.az)} ${azN().toFixed(1)}°, ${mnt.el.toFixed(1)}° up, ${mnt.fov < 10 ? mnt.fov.toFixed(1) : Math.round(mnt.fov)}° field`
+    + `\n${t} KST${SPEED() > 1 ? ' · ' + SPEED().toLocaleString() + '×' : ''}`;
 }
 
 panelBuild(); resize(); panelSync();
-if (TEST) window.__tel = { ingest, render, step, S, aim, zap, target, objs: () => objs, cand: () => cand, zapped, setSim: (t) => { simT = t; lastFull = -1e9; }, resize, above: () => above };
-else load();
+if (TEST) window.__tel = { scopeCam, eyeCam, ingest, render, step, S, tgt, mnt, target, objs: () => objs, cand: () => cand, setSim: (t) => { simT = t; lastFull = -1e9; }, resize, above: () => above, snap: () => { Object.assign(mnt, { az: tgt.az, el: tgt.el, fov: tgt.fov, vAz: 0, vEl: 0 }); } };
+load();
 requestAnimationFrame(frame);
 </script>
 </body>
