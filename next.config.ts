@@ -26,6 +26,11 @@ const nextConfig: NextConfig = {
         source: `/${page}`,
         destination: "/refraction/index.html",
       })),
+      // Cleanup: only real debris, big enough to cover the Earth; a tap cleans one piece for good
+      ...["cleanup", "cleanup-display", "cleanup-tablet"].map((page) => ({
+        source: `/${page}`,
+        destination: "/cleanup/index.html",
+      })),
       // the audience's launch tablet
       { source: "/entangled-tablet", destination: "/entangled-tablet/index.html" },
     ];
