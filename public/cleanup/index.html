@@ -574,7 +574,7 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
   const mqtt = m.default || m;
   mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
   mq.on('close', () => { relayOk = false; }); mq.on('offline', () => { relayOk = false; });
-  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/clean', TOPIC + '/cleaned', TOPIC + '/back', TOPIC + '/look', TOPIC + '/clock', TOPIC + '/settings']); if (ROLE === 'studio') sendSettings(); });
+  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/clean', TOPIC + '/cleaned', TOPIC + '/back', TOPIC + '/look', TOPIC + '/clock', TOPIC + '/settings']); if (ROLE === 'studio') sendSettings(); if (ROLE === 'tablet') lookDirty = true; }); // the tablet's view is the sphere's view from the moment it opens
   mq.on('message', (t, msg) => {
     let d; try { d = JSON.parse(msg.toString()); } catch { return; }
     if (!d || d.by === ME) return;
@@ -594,7 +594,7 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
     } else if (k === '/back') {
       if (Number.isFinite(d.n) && d.gen === gen) comeBack(d.n, wallS(), false);
     } else if (k === '/look') {
-      if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size) rot360.fromArray(d.q).normalize();
+      if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size) { rot360.fromArray(d.q).normalize(); followLook(); }
     } else if (k === '/settings') {
       applySettings(d.s);
     } else if (k === '/clock') {
@@ -604,11 +604,13 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
 }).catch(() => {});
 
 // the tablet's view sets the LED frame (the point facing the viewer becomes the frame centre)
-let camQ = null, lookDirty = false;
+let camQ = null, lookDirty = false, adopt = false;
+// another page turned the sphere: the 3D / lines camera turns to look at the same point (and doesn't send it back)
+function followLook() { if (S.view !== '3d' && S.view !== 'lines') return; const v = new THREE.Vector3(1, 0, 0).applyQuaternion(rot360); view.yaw = Math.atan2(v.x, v.z); view.pitch = Math.asin(Math.max(-1, Math.min(1, v.y))); adopt = true; }
 function lookFromCamera() {
   const v = camera.position.clone().normalize(), up = camera.up.clone().applyQuaternion(camera.quaternion).normalize(), z = new THREE.Vector3().crossVectors(v, up);
   const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(v, up, z));
-  if (!camQ) { camQ = q.clone(); return; }
+  if (!camQ || adopt) { camQ = q.clone(); adopt = false; if (ROLE === 'tablet' && !lookT) { rot360.copy(q); lookDirty = true; } else return; }
   if (q.angleTo(camQ) > 1e-4) { camQ.copy(q); rot360.copy(q); lookDirty = true; }
   if (lookDirty && performance.now() - lookT >= 50) { lookDirty = false; sendLook(true); }
 }
