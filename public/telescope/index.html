@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Telescope</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  :root { --fg: #fff; --dim: #ffffff73; --faint: #ffffff2e; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--fg); font: 13px/1.45 Pretendard, -apple-system, sans-serif; font-weight: 400; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+  #o { pointer-events: none; }
+  #info { position: fixed; left: 20px; bottom: 16px; color: var(--dim); font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre; }
+  #toggle { position: fixed; top: 16px; right: 16px; background: none; border: 1px solid var(--faint); color: var(--dim); font: inherit; padding: 6px 12px; border-radius: 0; cursor: pointer; }
+  #toggle.on { color: var(--fg); border-color: var(--fg); }
+  #panel { position: fixed; top: 56px; right: 16px; width: 300px; max-height: calc(100vh - 80px); overflow-y: auto; overflow-x: hidden; background: #000000d9; border: 1px solid var(--faint); padding: 14px 16px; display: none; }
+  #panel.on { display: block; }
+  .row { display: grid; grid-template-columns: 92px 1fr 52px; align-items: center; gap: 8px; margin: 7px 0; }
+  .row label { color: var(--dim); }
+  .row output { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .seg { grid-column: 2 / 4; display: flex; gap: 0; }
+  .seg button { flex: 1; background: none; color: var(--dim); border: 1px solid var(--faint); margin-left: -1px; padding: 4px 0; font: inherit; cursor: pointer; }
+  .seg button.on { color: #000; background: var(--fg); border-color: var(--fg); }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; background: none; height: 18px; }
+  input[type=range]::-webkit-slider-runnable-track { height: 1px; background: var(--dim); }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 11px; height: 11px; border-radius: 50%; background: #000; border: 1px solid var(--fg); margin-top: -5px; }
+  input[type=range]::-moz-range-track { height: 1px; background: var(--dim); }
+  input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: #000; border: 1px solid var(--fg); }
+  .note { color: var(--dim); font-size: 12px; margin-top: 12px; line-height: 1.5; }
+  #card { position: fixed; left: 20px; top: 16px; max-width: 340px; color: var(--fg); font-variant-numeric: tabular-nums; pointer-events: none; opacity: 0; transition: opacity .4s; line-height: 1.6; background: #000000d9; padding: 10px 14px 12px; margin: -10px -14px; }
+  #card.on { opacity: 1; }
+  #card .nm { font-size: 17px; margin-bottom: 6px; }
+  #card .r { display: grid; grid-template-columns: 84px 1fr; gap: 8px; }
+  #card .r span:first-child { color: var(--dim); }
+  #zap { position: fixed; display: none; background: #000; color: var(--fg); border: 1px solid var(--fg); font: inherit; font-size: 15px; letter-spacing: .12em; border-radius: 50%; cursor: pointer; touch-action: none; }
+  #zap:active { background: var(--fg); color: #000; }
+  body.tablet #zap { display: block; }
+  body.display #toggle, body.display #panel, body.display #info, body.display #card { display: none; }
+  body.tablet #toggle, body.tablet #panel { display: none; }
+  body.tablet #info { left: 16px; bottom: 12px; font-size: 12px; }
+  body.tablet #card { left: 16px; top: 12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<canvas id="o"></canvas>
+<div id="info"></div>
+<div id="card"></div>
+<button id="zap">ZAP</button>
+<button id="toggle">Settings</button>
+<div id="panel"></div>
+<script type="importmap">{ "imports": { "three": "/sphere-assets/vendor/three.module.min.js" } }</script>
+<script type="module">
+import * as THREE from 'three';
+import * as ORB from '/entangled/orbit.js';
+const { RE, D2R, TAU } = ORB;
+THREE.ColorManagement.enabled = false;
+
+// Telescope: the LED sphere as an imaginary apparatus, a big mechanical eye on a pedestal standing in Daejeon. Turning it
+// (like a trackball) points it at the real sky above Daejeon, and what it sees is only what people put up there: every
+// tracked payload, rocket body and piece of debris (CelesTrak, the US Space Force public catalogue), at its real
+// position now, seen from the ground. No stars, Sun or Moon (Intae, 2026-11-24): a telescope that looks back only at the
+// artificial objects. A cross sits at the centre of the view; Zap fires at whatever is under it.
+const Q = new URLSearchParams(location.search);
+const ROLE = location.pathname.includes('display') || Q.has('display') ? 'display' : location.pathname.includes('tablet') || Q.has('tablet') ? 'tablet' : 'studio';
+document.body.classList.add(ROLE);
+const TEST = location.hash.includes('test');
+const $ = (id) => document.getElementById(id);
+
+// ---------- where the telescope stands ----------
+// Daejeon, KAIST main campus (WGS84)
+const SITE = { name: 'Daejeon', lat: 36.3721, lon: 127.3604, h: 0.07 };
+const WGS_F = 1 / 298.257223563, WGS_E2 = WGS_F * (2 - WGS_F);
+const sφ = Math.sin(SITE.lat * D2R), cφ = Math.cos(SITE.lat * D2R), sλ = Math.sin(SITE.lon * D2R), cλ = Math.cos(SITE.lon * D2R);
+const Nrad = RE / Math.sqrt(1 - WGS_E2 * sφ * sφ);
+const OBS = [(Nrad + SITE.h) * cφ * cλ, (Nrad + SITE.h) * cφ * sλ, (Nrad * (1 - WGS_E2) + SITE.h) * sφ]; // Earth-fixed, km
+const EAST = [-sλ, cλ, 0], NORTH = [-sφ * cλ, -sφ * sλ, cφ], UP = [cφ * cλ, cφ * sλ, sφ];
+
+// ---------- settings ----------
+const DEF = { view: 'scope', look: 'eye', dot: 3, lens: 42, show: 'all', shadow: '0', ring: 1, spd: 0, labels: '1', c0: '3d8bff', c1: 'ffb21f', c2: 'ff2d6f', c3: 'b9c2cc', body: 22 };
+let S = { ...DEF };
+const KEY = 'telescope-v1';
+if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
+for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
+if (ROLE === 'display') S.view = '360';
+if (ROLE === 'tablet') S.view = 'tablet';
+const save = () => { if (ROLE === 'studio' && !TEST) { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} sendSettings(); } };
+const SPEED = () => Math.round(Math.pow(10, S.spd / 25)); // 1× .. 10,000×
+const TYPES = [['Payloads', 'c0'], ['Rocket bodies', 'c1'], ['Debris', 'c2'], ['Unknown', 'c3']];
+const showType = (t) => S.show === 'all' || (S.show === 'deb' ? t === 2 : S.show === 'pay' ? t === 0 : t !== 0);
+
+// aim: azimuth (0 = north, clockwise), elevation above the horizon, field of view across the lens (degrees)
+const aim = { az: 180, el: 35, fov: 60 };
+const clampAim = () => { aim.az = ((aim.az % 360) + 360) % 360; aim.el = Math.max(-5, Math.min(89.9, aim.el)); aim.fov = Math.max(0.5, Math.min(140, aim.fov)); };
+
+// ---------- catalogue ----------
+let objs = [], catQ = [], T0 = Date.now(), simT = Date.now(), loaded = false, meta = null;
+const zapped = new Map(); // norad → zap time (sim ms)
+let gen = 0;
+// per object: unit direction from Daejeon in east/north/up, range km, height km; only filled for objects near the sky
+let dirE, dirN, dirU, rng, alt, cand = [], above = 0, aboveBy = [0, 0, 0, 0], lastFull = -1e9;
+function ingest(parts) {
+  objs = ORB.parseCatalogue(parts);
+  catQ = objs.map((o) => ORB.prep(o, simT)); T0 = simT;
+  const n = objs.length; dirE = new Float32Array(n); dirN = new Float32Array(n); dirU = new Float32Array(n); rng = new Float32Array(n); alt = new Float32Array(n);
+  lastFull = -1e9; loaded = true; build3d(); panelSync();
+}
+const good = {};
+async function load() {
+  const names = ['active', 'rocket', 'debris', 'satcat'];
+  const res = await Promise.all(names.map((p) => fetch('/api/space-objects?part=' + p).then((r) => r.json()).catch((e) => ({ rows: [], errors: [String(e)] }))));
+  const failed = [];
+  names.forEach((p, i) => { if (res[i].rows?.length) good[p] = res[i]; else failed.push(p); });
+  meta = { fetched: Object.values(good).map((r) => r.fetched).filter(Boolean).sort()[0] ?? null, errors: failed };
+  if (good.active || good.debris) ingest(good);
+  if (failed.length) setTimeout(load, 10 * 60e3);
+}
+
+const tmpP = [0, 0, 0];
+function locate(j, dt, c, s) {
+  ORB.posEci(catQ[j], dt, tmpP);
+  const x = c * tmpP[0] + s * tmpP[1], y = -s * tmpP[0] + c * tmpP[1], z = tmpP[2]; // Earth-fixed
+  const rx = x - OBS[0], ry = y - OBS[1], rz = z - OBS[2], r = Math.hypot(rx, ry, rz);
+  dirE[j] = (EAST[0] * rx + EAST[1] * ry) / r; dirN[j] = (NORTH[0] * rx + NORTH[1] * ry + NORTH[2] * rz) / r; dirU[j] = (UP[0] * rx + UP[1] * ry + UP[2] * rz) / r;
+  rng[j] = r; alt[j] = Math.hypot(x, y, z) - RE;
+}
+// Every object is placed at least once a second (once per frame at high speed); between those passes only the ones near
+// or above the horizon are moved, which is what the telescope can see.
+function step() {
+  if (!loaded) return;
+  const dt = (simT - T0) / 1000, th = ORB.gmst(simT), c = Math.cos(th), s = Math.sin(th);
+  const now = performance.now();
+  if (now - lastFull > Math.max(16, 1000 / SPEED())) {
+    lastFull = now; cand = [];
+    for (let j = 0; j < objs.length; j++) { locate(j, dt, c, s); if (dirU[j] > -0.12) cand.push(j); }
+  } else for (const j of cand) locate(j, dt, c, s);
+  above = 0; aboveBy = [0, 0, 0, 0];
+  for (const j of cand) if (dirU[j] > 0 && !zapped.has(objs[j].norad)) { above++; aboveBy[objs[j].type]++; }
+}
+// sunlit or in the Earth's shadow (cylindrical shadow), for the optional Earth shadow dimming
+function sunEci(ms) {
+  const n = ms / 864e5 + 2440587.5 - 2451545, L = (280.46 + 0.9856474 * n) * D2R, g = (357.528 + 0.9856003 * n) * D2R;
+  const lam = L + (1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * D2R, eps = 23.439 * D2R;
+  return [Math.cos(lam), Math.cos(eps) * Math.sin(lam), Math.sin(eps) * Math.sin(lam)];
+}
+function lit(j, sun) {
+  ORB.posEci(catQ[j], (simT - T0) / 1000, tmpP);
+  const d = tmpP[0] * sun[0] + tmpP[1] * sun[1] + tmpP[2] * sun[2];
+  if (d > 0) return true;
+  return Math.hypot(tmpP[0] - d * sun[0], tmpP[1] - d * sun[1], tmpP[2] - d * sun[2]) > RE;
+}
+
+// ---------- the view through the telescope (gnomonic: straight lines stay straight, the horizon is a straight line) ----------
+function basis() {
+  const a = aim.az * D2R, e = aim.el * D2R;
+  const f = [Math.cos(e) * Math.sin(a), Math.cos(e) * Math.cos(a), Math.sin(e)]; // east, north, up
+  const r = [Math.cos(a), -Math.sin(a), 0];
+  const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]]; // r × f: up in the view
+  return { f, r, u };
+}
+const hexRgb = (h) => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+const COMPASS = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+const fx = []; // laser shots and hits: { t0 (wall ms), hit: j or -1, x, y (last screen spot) }
+// style: 'color' (studio, lens) or 'lines' (tablet: black and white lines)
+function drawScope(ctx, w, h, style, round) {
+  const B = basis(), cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2, F = R / Math.tan(aim.fov * D2R / 2);
+  const lines = style === 'lines', px = Math.max(1, R / 400);
+  ctx.save();
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+  if (round) { ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.clip(); }
+  // ground: below the horizon line y = -tan(el)
+  const hy = cy + Math.tan(aim.el * D2R) * F;
+  if (hy < h + 2) {
+    if (!lines) { ctx.fillStyle = '#0c0c0c'; ctx.fillRect(0, Math.max(0, hy), w, h - Math.max(0, hy)); }
+    ctx.strokeStyle = lines ? '#fff' : '#ffffff55'; ctx.lineWidth = px; ctx.beginPath(); ctx.moveTo(0, hy); ctx.lineTo(w, hy); ctx.stroke();
+    // azimuth ticks along the horizon
+    ctx.fillStyle = lines ? '#fff' : '#ffffff88'; ctx.font = `${Math.round(11 * px)}px Pretendard, sans-serif`; ctx.textAlign = 'center';
+    const step = aim.fov > 60 ? 10 : aim.fov > 15 ? 5 : 1;
+    for (let az = 0; az < 360; az += step) {
+      const a = az * D2R, d = [Math.sin(a), Math.cos(a), 0], z = d[0] * B.f[0] + d[1] * B.f[1];
+      if (z <= 0.05) continue;
+      const x = cx + (d[0] * B.r[0] + d[1] * B.r[1]) / z * F;
+      if (x < -20 || x > w + 20) continue;
+      const big = az % 45 === 0;
+      ctx.beginPath(); ctx.moveTo(x, hy); ctx.lineTo(x, hy + (big ? 9 : 4) * px); ctx.stroke();
+      if (big || (step === 10 && az % 30 === 0)) ctx.fillText(COMPASS[az] || String(az), x, hy + 22 * px);
+    }
+  }
+  // objects
+  const cols = TYPES.map(([, k]) => hexRgb(S[k]));
+  const sun = S.shadow === '1' ? sunEci(simT) : null;
+  const rr = S.dot * px;
+  let inView = 0;
+  for (const j of cand) {
+    if (dirU[j] <= 0) continue;
+    const o = objs[j]; if (!showType(o.type) || zapped.has(o.norad)) continue;
+    const z = dirE[j] * B.f[0] + dirN[j] * B.f[1] + dirU[j] * B.f[2];
+    if (z <= 0.01) continue;
+    const x = cx + (dirE[j] * B.r[0] + dirN[j] * B.r[1] + dirU[j] * B.r[2]) / z * F;
+    const y = cy - (dirE[j] * B.u[0] + dirN[j] * B.u[1] + dirU[j] * B.u[2]) / z * F;
+    if (x < -rr || x > w + rr || y < -rr || y > h + rr) continue;
+    inView++;
+    const dim = sun && !lit(j, sun);
+    if (lines) {
+      ctx.strokeStyle = dim ? '#ffffff66' : '#fff'; ctx.lineWidth = px;
+      ctx.beginPath(); ctx.arc(x, y, rr + 1.5 * px, 0, TAU); ctx.stroke();
+    } else {
+      const c = cols[o.type], k = dim ? 0.25 : 1;
+      ctx.fillStyle = `rgb(${c[0] * k | 0},${c[1] * k | 0},${c[2] * k | 0})`;
+      ctx.beginPath(); ctx.arc(x, y, rr, 0, TAU); ctx.fill();
+    }
+  }
+  // laser and hits
+  const now = performance.now();
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const e = fx[i], age = now - e.t0;
+    if (age > 1400) { fx.splice(i, 1); continue; }
+    if (age < 260) { // the beam: from both lower corners of the view to the cross
+      const a = 1 - age / 260;
+      ctx.strokeStyle = lines ? `rgba(255,255,255,${a})` : `rgba(255,60,40,${a})`; ctx.lineWidth = 3 * px;
+      for (const sx of [0.18, 0.82]) { ctx.beginPath(); ctx.moveTo(w * sx, h); ctx.lineTo(cx, cy); ctx.stroke(); }
+    }
+    if (e.hit >= 0 && age > 120) { // the hit: a ring bursting at the object, where it was when hit
+      const k = (age - 120) / 1280, j = e.hit;
+      const z = dirE[j] * B.f[0] + dirN[j] * B.f[1] + dirU[j] * B.f[2];
+      if (z > 0.01) {
+        const x = cx + (dirE[j] * B.r[0] + dirN[j] * B.r[1] + dirU[j] * B.r[2]) / z * F, y = cy - (dirE[j] * B.u[0] + dirN[j] * B.u[1] + dirU[j] * B.u[2]) / z * F;
+        ctx.strokeStyle = lines ? `rgba(255,255,255,${1 - k})` : `rgba(255,220,180,${1 - k})`; ctx.lineWidth = 2 * px;
+        ctx.beginPath(); ctx.arc(x, y, (4 + 60 * Math.sqrt(k)) * px, 0, TAU); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y, (2 + 24 * k) * px, 0, TAU); ctx.stroke();
+      }
+    } else if (e.hit < 0 && age > 120 && age < 700) {
+      ctx.fillStyle = lines ? '#fff' : '#ffffffaa'; ctx.font = `${Math.round(12 * px)}px Pretendard, sans-serif`; ctx.textAlign = 'center';
+      ctx.fillText('miss', cx, cy + 34 * px);
+    }
+  }
+  // the cross, fixed at the centre
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5 * px;
+  const g = 7 * px, L = 26 * px;
+  ctx.beginPath();
+  ctx.moveTo(cx - L, cy); ctx.lineTo(cx - g, cy); ctx.moveTo(cx + g, cy); ctx.lineTo(cx + L, cy);
+  ctx.moveTo(cx, cy - L); ctx.lineTo(cx, cy - g); ctx.moveTo(cx, cy + g); ctx.lineTo(cx, cy + L);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, HIT_PX(R) , 0, TAU); ctx.lineWidth = px; ctx.strokeStyle = '#ffffff40'; ctx.stroke();
+  if (round) { ctx.restore(); ctx.save(); ctx.strokeStyle = lines ? '#fff' : '#ffffff60'; ctx.lineWidth = px; ctx.beginPath(); ctx.arc(cx, cy, R - px / 2, 0, TAU); ctx.stroke(); }
+  // readout
+  if (S.labels === '1') {
+    ctx.fillStyle = lines ? '#fff' : '#ffffffaa'; ctx.font = `${Math.round(11 * px)}px Pretendard, sans-serif`; ctx.textAlign = 'center';
+    ctx.fillText(`${dirName(aim.az)} ${aim.az.toFixed(1)}°  ·  ${aim.el.toFixed(1)}° up  ·  ${aim.fov < 10 ? aim.fov.toFixed(1) : Math.round(aim.fov)}° field`, cx, round ? cy + R * 0.82 : h - 16 * px);
+  }
+  ctx.restore();
+  return inView;
+}
+const dirName = (az) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(az / 45) % 8];
+// how near the cross an object must be to be hit: 2.5% of the field, at least 0.15°
+const HIT_DEG = () => Math.max(0.15, aim.fov * 0.025);
+const HIT_PX = (R) => Math.tan(HIT_DEG() * D2R) / Math.tan(aim.fov * D2R / 2) * R;
+
+// ---------- the whole sky as the sphere sees it: the aim at the front, the zenith above ----------
+function drawSky360(ctx, W, H) {
+  const B = basis();
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  const toPx = (d) => {
+    const lon = Math.atan2(d[0] * B.r[0] + d[1] * B.r[1] + d[2] * B.r[2], d[0] * B.f[0] + d[1] * B.f[1] + d[2] * B.f[2]);
+    const lat = Math.asin(Math.max(-1, Math.min(1, d[0] * B.u[0] + d[1] * B.u[1] + d[2] * B.u[2])));
+    return [W / 2 + lon / Math.PI * W / 2, H / 2 - lat / (Math.PI / 2) * H / 2, lat];
+  };
+  // horizon
+  ctx.fillStyle = '#ffffff55';
+  for (let a = 0; a < 360; a += 0.25) { const p = toPx([Math.sin(a * D2R), Math.cos(a * D2R), 0]); ctx.fillRect(p[0] - 1, p[1] - 1, 2, 2); }
+  const cols = TYPES.map(([, k]) => hexRgb(S[k]));
+  const sun = S.shadow === '1' ? sunEci(simT) : null;
+  const d = [0, 0, 0];
+  for (const j of cand) {
+    if (dirU[j] <= 0) continue;
+    const o = objs[j]; if (!showType(o.type) || zapped.has(o.norad)) continue;
+    d[0] = dirE[j]; d[1] = dirN[j]; d[2] = dirU[j];
+    const p = toPx(d), c = cols[o.type], k = sun && !lit(j, sun) ? 0.25 : 1;
+    ctx.fillStyle = `rgb(${c[0] * k | 0},${c[1] * k | 0},${c[2] * k | 0})`;
+    const rx = S.dot / Math.max(0.15, Math.cos(p[2])); // wider towards the poles, so each looks round on the sphere
+    ctx.beginPath(); ctx.ellipse(p[0], p[1], rx, S.dot, 0, 0, TAU); ctx.fill();
+  }
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(W / 2 - 30, H / 2); ctx.lineTo(W / 2 - 8, H / 2); ctx.moveTo(W / 2 + 8, H / 2); ctx.lineTo(W / 2 + 30, H / 2);
+  ctx.moveTo(W / 2, H / 2 - 30); ctx.lineTo(W / 2, H / 2 - 8); ctx.moveTo(W / 2, H / 2 + 8); ctx.lineTo(W / 2, H / 2 + 30); ctx.stroke();
+}
+
+// ---------- renderer: the LED frame (the eye), the sphere preview, the 3D view ----------
+const canvas = $('c'), over = $('o'), octx = over.getContext('2d');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: TEST });
+renderer.setClearColor(0x000000, 1);
+const lensC = document.createElement('canvas'); lensC.width = lensC.height = 1024;
+const lensX = lensC.getContext('2d');
+const skyC = document.createElement('canvas'); skyC.width = 1920; skyC.height = 1080;
+const skyX = skyC.getContext('2d');
+const lensT = new THREE.CanvasTexture(lensC), skyT = new THREE.CanvasTexture(skyC);
+for (const t of [lensT, skyT]) { t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; }
+// The eye, drawn on the sphere's own surface (p: unit vector, +z = the point facing the viewer, +y up, +x to the right):
+// a round lens at the front showing the telescope view, a bright rim, a dark body whose seams turn with the aim (so the
+// ball visibly rolls), a fixed pedestal below and a fixed back cap.
+const EYE = /* glsl */`
+  uniform sampler2D tLens, tSky; uniform float uLens, uMode, uAz, uEl, uBody;
+  float seam(float a, float stepDeg, float w) { float s = mod(a / radians(stepDeg) + 0.5, 1.0) - 0.5; return 1.0 - smoothstep(0.0, w, abs(s)); }
+  vec3 eye(vec3 p) {
+    if (uMode > 0.5) { // whole sky: the sky itself, aim at the front
+      float lon = atan(p.x, p.z), lat = asin(clamp(p.y, -1.0, 1.0));
+      return texture2D(tSky, vec2(lon / 6.2831853 + 0.5, lat / 3.1415927 + 0.5)).rgb;
+    }
+    float rho = acos(clamp(p.z, -1.0, 1.0)), L = radians(uLens);
+    if (rho < L) { // lens: azimuthal equidistant, the lens's edge is the edge of the view
+      vec2 d = length(p.xy) > 1e-6 ? normalize(p.xy) : vec2(0.0);
+      vec2 uv = 0.5 + 0.5 * d * (rho / L);
+      return texture2D(tLens, uv).rgb;
+    }
+    float body = uBody / 100.0, shade = 0.55 + 0.45 * p.y;
+    if (rho < L + radians(2.5)) return vec3(0.75 * (0.7 + 0.3 * p.y)); // rim
+    if (rho < L + radians(7.0)) return vec3(0.04);                       // black gap around the rim
+    float lat = asin(clamp(p.y, -1.0, 1.0));
+    if (lat < radians(-56.0)) { // pedestal: fixed, does not turn
+      float lon = atan(p.x, p.z);
+      float l = max(seam(lon, 45.0, 0.04), 1.0 - smoothstep(0.0, radians(0.5), abs(lat - radians(-60.0))));
+      return vec3(body * 0.55) * shade + l * 0.18;
+    }
+    if (p.z < -cos(radians(24.0))) { // back cap
+      float b = acos(clamp(-p.z, -1.0, 1.0));
+      return vec3(body * 0.8) * shade + (1.0 - smoothstep(0.0, radians(0.5), abs(b - radians(16.0)))) * 0.2;
+    }
+    // body seams in the ball's own frame: it rolls with the aim (turn by azimuth, then tilt by elevation)
+    float ca = cos(radians(uAz)), sa = sin(radians(uAz)), ce = cos(radians(uEl)), se = sin(radians(uEl));
+    vec3 q = vec3(ca * p.x + sa * p.z, p.y, -sa * p.x + ca * p.z);
+    q = vec3(q.x, ce * q.y - se * q.z, se * q.y + ce * q.z);
+    float blon = atan(q.x, q.z), blat = asin(clamp(q.y, -1.0, 1.0));
+    float l = max(seam(blon, 30.0, 0.035), seam(blat, 30.0, 0.05));
+    return vec3(body) * shade + l * 0.12;
+  }`;
+const EU = { tLens: { value: lensT }, tSky: { value: skyT }, uLens: { value: 42 }, uMode: { value: 0 }, uAz: { value: 0 }, uEl: { value: 0 }, uBody: { value: 22 } };
+const frameMat = new THREE.ShaderMaterial({ uniforms: EU, depthTest: false, depthWrite: false,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: EYE + `varying vec2 vUv; void main(){ float lon = (vUv.x - 0.5) * 6.2831853, lat = (vUv.y - 0.5) * 3.1415927;
+    gl_FragColor = vec4(eye(vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon))), 1.0); }` });
+const frameScene = new THREE.Scene(), flatCam = new THREE.Camera();
+const fq = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), frameMat); fq.frustumCulled = false; frameScene.add(fq);
+// the LED sphere preview: the same function on a ball seen from the front
+const ballScene = new THREE.Scene(), ballCam = new THREE.PerspectiveCamera(32, 1, 0.05, 100);
+ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.ShaderMaterial({ uniforms: EU,
+  vertexShader: `varying vec3 vN; void main(){ vN = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: EYE + `varying vec3 vN; void main(){ gl_FragColor = vec4(eye(normalize(vN)), 1.0); }` })));
+const ballView = { yaw: 0.35, pitch: 0.12, dist: 4.6 };
+
+// 3D: the Earth (black), Daejeon, the telescope's line of sight, and every object (above Daejeon's horizon: bright)
+const scene3 = new THREE.Scene(), cam3 = new THREE.PerspectiveCamera(40, 1, 0.01, 200);
+const view3 = { yaw: 2.2, pitch: 0.5, dist: 4.2 };
+const earth = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), new THREE.MeshBasicMaterial({ color: 0x050505 }));
+scene3.add(earth);
+const grat = []; for (let la = -60; la <= 60; la += 30) { const pts = []; for (let lo = 0; lo <= 360; lo += 4) pts.push(ll(la, lo, 1.001)); grat.push(...segs(pts)); }
+for (let lo = 0; lo < 360; lo += 30) { const pts = []; for (let la = -90; la <= 90; la += 4) pts.push(ll(la, lo, 1.001)); grat.push(...segs(pts)); }
+scene3.add(new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(grat, 3)), new THREE.LineBasicMaterial({ color: 0x333333 })));
+const siteDot = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+siteDot.position.fromArray(ll(SITE.lat, SITE.lon, 1)); scene3.add(siteDot);
+const ray = new THREE.Line(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3)), new THREE.LineBasicMaterial({ color: 0xffffff }));
+scene3.add(ray);
+let pts3 = null;
+function ll(la, lo, r) { const a = la * D2R, b = lo * D2R; return [r * Math.cos(a) * Math.cos(b), r * Math.sin(a), -r * Math.cos(a) * Math.sin(b)]; } // Earth-fixed → scene (y north)
+function segs(p) { const o = []; for (let i = 0; i < p.length - 1; i++) o.push(...p[i], ...p[i + 1]); return o; }
+function build3d() {
+  if (pts3) { scene3.remove(pts3); pts3.geometry.dispose(); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(objs.length * 3), 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(objs.length * 3), 3));
+  pts3 = new THREE.Points(g, new THREE.PointsMaterial({ size: 2.5, sizeAttenuation: false, vertexColors: true }));
+  pts3.frustumCulled = false; scene3.add(pts3);
+}
+let last3 = 0;
+function update3d() {
+  if (!pts3 || performance.now() - last3 < 100) return; last3 = performance.now();
+  const P = pts3.geometry.attributes.position.array, C = pts3.geometry.attributes.color.array;
+  const dt = (simT - T0) / 1000, th = ORB.gmst(simT), c = Math.cos(th), s = Math.sin(th), cols = TYPES.map(([, k]) => hexRgb(S[k]).map((v) => v / 255));
+  for (let j = 0; j < objs.length; j++) {
+    const o = objs[j], hide = zapped.has(o.norad) || !showType(o.type);
+    ORB.posEci(catQ[j], dt, tmpP);
+    const x = c * tmpP[0] + s * tmpP[1], y = -s * tmpP[0] + c * tmpP[1], z = tmpP[2];
+    P[j * 3] = hide ? 0 : x / RE; P[j * 3 + 1] = hide ? 0 : z / RE; P[j * 3 + 2] = hide ? 0 : -y / RE;
+    const up = ((x - OBS[0]) * UP[0] + (y - OBS[1]) * UP[1] + (z - OBS[2]) * UP[2]) > 0, k = up ? 1 : 0.22;
+    const col = cols[o.type]; C[j * 3] = col[0] * k; C[j * 3 + 1] = col[1] * k; C[j * 3 + 2] = col[2] * k;
+  }
+  pts3.geometry.attributes.position.needsUpdate = true; pts3.geometry.attributes.color.needsUpdate = true;
+  const B = basis(), d = [B.f[0] * EAST[0] + B.f[1] * NORTH[0] + B.f[2] * UP[0], B.f[0] * EAST[1] + B.f[1] * NORTH[1] + B.f[2] * UP[1], B.f[1] * NORTH[2] + B.f[2] * UP[2]];
+  const o0 = [OBS[0] / RE, OBS[2] / RE, -OBS[1] / RE], far = 6;
+  ray.geometry.attributes.position.array.set([...o0, o0[0] + d[0] * far, o0[1] + d[2] * far, o0[2] - d[1] * far]); ray.geometry.attributes.position.needsUpdate = true;
+}
+
+// ---------- zap ----------
+function target() {
+  const B = basis(), lim = Math.cos(HIT_DEG() * D2R);
+  let best = -1, bc = lim;
+  for (const j of cand) {
+    if (dirU[j] <= 0) continue;
+    const o = objs[j]; if (!showType(o.type) || zapped.has(o.norad)) continue;
+    const c = dirE[j] * B.f[0] + dirN[j] * B.f[1] + dirU[j] * B.f[2];
+    if (c > bc) { bc = c; best = j; }
+  }
+  return best;
+}
+const log = []; // the last zaps on this page: { norad, name, type, alt, rng, t }
+function zap(local = true, remote = null) {
+  let j = -1;
+  if (remote) { j = remote.n > 0 ? objs.findIndex((o) => o.norad === remote.n) : -1; }
+  else j = target();
+  fx.push({ t0: performance.now(), hit: j });
+  if (j >= 0) {
+    const o = objs[j]; zapped.set(o.norad, simT);
+    const e = { norad: o.norad, type: o.type, owner: o.owner, intl: o.intl, alt: alt[j], rng: rng[j], el: Math.asin(dirU[j]) / D2R, t: Date.now(), name: null };
+    log.unshift(e); if (log.length > 6) log.pop();
+    if (ROLE !== 'display') showCard(e);
+  }
+  if (local) { publish('/zap', { n: j >= 0 ? objs[j].norad : -1, gen, by: ME }); clearTimeout(snapT); snapT = setTimeout(sendSnapshot, 400); }
+}
+const TYPE_NAME = ['Payload', 'Rocket body', 'Debris', 'Unknown'];
+const OWNERS = { US: 'United States', CIS: 'Soviet Union / Russia', PRC: 'China', FR: 'France', ESA: 'European Space Agency', JPN: 'Japan', IND: 'India', UK: 'United Kingdom', GER: 'Germany', ISS: 'ISS partners', IT: 'Italy', CA: 'Canada', SKOR: 'South Korea', ISRA: 'Israel', IRAN: 'Iran', NKOR: 'North Korea', BRAZ: 'Brazil', ARGN: 'Argentina', AUS: 'Australia', SPN: 'Spain', ITSO: 'Intelsat', EUME: 'EUMETSAT', CHBZ: 'China / Brazil', ORB: 'ORBCOMM', GLOB: 'Globalstar', TBD: 'unknown' };
+let cardT = null;
+function cardHtml(e) {
+  const r = (k, v) => `<div class="r"><span>${k}</span><span>${v}</span></div>`;
+  return `<div class="nm">${e.name || TYPE_NAME[e.type] + ' ' + e.norad}</div>` + r('Hit', TYPE_NAME[e.type] + (e.owner ? ', ' + (OWNERS[e.owner] || e.owner) : ''))
+    + r('Height', Math.round(e.alt).toLocaleString() + ' km') + r('Distance', Math.round(e.rng).toLocaleString() + ' km from ' + SITE.name)
+    + r('Catalogue', '#' + e.norad + (e.intl ? ' · ' + e.intl : '')) + (e.launch ? r('Launched', e.launch) : '');
+}
+function showCard(e) {
+  const c = $('card'); c.innerHTML = cardHtml(e); c.classList.add('on');
+  clearTimeout(cardT); cardT = setTimeout(() => c.classList.remove('on'), 6000);
+  if (TEST) return;
+  fetch('/api/debris-info?n=' + e.norad).then((r) => r.json()).then((d) => {
+    if (!d.record) return; e.name = d.record.OBJECT_NAME; e.launch = d.record.LAUNCH_DATE;
+    if (log[0] === e) c.innerHTML = cardHtml(e);
+  }).catch(() => {});
+}
+function putBack() { gen = Date.now(); zapped.clear(); log.length = 0; sendSnapshot(); }
+
+// ---------- room: aim, zaps and the studio's settings are shared over the public relay (room code) ----------
+const ROOM = ORB.cleanRoom(Q.get('room'));
+const TOPIC = 'sampling-sphere/v1/telescope' + (ROOM ? '/' + ROOM : ''), ME = Math.random().toString(36).slice(2, 10);
+let mq = null, relayOk = false, aimT = 0, snapT = null, aimDirty = false, localAimAt = 0;
+const publish = (t, obj, retain = false) => { if (mq && relayOk) mq.publish(TOPIC + t, JSON.stringify(obj), { retain, qos: retain ? 1 : 0 }); };
+function aimChanged() { localAimAt = performance.now(); aimDirty = true; }
+function flushAim() { if (aimDirty && performance.now() - aimT >= 50) { aimDirty = false; aimT = performance.now(); publish('/aim', { az: aim.az, el: aim.el, fov: aim.fov, by: ME }, true); } }
+function sendSnapshot() { publish('/zapped', { gen, list: [...zapped.keys()], by: ME }, true); }
+const SYNC_SKIP = new Set(['view', 'spd']);
+let setT = null;
+function sendSettings() { clearTimeout(setT); setT = setTimeout(() => { const o = {}; for (const k of Object.keys(DEF)) if (!SYNC_SKIP.has(k)) o[k] = S[k]; publish('/settings', { s: o, by: ME }, true); }, 80); }
+function applySettings(o) {
+  if (ROLE === 'studio' || !o || typeof o !== 'object') return;
+  for (const k of Object.keys(DEF)) if (!SYNC_SKIP.has(k) && k in o && typeof o[k] === typeof DEF[k] && (typeof o[k] !== 'number' || Number.isFinite(o[k]))) S[k] = o[k];
+  panelSync();
+}
+let clock = null;
+function sendClock() { clock = { wall0: Date.now(), sim0: simT, speed: SPEED(), by: ME }; publish('/clock', clock, true); }
+if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m) => {
+  const mqtt = m.default || m;
+  mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
+  mq.on('close', () => { relayOk = false; panelSync(); }); mq.on('offline', () => { relayOk = false; });
+  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/aim', TOPIC + '/zap', TOPIC + '/zapped', TOPIC + '/settings', TOPIC + '/clock']); if (ROLE === 'studio') sendSettings(); panelSync(); });
+  mq.on('message', (t, msg) => {
+    let d; try { d = JSON.parse(msg.toString()); } catch { return; }
+    if (!d || d.by === ME) return;
+    const k = t.slice(TOPIC.length);
+    if (k === '/aim') {
+      if ([d.az, d.el, d.fov].every(Number.isFinite) && performance.now() - localAimAt > 600) { aim.az = d.az; aim.el = d.el; aim.fov = d.fov; clampAim(); }
+    } else if (k === '/zap') {
+      if (Number.isFinite(d.n) && Number.isFinite(d.gen)) { if (d.gen > gen) { gen = d.gen; zapped.clear(); } if (d.gen === gen) zap(false, { n: d.n }); }
+    } else if (k === '/zapped') {
+      if (Number.isFinite(d.gen) && Array.isArray(d.list) && d.gen >= gen) { if (d.gen > gen) { gen = d.gen; zapped.clear(); log.length = 0; } for (const n of d.list) if (Number.isFinite(n) && !zapped.has(n)) zapped.set(n, simT); }
+    } else if (k === '/settings') applySettings(d.s);
+    else if (k === '/clock') { if ([d.wall0, d.sim0, d.speed].every(Number.isFinite)) { clock = d; S.spd = Math.log10(Math.max(1, d.speed)) * 25; panelSync(); } }
+  });
+}).catch(() => {});
+
+// ---------- input ----------
+// Telescope / tablet view: drag the sky (it follows the finger). 360 / sphere: roll the ball (the eye turns the way
+// the front is pushed). 3D: drag turns the camera. Pinch or wheel: zoom. A tap (no drag) or Space: Zap.
+const ptrs = new Map(); let gesture = null, pinch0 = null;
+function layout() {
+  const w = innerWidth, h = innerHeight;
+  if (ROLE !== 'tablet') return { scope: { x: 0, y: 0, w, h }, ball: null };
+  // tablet: the view (round, like an eyepiece) and the trackball side by side (landscape) or stacked (portrait)
+  const land = w > h;
+  const sR = land ? Math.min(h * 0.44, w * 0.28) : Math.min(w * 0.44, h * 0.27);
+  const scope = land ? { x: w * 0.33 - sR, y: h / 2 - sR, w: sR * 2, h: sR * 2 } : { x: w / 2 - sR, y: h * 0.31 - sR, w: sR * 2, h: sR * 2 };
+  const bR = land ? Math.min(h * 0.26, w * 0.15) : Math.min(w * 0.3, h * 0.17);
+  const ball = land ? { cx: w * 0.81, cy: h * 0.4, r: bR } : { cx: w * 0.36, cy: h * 0.77, r: bR };
+  const zb = land ? { cx: w * 0.81, cy: h * 0.4 + bR + 80, r: 44 } : { cx: w * 0.8, cy: h * 0.77, r: Math.min(56, w * 0.11) };
+  return { scope, ball, zb };
+}
+let LY = layout();
+function where(x, y) {
+  if (ROLE !== 'tablet') return S.view === 'scope' ? 'sky' : S.view === '3d' ? 'cam' : 'ball';
+  const b = LY.ball; if (b && Math.hypot(x - b.cx, y - b.cy) < b.r * 1.35) return 'ball';
+  return 'sky';
+}
+function dragBy(kind, dx, dy) {
+  if (kind === 'cam') { view3.yaw -= dx * 0.005; view3.pitch = Math.max(-1.5, Math.min(1.5, view3.pitch + dy * 0.005)); return; }
+  if (kind === 'sky') {
+    const sz = ROLE === 'tablet' ? LY.scope.w / 2 : Math.min(innerWidth, innerHeight) / 2;
+    const k = Math.atan(Math.tan(aim.fov * D2R / 2) / sz) / D2R; // degrees per pixel at the centre
+    aim.az -= dx * k / Math.max(0.2, Math.cos(aim.el * D2R)); aim.el += dy * k;
+  } else { // the ball: pushing its front right turns the eye right; up turns it up
+    const r = ROLE === 'tablet' ? LY.ball.r : Math.min(innerWidth, innerHeight) * 0.3;
+    const k = 57.3 / r * 0.9;
+    aim.az += dx * k; aim.el -= dy * k;
+  }
+  clampAim(); aimChanged();
+}
+function zoomBy(f) { if (S.view === '3d' && ROLE !== 'tablet') { view3.dist = Math.max(1.3, Math.min(20, view3.dist * f)); return; } aim.fov *= f; clampAim(); aimChanged(); }
+if (ROLE !== 'display') {
+  canvas.addEventListener('pointerdown', (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 1) gesture = { t0: performance.now(), moved: 0, kind: where(e.clientX, e.clientY) };
+    else { gesture && (gesture.moved = 99); pinch0 = null; }
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    const p = ptrs.get(e.pointerId); if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
+    if (ptrs.size >= 2) {
+      const [a, b] = [...ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch0) zoomBy(pinch0 / d); pinch0 = d; return;
+    }
+    if (!gesture) return;
+    gesture.moved += Math.abs(dx) + Math.abs(dy);
+    dragBy(gesture.kind, dx, dy);
+  });
+  const up = (e) => {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.delete(e.pointerId); pinch0 = null;
+    if (!ptrs.size && gesture) { if (gesture.moved < 6 && performance.now() - gesture.t0 < 400 && gesture.kind === 'sky' && ROLE !== 'tablet') zap(); gesture = null; }
+  };
+  canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomBy(Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))); }, { passive: false });
+  addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.code === 'Space' || e.key === 'z') { e.preventDefault(); zap(); }
+    const k = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+    if (k) { aim.az += k[0] * aim.fov * 0.05; aim.el += k[1] * aim.fov * 0.05; clampAim(); aimChanged(); }
+  });
+}
+$('zap').addEventListener('pointerdown', (e) => { e.preventDefault(); zap(); });
+addEventListener('keydown', (e) => { if (e.key === 'f' && ROLE === 'display') document.documentElement.requestFullscreen?.(); });
+
+// ---------- panel (studio) ----------
+const SL = [['dot', 'Dot size', 1, 12, () => S.dot + ' px'], ['lens', 'Lens', 15, 80, () => S.lens + '°'], ['body', 'Body grey', 0, 60, () => S.body + '%'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
+const SEG = [['view', 'View', [['scope', 'Telescope'], ['3d', '3D'], ['360', '360'], ['ball', 'Sphere']]], ['look', 'On sphere', [['eye', 'Eye + lens'], ['sky', 'Whole sky']]],
+  ['show', 'Objects', [['all', 'All'], ['pay', 'Payloads'], ['deb', 'Debris'], ['junk', 'Not payloads']]], ['shadow', 'Earth shadow', [['0', 'Ignore'], ['1', 'Dim']]], ['labels', 'Readout', [['1', 'On'], ['0', 'Off']]]];
+function panelBuild() {
+  if (ROLE !== 'studio') return;
+  $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
+    + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
+    + `<div class="row"><label>Field</label><input type="range" id="fov" min="0" max="100" step="0.5"><output id="fovo"></output></div>`
+    + TYPES.map(([n, k]) => `<div class="row"><label>${n}</label><input type="color" data-c="${k}" style="grid-column:2/4;width:100%;height:22px;padding:0;border:1px solid var(--faint);background:none"></div>`).join('')
+    + `<div class="row"><label></label><div class="seg"><button id="again">Put all back</button><button id="copy">Copy display URL</button></div></div>
+    <div class="row"><label></label><div class="seg"><button id="reset">Defaults</button></div></div>
+    <div class="note" id="pnote"></div>`;
+  $('panel').querySelectorAll('.seg[data-k]').forEach((g) => g.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S[g.dataset.k] = b.dataset.v; save(); panelSync(); resize(); }));
+  $('panel').querySelectorAll('input[data-k]').forEach((i) => i.addEventListener('input', () => { S[i.dataset.k] = +i.value; if (i.dataset.k === 'spd') { sendClock(); } save(); panelSync(); }));
+  $('panel').querySelectorAll('input[data-c]').forEach((i) => i.addEventListener('input', () => { S[i.dataset.c] = i.value.slice(1); save(); }));
+  $('fov').addEventListener('input', (e) => { aim.fov = 0.5 * Math.pow(280, +e.target.value / 100); clampAim(); aimChanged(); panelSync(); });
+  $('again').onclick = putBack;
+  $('copy').onclick = () => { const q = new URLSearchParams(); if (ROOM) q.set('room', ROOM); const u = location.origin + '/telescope-display' + (q.toString() ? '?' + q : ''); navigator.clipboard?.writeText(u).then(() => { $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy display URL'; }, 1500); }, () => { $('copy').textContent = u; }); };
+  $('reset').onclick = () => { S = { ...DEF }; save(); panelSync(); resize(); };
+  $('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').classList.toggle('on'); };
+}
+function panelSync() {
+  if (ROLE !== 'studio' || !$('fov')) return;
+  $('panel').querySelectorAll('.seg[data-k]').forEach((g) => g.querySelectorAll('button').forEach((b) => b.classList.toggle('on', S[g.dataset.k] === b.dataset.v)));
+  for (const [k, , , , f] of SL) { const i = $('panel').querySelector(`input[data-k="${k}"]`); i.value = S[k]; $('panel').querySelector(`output[data-o="${k}"]`).textContent = f(); }
+  $('panel').querySelectorAll('input[data-c]').forEach((i) => { i.value = '#' + S[i.dataset.c]; });
+  $('fov').value = Math.log(aim.fov / 0.5) / Math.log(280) * 100; $('fovo').textContent = (aim.fov < 10 ? aim.fov.toFixed(1) : Math.round(aim.fov)) + '°';
+  $('pnote').innerHTML = `Standing in ${SITE.name} (${SITE.lat.toFixed(4)}° N, ${SITE.lon.toFixed(4)}° E), looking up. Every object is a real tracked object from CelesTrak (US Space Force public catalogue), placed from its latest orbital elements (Kepler + J2, about 15 km near the element epoch). No stars, Sun or Moon.<br><br>Drag the view to aim (or roll the ball in 360 / Sphere), wheel or pinch to zoom, click or Space to Zap whatever is inside the small circle at the cross.<br><br>Relay: ${Q.has('solo') ? 'off (solo)' : relayOk ? 'connected' : 'connecting…'}${ROOM ? ', room ' + ROOM : ''}. Tablet: /telescope-tablet${ROOM ? '?room=' + ROOM : ''}.`;
+}
+
+// ---------- size ----------
+const PR = ROLE === 'display' ? 1 : Math.min(devicePixelRatio || 1, 2);
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setPixelRatio(PR); renderer.setSize(w, h, false);
+  over.width = Math.round(w * PR); over.height = Math.round(h * PR);
+  ballCam.aspect = cam3.aspect = w / h; ballCam.updateProjectionMatrix(); cam3.updateProjectionMatrix();
+  LY = layout();
+  if (ROLE === 'tablet') { const z = $('zap'); z.style.left = (LY.zb.cx - LY.zb.r) + 'px'; z.style.top = (LY.zb.cy - LY.zb.r) + 'px'; z.style.width = z.style.height = LY.zb.r * 2 + 'px'; }
+}
+addEventListener('resize', resize);
+
+// ---------- tablet: the trackball, in lines ----------
+function drawBall(ctx, b) {
+  ctx.save();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.arc(b.cx, b.cy, b.r, 0, TAU); ctx.stroke();
+  // the ball's seams, turned by the aim like the sphere's body (orthographic, front half only)
+  const ca = Math.cos(aim.az * D2R), sa = Math.sin(aim.az * D2R), ce = Math.cos(aim.el * D2R), se = Math.sin(aim.el * D2R);
+  const proj = (blat, blon) => { // ball frame → view
+    let q = [Math.cos(blat) * Math.sin(blon), Math.sin(blat), Math.cos(blat) * Math.cos(blon)];
+    q = [q[0], ce * q[1] + se * q[2], -se * q[1] + ce * q[2]]; // undo the tilt
+    q = [ca * q[0] - sa * q[2], q[1], sa * q[0] + ca * q[2]]; // undo the turn
+    return q;
+  };
+  ctx.strokeStyle = '#ffffff70'; ctx.lineWidth = 1;
+  const line = (f) => { let on = false; ctx.beginPath(); for (let i = 0; i <= 72; i++) { const p = f(i / 72); if (p[2] > 0) { const x = b.cx + p[0] * b.r, y = b.cy - p[1] * b.r; on ? ctx.lineTo(x, y) : ctx.moveTo(x, y); on = true; } else on = false; } ctx.stroke(); };
+  for (let la = -60; la <= 60; la += 30) line((t) => proj(la * D2R, t * TAU));
+  for (let lo = 0; lo < 360; lo += 30) line((t) => proj((t - 0.5) * Math.PI, lo * D2R));
+  ctx.restore();
+}
+
+// ---------- frame ----------
+let lastWall = performance.now();
+function frame() {
+  const now = performance.now(), dtw = Math.min(0.25, (now - lastWall) / 1000); lastWall = now;
+  if (clock) simT = ORB.clockNow(clock); else simT += dtw * 1000 * SPEED();
+  step(); flushAim(); render();
+  requestAnimationFrame(frame);
+}
+function render() {
+  const w = innerWidth, h = innerHeight;
+  octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, over.width, over.height);
+  EU.uLens.value = S.lens; EU.uAz.value = aim.az; EU.uEl.value = aim.el; EU.uBody.value = S.body; EU.uMode.value = S.look === 'sky' ? 1 : 0;
+  let inView = 0;
+  const needFrame = S.view === '360' || S.view === 'ball';
+  if (needFrame) {
+    if (S.look === 'sky') { drawSky360(skyX, 1920, 1080); skyT.needsUpdate = true; }
+    else { inView = drawScope(lensX, 1024, 1024, 'color', true); lensT.needsUpdate = true; }
+  }
+  if (ROLE === 'tablet') {
+    renderer.clear();
+    octx.setTransform(PR, 0, 0, PR, 0, 0);
+    octx.fillStyle = '#000'; octx.fillRect(0, 0, w, h);
+    const sc = LY.scope;
+    octx.save(); octx.translate(sc.x, sc.y); inView = drawScope(octx, sc.w, sc.h, 'lines', true); octx.restore();
+    drawBall(octx, LY.ball);
+  } else if (S.view === 'scope') {
+    renderer.clear();
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    inView = drawScope(octx, over.width, over.height, 'color', false);
+  } else if (S.view === '360') {
+    renderer.render(frameScene, flatCam);
+  } else if (S.view === 'ball') {
+    ballCam.position.set(Math.cos(ballView.pitch) * Math.sin(ballView.yaw), Math.sin(ballView.pitch), Math.cos(ballView.pitch) * Math.cos(ballView.yaw)).multiplyScalar(ballView.dist);
+    ballCam.lookAt(0, 0, 0); renderer.render(ballScene, ballCam);
+  } else if (S.view === '3d') {
+    update3d();
+    cam3.position.set(Math.cos(view3.pitch) * Math.sin(view3.yaw), Math.sin(view3.pitch), Math.cos(view3.pitch) * Math.cos(view3.yaw)).multiplyScalar(view3.dist);
+    cam3.lookAt(0, 0, 0); renderer.render(scene3, cam3);
+  }
+  info(inView);
+}
+function info(inView) {
+  if (ROLE === 'display') return;
+  if (!loaded) { $('info').textContent = meta?.errors?.length ? 'Could not load the catalogue (' + meta.errors.join(', ') + '). Retrying in 10 minutes.' : 'Loading every tracked object…'; return; }
+  const d = new Date(simT), t = d.toLocaleString('en-GB', { timeZone: 'Asia/Seoul', hour12: false, year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const z = zapped.size ? `\nZapped ${zapped.size}` + (log[0] ? `, last: ${log[0].name || TYPE_NAME[log[0].type] + ' ' + log[0].norad}` : '') : '';
+  if (ROLE === 'tablet') { $('info').textContent = `${above.toLocaleString()} above ${SITE.name} now · ${inView.toLocaleString()} in view` + z; return; }
+  $('info').textContent = `Above ${SITE.name} now: ${above.toLocaleString()} of ${objs.length.toLocaleString()} tracked objects (payloads ${aboveBy[0].toLocaleString()}, rocket bodies ${aboveBy[1].toLocaleString()}, debris ${aboveBy[2].toLocaleString()})`
+    + (S.view === 'scope' || S.view === '360' && S.look === 'eye' || S.view === 'ball' && S.look === 'eye' ? `\nIn the view: ${inView.toLocaleString()}` : '')
+    + `\n${t} KST${SPEED() > 1 ? ' · ' + SPEED().toLocaleString() + '×' : ''}` + z;
+}
+
+panelBuild(); resize(); panelSync();
+if (TEST) window.__tel = { ingest, render, step, S, aim, zap, target, objs: () => objs, cand: () => cand, zapped, setSim: (t) => { simT = t; lastFull = -1e9; }, resize, above: () => above };
+else load();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

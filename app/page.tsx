@@ -1,5 +1,14 @@
 const PAGES = [
   {
+    group: "Telescope",
+    note: "The sphere as a big mechanical eye standing in Daejeon. Turn it like a trackball and it looks at the real sky overhead, which holds only what people put there: every tracked satellite, rocket body and piece of debris. A cross sits in the middle; Zap whatever is under it.",
+    links: [
+      { href: "/telescope-tablet", title: "Tablet", text: "The eyepiece and the trackball: roll the ball or drag the view to aim, pinch to zoom, ZAP to fire at what is under the cross." },
+      { href: "/telescope-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere: the eye with its lens, body seams that roll with the aim, pedestal and back cap." },
+      { href: "/telescope", title: "Studio", text: "Telescope, 3D, 360 and sphere preview, with lens size, dot size, which objects, Earth shadow, colours, speed, and Put all back." },
+    ],
+  },
+  {
     group: "Cleanup",
     note: "Only real debris, every piece in orbit, shown big enough to cover the Earth. Tap a piece to clean it: it stays gone, and the Earth shows through.",
     links: [
