@@ -61,7 +61,7 @@ const KEY = 'cleanup-v2';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
-if (ROLE === 'tablet' && !Q.has('view')) S.view = '3d';
+if (ROLE === 'tablet' && !Q.has('view')) S.view = 'lines';
 const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
 // Size is a multiplier of real size: radius = ×N of each piece's true radius from its radar cross-section (RCS taken as
 // the silhouette area). SIZE_KM is that for the median debris (RCS ≈ 0.017 m², about 7 cm across... in radius).
@@ -183,13 +183,56 @@ const eqEarthFrag = /* glsl */`${EARTH}
 
 const mk = (v, f, extra = {}) => new THREE.ShaderMaterial({ uniforms: { ...U, ...extra }, vertexShader: v, fragmentShader: f });
 const pieceMat = mk(pieceVert, pieceFrag);
+
+// --- the minimal tablet (as in Refraction): Earth as one outline, each piece a small circle, a cleaned piece an x,
+// a piece that just came back a filled dot that fades to a circle ---
+const linesVert = /* glsl */`
+  uniform highp sampler2D tObj, tSt; uniform float uPxK, uWall, uFlash;
+  varying vec2 vQ; varying float vRpx, vPop, vGlow;
+  void main() {
+    int j = gl_InstanceID; ivec2 px = ivec2(j & ${NOBJ_W - 1}, j >> ${Math.log2(NOBJ_W)});
+    vec4 o = texelFetch(tObj, px, 0); vec3 C = o.xyz;
+    vec3 toC = C - cameraPosition; float d = length(toC);
+    if (o.w == 0.0 || d < 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    vPop = o.w < 0.0 ? 1.0 : 0.0;
+    float b = texelFetch(tSt, px, 0).y, a = uWall - b; vGlow = (b > 0.0 && a >= 0.0 && uFlash > 0.5) ? exp(-a * 1.2) : 0.0;
+    float rpx = clamp(abs(o.w) / (uPxK * d), 2.5, 40.0);
+    vRpx = rpx;
+    float half_ = max(rpx, 5.0) + 2.0;
+    vQ = position.xy * half_;
+    vec3 f = toC / d, s = normalize(cross(f, abs(f.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))), u = cross(s, f);
+    gl_Position = projectionMatrix * viewMatrix * vec4(C + (s * position.x + u * position.y) * half_ * uPxK * d, 1.0);
+  }`;
+const linesFrag = /* glsl */`
+  varying vec2 vQ; varying float vRpx, vPop, vGlow;
+  void main() {
+    float a, q = length(vQ);
+    if (vPop > 0.5) {
+      float R = max(vRpx * 1.1, 5.0);
+      float x = min(abs(vQ.x - vQ.y), abs(vQ.x + vQ.y)) * 0.7071;
+      a = clamp(1.1 - x, 0.0, 1.0) * clamp(R - q + 0.5, 0.0, 1.0) * 0.5;
+    } else {
+      a = max(clamp(0.9 - abs(q - vRpx), 0.0, 1.0), vGlow * clamp(vRpx - q + 0.5, 0.0, 1.0));
+    }
+    if (a <= 0.01) discard;
+    gl_FragColor = vec4(vec3(1.0), a);
+  }`;
+const linesMat = new THREE.ShaderMaterial({ uniforms: { ...U, uPxK: { value: 0.001 } }, vertexShader: linesVert, fragmentShader: linesFrag, transparent: true, depthTest: true, depthWrite: false });
+const quad = new THREE.PlaneGeometry(2, 2), lineGeo = new THREE.InstancedBufferGeometry();
+lineGeo.setIndex(quad.index); lineGeo.setAttribute('position', quad.attributes.position);
+const earthBlack = new THREE.Mesh(new THREE.SphereGeometry(RE, 96, 48), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+const earthLine = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), new THREE.ShaderMaterial({
+  vertexShader: `varying vec3 vN, vV; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vN = normalize(position); vV = normalize(cameraPosition - w.xyz); gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: `varying vec3 vN, vV; void main(){ float f = dot(normalize(vN), normalize(vV)), w = fwidth(f); float a = 1.0 - smoothstep(0.0, 1.6 * w, f); gl_FragColor = vec4(vec3(a), 1.0); }`,
+}));
+earthBlack.renderOrder = earthLine.renderOrder = -1;
 const eqMats = [-1, 0, 1].map((k) => mk(eqVert, eqFrag, { uShift: { value: k } }));
 
 // Earth (the image under the debris)
 const earth = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), mk(
   `varying vec3 vN; void main(){ vN = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   `${EARTH} varying vec3 vN; void main(){ gl_FragColor = vec4(surface(normalize(vN)), 1.0); }`));
-scene.add(earth);
+scene.add(earth, earthBlack, earthLine);
 
 // the 360 frame is drawn into its own image (1920 × 1080), then shown flat or wrapped back onto a ball
 const eqRT = new THREE.WebGLRenderTarget(1920, 1080, { depthBuffer: true, samples: 4 });
@@ -279,7 +322,7 @@ const posMat = new THREE.ShaderMaterial({
     p.xy = vec2(cr * p.x - sr * p.y, sr * p.x + cr * p.y);
     float r = uSize * e2.w;
     if (length(p) - 6378.137 > uMaxAlt) r = 0.0;
-    else if (st.x > 0.0) { float k = clamp((uNow - st.x) / 0.35, 0.0, 1.0); r *= 1.0 - k * k; } // cleaned: shrinks away
+    else if (st.x > 0.0) { float k = clamp((uNow - st.x) / 0.35, 0.0, 1.0); r = k >= 1.0 ? -r : r * (1.0 - k * k); } // cleaned: shrinks away, then negative (lines view draws it as an x)
     else if (st.y > 0.0) { float k = clamp((uNow - st.y) / 0.6, 0.0, 1.0); r *= max(0.01, k * k * (3.0 - 2.0 * k)); } // came back: grows in
     gl_FragColor = vec4(p.x, p.z, -p.y, r);
   }`, depthTest: false, depthWrite: false });
@@ -300,11 +343,12 @@ function build() {
   if (!geo) {
     geo = new THREE.InstancedBufferGeometry();
     const M = (mat) => { const m = new THREE.Mesh(geo, mat); m.frustumCulled = false; return m; };
-    meshes = { piece: M(pieceMat), eq: eqMats.map(M) };
-    scene.add(meshes.piece); eqScene.add(...meshes.eq);
+    const L = new THREE.Mesh(lineGeo, linesMat); L.frustumCulled = false;
+    meshes = { piece: M(pieceMat), eq: eqMats.map(M), lines: L };
+    scene.add(meshes.piece, L); eqScene.add(...meshes.eq);
   }
   applyShape();
-  geo.instanceCount = n;
+  geo.instanceCount = n; lineGeo.instanceCount = n;
 }
 function reweight() {
   if (!weights) return;
@@ -403,7 +447,7 @@ function pick(ro, rd, pxAt) {
 }
 function rayFromTap(x, y) {
   const v = S.view;
-  if (v === '3d') {
+  if (v === '3d' || v === 'lines') {
     const ndc = new THREE.Vector3(x / innerWidth * 2 - 1, -(y / innerHeight) * 2 + 1, 0.5).unproject(camera);
     const rd = ndc.sub(camera.position).normalize();
     const k = 2 * Math.tan(camera.fov / 2 * D2R) / innerHeight;
@@ -530,7 +574,7 @@ function lookFromCamera() {
 // ---------- panel (studio) ----------
 const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['jag', 'Jagged', 0, 90, () => S.jag + ''], ['irreg', 'Flatten', 0, 100, () => S.irreg + ''], ['tumble', 'Tumble', 0, 100, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
 const SHAPE_ROWS = [[['shard', 'Shard'], ['rock', 'Rock'], ['sphere', 'Sphere']], [['cube', 'Cube'], ['diamond', 'Diamond'], ['shardlet', 'Tetra']], [['plate', 'Plate'], ['rod', 'Rod'], ['spike', 'Spike']]];
-const SEG = [['view', 'View', [['3d', '3D'], ['360', '360'], ['ball', 'Sphere']]], ...SHAPE_ROWS.map((o, i) => ['shape', i ? '' : 'Shape', o]), ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
+const SEG = [['view', 'View', [['3d', '3D'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], ...SHAPE_ROWS.map((o, i) => ['shape', i ? '' : 'Shape', o]), ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
   ['rcs', 'Size by', [['1', 'Radar size'], ['exact', 'Exact'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]], ['flash', 'Return glow', [['1', 'On'], ['0', 'Off']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
@@ -591,7 +635,11 @@ function render() {
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
 
   const v = S.view;
-  if (v === '3d') {
+  if (v === '3d' || v === 'lines') {
+    const ln = v === 'lines';
+    earth.visible = !ln; earthBlack.visible = earthLine.visible = ln;
+    if (meshes.piece) { meshes.piece.visible = !ln; meshes.lines.visible = ln; }
+    linesMat.uniforms.uPxK.value = 2 * Math.tan(camera.fov / 2 * D2R) / (innerHeight * renderer.getPixelRatio());
     camera.position.set(Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch), Math.cos(view.pitch) * Math.cos(view.yaw)).multiplyScalar(view.dist);
     camera.lookAt(0, 0, 0);
     camera.near = Math.max(5, (view.dist - RE - 2500) * 0.3); camera.far = view.dist + 60000; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
