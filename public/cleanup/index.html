@@ -55,7 +55,7 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: '3d', size: 84, rcs: '1', tumble: 20, color: '#c8c8c8', light: 'day', range: 'all', spd: 0, q360: 100 };
+const DEF = { view: '3d', size: 84, rcs: '1', tumble: 20, color: '#c8c8c8', light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
 let S = { ...DEF };
 const KEY = 'cleanup-v1';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -65,6 +65,9 @@ if (ROLE === 'tablet' && !Q.has('view')) S.view = '3d';
 const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
 const SIZE_KM = () => 5 * Math.pow(100, S.size / 100); // piece size: 5 .. 500 km
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25)); // 1× .. 10,000×
+const RETURN = () => Math.max(5, S.ret);    // seconds until a cleaned piece comes back (before any cascade)
+const CASC = () => 1 - S.casc / 100;        // each return multiplies the time left of cleaned pieces nearby by this
+const REACH = () => S.reach;                // km: how near a cleaned piece must be to feel a return
 
 // ---------- renderer ----------
 const canvas = $('c');
@@ -86,7 +89,7 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 const NOBJ_W = 1024;
 const U = {
   tObj: { value: null }, tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 },
-  uTime: { value: 0 }, uTumble: { value: 0.2 }, uColor: { value: new THREE.Color(0xc8c8c8) }, uLightDir: { value: new THREE.Vector3(0, 1, 0) },
+  tSt: { value: null }, uWall: { value: 0 }, uFlash: { value: 1 }, uTime: { value: 0 }, uTumble: { value: 0.2 }, uColor: { value: new THREE.Color(0xc8c8c8) }, uLightDir: { value: new THREE.Vector3(0, 1, 0) },
   uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) },
 };
 const EARTH = /* glsl */`
@@ -102,8 +105,10 @@ const EARTH = /* glsl */`
 // one piece of debris: an irregular shard at the object's position (xyz km, w = size; 0 = gone), turned and flattened
 // differently for every object, slowly tumbling
 const PIECE = /* glsl */`
-  uniform highp sampler2D tObj; uniform float uTime, uTumble;
+  uniform highp sampler2D tObj, tSt; uniform float uTime, uTumble, uFlash; uniform float uWall;
   vec4 obj(int j) { return texelFetch(tObj, ivec2(j & ${NOBJ_W - 1}, j >> ${Math.log2(NOBJ_W)}), 0); }
+  // how bright the "came back" glow is (1 just back, fading over ~3 s)
+  float backGlow(int j) { float b = texelFetch(tSt, ivec2(j & ${NOBJ_W - 1}, j >> ${Math.log2(NOBJ_W)}), 0).y; if (b <= 0.0 || uFlash < 0.5) return 0.0; float a = uWall - b; return a < 0.0 ? 0.0 : exp(-a * 1.2); }
   float h1(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return float(x) / 4294967295.0; }
   mat3 axisRot(vec3 a, float t) { float c = cos(t), s = sin(t), k = 1.0 - c;
     return mat3(c + a.x*a.x*k, a.y*a.x*k + a.z*s, a.z*a.x*k - a.y*s, a.x*a.y*k - a.z*s, c + a.y*a.y*k, a.z*a.y*k + a.x*s, a.x*a.z*k + a.y*s, a.y*a.z*k - a.x*s, c + a.z*a.z*k); }
@@ -122,47 +127,47 @@ const PIECE = /* glsl */`
 
 // --- perspective view ---
 const pieceVert = /* glsl */`${PIECE}
-  varying vec3 vW; varying float vShade;
+  varying vec3 vW; varying float vShade, vGlow;
   void main() {
     vec3 C, W; float sh;
     if (!piece(gl_InstanceID, C, W, sh)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-    vW = W; vShade = sh;
+    vW = W; vShade = sh; vGlow = backGlow(gl_InstanceID);
     gl_Position = projectionMatrix * viewMatrix * vec4(W, 1.0);
   }`;
 const pieceFrag = /* glsl */`
   uniform vec3 uColor, uLightDir;
-  varying vec3 vW; varying float vShade;
+  varying vec3 vW; varying float vShade, vGlow;
   vec3 lit(vec3 W, vec3 toEye, vec3 L, float shade, vec3 col) {
     vec3 n = normalize(cross(dFdx(W), dFdy(W)));
     if (dot(n, toEye) < 0.0) n = -n;
     return col * shade * (0.35 + 0.65 * max(dot(n, L), 0.0));
   }
-  void main() { gl_FragColor = vec4(lit(vW, cameraPosition - vW, uLightDir, vShade, uColor), 1.0); }`;
+  void main() { gl_FragColor = vec4(lit(vW, cameraPosition - vW, uLightDir, vShade, mix(uColor, vec3(1.0, 0.33, 0.16), vGlow)), 1.0); }`;
 
 // --- the LED sphere's 360 frame: each pixel is a point on the sphere seen straight from above (outside). The Earth
 // image is the background; each piece's vertices are placed by their direction from Earth's centre, and the piece
 // higher up (nearer the viewer outside) wins. ---
 const eqVert = /* glsl */`${PIECE}
   uniform mat3 uRotT; uniform float uShift;
-  varying vec3 vW; varying float vShade;
+  varying vec3 vW; varying float vShade, vGlow;
   void main() {
     vec3 C, W; float sh;
     if (!piece(gl_InstanceID, C, W, sh)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
     vec3 d0 = uRotT * normalize(C), d = uRotT * normalize(W);
     float lo0 = atan(-d0.z, d0.x), lo = atan(-d.z, d.x), la = asin(clamp(d.y, -1.0, 1.0));
     lo = lo0 + mod(lo - lo0 + 3.1415927, 6.2831853) - 3.1415927; // keep the piece in one piece across the seam
-    vW = W; vShade = sh;
+    vW = W; vShade = sh; vGlow = backGlow(gl_InstanceID);
     gl_Position = vec4(lo / 3.1415927 + uShift * 2.0, la / 1.5707963, clamp(1.0 - 2.0 * (length(W) - 6000.0) / 5.0e5, -1.0, 1.0), 1.0);
   }`;
 const eqFrag = /* glsl */`
   uniform vec3 uColor;
-  varying vec3 vW; varying float vShade;
+  varying vec3 vW; varying float vShade, vGlow;
   void main() {
     vec3 up = normalize(vW);
     vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
     if (dot(n, up) < 0.0) n = -n;
     vec3 L = normalize(up + 0.6 * normalize(cross(up, vec3(0.3, 1.0, 0.2))));
-    gl_FragColor = vec4(uColor * vShade * (0.35 + 0.65 * max(dot(n, L), 0.0)), 1.0);
+    gl_FragColor = vec4(mix(uColor, vec3(1.0, 0.33, 0.16), vGlow) * vShade * (0.35 + 0.65 * max(dot(n, L), 0.0)), 1.0);
   }`;
 const eqEarthFrag = /* glsl */`${EARTH}
   uniform mat3 uRotM; uniform vec2 uRes;
@@ -220,8 +225,13 @@ let meta = { fetched: null, errors: [] }, loaded = false, medRcs = 0.05;
 let geo = null, meshes = {};
 const BASE = Date.UTC(2026, 0, 1);
 const wallS = () => (Date.now() - BASE) / 1000;
-// cleaned pieces stay gone. A reset starts a new round (gen); everyone in the room keeps the union of what was cleaned.
-let gen = 0; const cleaned = new Map(); // norad → wall s when it was cleaned
+// the GPU gets times from this page's start (float32 can't hold seconds-since-2026 to a fraction of a second)
+const P0 = Math.floor(wallS()), gpuT = (t) => Math.max(1e-3, t - P0);
+// A cleaned piece comes back after a while (the catalogue still has it). Every return is a small Kessler cascade:
+// cleaned pieces near the one that came back have their time left cut (×CASC), so returns clump and speed up.
+// A reset starts a new round (gen); everyone in the room keeps the union of what was cleaned.
+let gen = 0, nBack = 0; const cleaned = new Map(); // norad → { t: wall s cleaned, due: wall s it comes back }
+const jitter = (n) => { const x = Math.sin(n * 12.9898) * 43758.5453; return 0.7 + 0.6 * (x - Math.floor(x)); }; // same on every screen
 
 function weight(o) {
   if (S.rcs !== '1' || !(o.rcs > 0)) return 1;
@@ -252,6 +262,7 @@ const posMat = new THREE.ShaderMaterial({
     float r = uSize * e2.w;
     if (length(p) - 6378.137 > uMaxAlt) r = 0.0;
     else if (st.x > 0.0) { float k = clamp((uNow - st.x) / 0.35, 0.0, 1.0); r *= 1.0 - k * k; } // cleaned: shrinks away
+    else if (st.y > 0.0) { float k = clamp((uNow - st.y) / 0.6, 0.0, 1.0); r *= max(0.01, k * k * (3.0 - 2.0 * k)); } // came back: grows in
     gl_FragColor = vec4(p.x, p.z, -p.y, r);
   }`, depthTest: false, depthWrite: false });
 const posScene = new THREE.Scene(), posQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), posMat); posQuad.frustumCulled = false; posScene.add(posQuad);
@@ -264,7 +275,7 @@ function build() {
   catQ.forEach((q, j) => { e0.set([q.a, q.e, q.i, 2], j * 4); e1.set([q.O, q.w, q.M, q.nd], j * 4); e2.set([q.dO, q.dw, q.dM, weights[j]], j * 4); });
   elTex.forEach((t) => t.dispose()); elTex = [e0, e1, e2].map((a) => dataTex(a, elW, 4, THREE.RGBAFormat));
   stTex?.dispose(); stArr = new Float32Array(nRows * elW * 4); stTex = dataTex(stArr, elW, 4, THREE.RGBAFormat);
-  objs.forEach((o, j) => { stArr[j * 4] = cleaned.get(o.norad) || 0; });
+  objs.forEach((o, j) => { const c = cleaned.get(o.norad); stArr[j * 4] = c ? gpuT(c.t) : 0; });
   const pu = posMat.uniforms; pu.tE0.value = elTex[0]; pu.tE1.value = elTex[1]; pu.tE2.value = elTex[2]; pu.tSt.value = stTex; pu.uN.value = n;
   posRT?.dispose(); posRT = new THREE.WebGLRenderTarget(elW, nRows, { type: THREE.FloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, generateMipmaps: false });
   U.tObj.value = posRT.texture;
@@ -284,19 +295,45 @@ function reweight() {
 }
 function update() {
   const pu = posMat.uniforms;
-  pu.uDt.value = (simT - T0) / 1000; pu.uRot.value = -ORB.gmst(simT); pu.uSize.value = SIZE_KM(); pu.uMaxAlt.value = S.range === 'leo' ? 2000 : 1e9; pu.uNow.value = wallS();
+  pu.uDt.value = (simT - T0) / 1000; pu.uRot.value = -ORB.gmst(simT); pu.uSize.value = SIZE_KM(); pu.uMaxAlt.value = S.range === 'leo' ? 2000 : 1e9; pu.uNow.value = wallS() - P0;
   renderer.setRenderTarget(posRT); renderer.render(posScene, eqCam);
 }
 const idx = new Map();
-function markCleaned(norad, t) {
+function markCleaned(norad, t, due = t + RETURN() * jitter(norad)) {
   if (cleaned.has(norad)) return false;
-  cleaned.set(norad, t);
+  cleaned.set(norad, { t, due });
   const j = idx.get(norad);
-  if (stArr && j != null) { stArr[j * 4] = t; stTex.needsUpdate = true; }
+  if (stArr && j != null) { stArr[j * 4] = gpuT(t); stArr[j * 4 + 1] = 0; stTex.needsUpdate = true; }
   return true;
 }
+const tmpA = [0, 0, 0], tmpB = [0, 0, 0];
+function scenePos(j, out) { return ORB.eciToScene(ORB.posEci(catQ[j], (simT - T0) / 1000, tmpP), -ORB.gmst(simT), out); }
+// a piece comes back: it grows in where it is now, and pushes the cleaned pieces around it to come back sooner
+function comeBack(norad, now, tell) {
+  if (!cleaned.delete(norad)) return;
+  nBack++;
+  const j = idx.get(norad);
+  if (j == null || !stArr) return;
+  stArr[j * 4] = 0; stArr[j * 4 + 1] = gpuT(now); stTex.needsUpdate = true;
+  if (tell) publish('/back', { n: norad, gen, by: ME });
+  const k = CASC(), r2 = REACH() * REACH(); if (k >= 1) return;
+  scenePos(j, tmpA);
+  for (const [n, c] of cleaned) {
+    const i = idx.get(n); if (i == null) continue;
+    scenePos(i, tmpB);
+    const dx = tmpB[0] - tmpA[0], dy = tmpB[1] - tmpA[1], dz = tmpB[2] - tmpA[2];
+    if (dx * dx + dy * dy + dz * dz < r2) c.due = now + Math.max(0, c.due - now) * k;
+  }
+}
+function tickReturns() {
+  if (!cleaned.size || !loaded) return;
+  const now = wallS(), due = [];
+  for (const [n, c] of cleaned) if (c.due <= now) due.push(n);
+  for (const n of due) comeBack(n, now, true);
+  if (due.length) { clearTimeout(snapT); snapT = setTimeout(sendSnapshot, 800); }
+}
 function resetRound(g) {
-  gen = g; cleaned.clear();
+  gen = g; cleaned.clear(); nBack = 0;
   if (stArr) { stArr.fill(0); stTex.needsUpdate = true; }
 }
 function ingest(parts) {
@@ -370,7 +407,7 @@ function tap(x, y) {
   const j = pick(r.ro, r.rd, r.pxAt);
   if (j < 0) return;
   const n = objs[j].norad, t = wallS();
-  if (markCleaned(n, t)) sendClean(n, t);
+  if (markCleaned(n, t)) sendClean(n, t, cleaned.get(n).due);
 }
 
 // ---------- touch: one finger turns, two fingers zoom, a tap cleans ----------
@@ -422,8 +459,8 @@ const ROOM = ORB.cleanRoom(Q.get('room'));
 const TOPIC = 'sampling-sphere/v1/cleanup' + (ROOM ? '/' + ROOM : ''), ME = Math.random().toString(36).slice(2, 10);
 let mq = null, relayOk = false, lookT = 0, snapT = null;
 const publish = (t, obj, retain = false) => { if (mq && relayOk) mq.publish(TOPIC + t, JSON.stringify(obj), { retain, qos: retain ? 1 : 0 }); };
-function sendClean(n, t) { publish('/clean', { n, t, gen, by: ME }); clearTimeout(snapT); snapT = setTimeout(sendSnapshot, 500); }
-function sendSnapshot() { publish('/cleaned', { gen, list: [...cleaned].map(([n, t]) => [n, Math.round(t)]), by: ME }, true); }
+function sendClean(n, t, due) { publish('/clean', { n, t, due, gen, by: ME }); clearTimeout(snapT); snapT = setTimeout(sendSnapshot, 500); }
+function sendSnapshot() { publish('/cleaned', { gen, list: [...cleaned].map(([n, c]) => [n, Math.round(c.t), Math.round(c.due * 10) / 10]), by: ME }, true); }
 function sendLook(force) {
   if (ROLE === 'display') return;
   const n = performance.now(); if (!force && n - lookT < 50) return; lookT = n;
@@ -435,7 +472,7 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
   const mqtt = m.default || m;
   mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
   mq.on('close', () => { relayOk = false; }); mq.on('offline', () => { relayOk = false; });
-  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/clean', TOPIC + '/cleaned', TOPIC + '/look', TOPIC + '/clock']); });
+  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/clean', TOPIC + '/cleaned', TOPIC + '/back', TOPIC + '/look', TOPIC + '/clock']); });
   mq.on('message', (t, msg) => {
     let d; try { d = JSON.parse(msg.toString()); } catch { return; }
     if (!d || d.by === ME) return;
@@ -443,15 +480,17 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
     if (k === '/clean') {
       if (Number.isFinite(d.n) && Number.isFinite(d.t) && Number.isFinite(d.gen)) {
         if (d.gen > gen) resetRound(d.gen);
-        if (d.gen === gen) markCleaned(d.n, d.t);
+        if (d.gen === gen) markCleaned(d.n, d.t, Number.isFinite(d.due) ? d.due : undefined);
       }
     } else if (k === '/cleaned') {
       if (Number.isFinite(d.gen) && Array.isArray(d.list) && d.gen >= gen) {
         const mine = d.gen === gen && cleaned.size > 0; // same round: keep the union
         if (d.gen > gen) resetRound(d.gen);
-        for (const e of d.list) if (Array.isArray(e) && e.every(Number.isFinite)) markCleaned(e[0], e[1] - 1); // no shrink animation for old ones
+        for (const e of d.list) if (Array.isArray(e) && e.length >= 2 && e.every(Number.isFinite)) markCleaned(e[0], e[1] - 1, e[2]); // no shrink animation for old ones
         if (mine && cleaned.size > d.list.length && ROLE !== 'display') { clearTimeout(snapT); snapT = setTimeout(sendSnapshot, 500); }
       }
+    } else if (k === '/back') {
+      if (Number.isFinite(d.n) && d.gen === gen) comeBack(d.n, wallS(), false);
     } else if (k === '/look') {
       if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size) rot360.fromArray(d.q).normalize();
     } else if (k === '/clock') {
@@ -471,9 +510,9 @@ function lookFromCamera() {
 }
 
 // ---------- panel (studio) ----------
-const SL = [['size', 'Size', 0, 100, () => Math.round(SIZE_KM()) + ' km'], ['tumble', 'Tumble', 0, 100, () => S.tumble + ''], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
+const SL = [['size', 'Size', 0, 100, () => Math.round(SIZE_KM()) + ' km'], ['tumble', 'Tumble', 0, 100, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
 const SEG = [['view', 'View', [['3d', '3D'], ['360', '360'], ['ball', 'Sphere']]], ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
-  ['rcs', 'Size by', [['1', 'Radar size'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]]];
+  ['rcs', 'Size by', [['1', 'Radar size'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]], ['flash', 'Return glow', [['1', 'On'], ['0', 'Off']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
@@ -481,7 +520,7 @@ function panelBuild() {
     <div class="row"><label></label><div class="seg"><button id="again">Put all debris back</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset settings</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Only debris: every object still in orbit that the US Space Force catalogue (via CelesTrak SATCAT) types as debris, at its real position now. Each piece is shown much bigger than it is, so together they cover the Earth. A tap cleans one piece; it stays gone for everyone in the room until "Put all debris back". Radar size: bigger radar cross-section, bigger piece (relative to the median debris, kept between 0.5× and 3×).</div>`;
+    <div class="note">Only debris: every object still in orbit that the US Space Force catalogue (via CelesTrak SATCAT) types as debris, at its real position now. Each piece is shown much bigger than it is, so together they cover the Earth. A tap cleans one piece. The catalogue still has it, so after a while (Comes back, ±30%) it returns. Each return is a small Kessler cascade: every cleaned piece within Reach of it has its time left multiplied by Cascade, so returns clump together and speed up. Cleaned pieces and returns are shared with everyone in the room. Radar size: bigger radar cross-section, bigger piece (relative to the median debris, kept between 0.5× and 3×).</div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight(); save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
   $('col').oninput = (e) => { S.color = e.target.value; save(); };
@@ -523,10 +562,11 @@ function frame(now) {
 }
 function render() {
   if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; build(); }
+  tickReturns();
   if (loaded) update();
   const rot = -ORB.gmst(simT);
   U.uLight.value = S.light === 'sun' ? 1 : 0;
-  U.uTime.value = performance.now() / 1000; U.uTumble.value = S.tumble / 100;
+  U.uTime.value = performance.now() / 1000; U.uWall.value = wallS() - P0; U.uFlash.value = S.flash === '0' ? 0 : 1; U.tSt.value = stTex; U.uTumble.value = S.tumble / 100;
   U.uColor.value.set(S.color);
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
@@ -560,10 +600,10 @@ function info() {
   if (!loaded) { el.innerHTML = meta.errors.length ? '<span class="err">Could not load the debris catalogue. Nothing is shown (no stand-in data).</span>' : 'Loading the debris catalogue…'; return; }
   const left = objs.length - cleaned.size, d = new Date(simT), live = Math.abs(simT - Date.now()) < 5000;
   el.textContent = ROLE === 'tablet' ? `${left.toLocaleString()}`
-    : `${left.toLocaleString()} pieces of debris · ${cleaned.size.toLocaleString()} cleaned\n${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
+    : `${left.toLocaleString()} pieces of debris · ${cleaned.size.toLocaleString()} cleaned · ${nBack.toLocaleString()} came back\n${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
 }
 
-if (TEST) window.__cl = { ingest, render, tap, S, view, rot360, setSim: (t) => { simT = t; }, pick, objs: () => objs, cleaned, markCleaned, setView: (k) => { S.view = k; resize(); }, startOver };
+if (TEST) window.__cl = { ingest, render, tap, S, view, rot360, setSim: (t) => { simT = t; }, pick, objs: () => objs, cleaned, markCleaned, comeBack, tickReturns, setView: (k) => { S.view = k; resize(); }, startOver };
 load();
 requestAnimationFrame(frame);
 </script>
