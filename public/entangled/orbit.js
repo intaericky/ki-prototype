@@ -59,7 +59,7 @@ export function parseCatalogue(parts) {
     const perigee = Math.cbrt(MU / (mm * TAU / 86400) ** 2) * (1 - ecc) - RE;
     if (!(perigee > 80)) continue;
     const yr = /^\d{4}/.test(intl) ? +intl.slice(0, 4) : null;
-    byId.set(norad, { norad, intl, type, rcs: sc?.[2] ?? null, yr, ep, mm, ecc, inc, raan, argp, ma, ndot: Number.isFinite(ndot) ? ndot : 0 });
+    byId.set(norad, { norad, intl, type, rcs: sc?.[2] ?? null, owner: sc?.[3] ?? null, yr, ep, mm, ecc, inc, raan, argp, ma, ndot: Number.isFinite(ndot) ? ndot : 0 });
   }
   return [...byId.values()];
 }

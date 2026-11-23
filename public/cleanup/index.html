@@ -478,7 +478,7 @@ function tap(x, y) {
 }
 
 // ---------- the cleaned piece's record (CelesTrak SATCAT, looked up on tap) ----------
-const OWNERS = { US: 'United States', CIS: 'Soviet Union / Russia', PRC: 'China', FR: 'France', ESA: 'European Space Agency', JPN: 'Japan', IND: 'India', UK: 'United Kingdom', GER: 'Germany', ISS: 'ISS partners', IT: 'Italy', CA: 'Canada', SKOR: 'South Korea', ISRA: 'Israel', IRAN: 'Iran', NKOR: 'North Korea', BRAZ: 'Brazil', ARGN: 'Argentina', AUS: 'Australia', SPN: 'Spain', TBD: 'unknown' };
+const OWNERS = { US: 'United States', CIS: 'Soviet Union / Russia', PRC: 'China', FR: 'France', ESA: 'European Space Agency', JPN: 'Japan', IND: 'India', UK: 'United Kingdom', GER: 'Germany', ISS: 'ISS partners', IT: 'Italy', CA: 'Canada', SKOR: 'South Korea', ISRA: 'Israel', IRAN: 'Iran', NKOR: 'North Korea', BRAZ: 'Brazil', ARGN: 'Argentina', AUS: 'Australia', SPN: 'Spain', ITSO: 'Intelsat', EUME: 'EUMETSAT', CHBZ: 'China / Brazil', ORB: 'ORBCOMM', SEAL: 'Sea Launch', GLOB: 'Globalstar', TBD: 'unknown' };
 const infoCache = new Map(); let cardT = null, cardN = null;
 const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 function cardHTML(o, rec, altNow) {
@@ -489,7 +489,7 @@ function cardHTML(o, rec, altNow) {
   return `<div class="nm">${esc(name || 'Debris ' + o.norad)}</div>`
     + row('Catalogue', `${o.norad} · ${o.intl}`)
     + row('From', parent)
-    + row('Owner', rec?.OWNER ? (OWNERS[rec.OWNER] || rec.OWNER) : '')
+    + row('Owner', (rec?.OWNER || o.owner) ? (OWNERS[rec?.OWNER || o.owner] || rec?.OWNER || o.owner) : '')
     + row('Launched', rec?.LAUNCH_DATE ? rec.LAUNCH_DATE + (rec.LAUNCH_SITE ? ' · ' + rec.LAUNCH_SITE : '') : (o.yr ? String(o.yr) : ''))
     + row('Orbit', `${Math.round(per).toLocaleString()} – ${Math.round(apo).toLocaleString()} km · ${o.inc.toFixed(1)}° · ${(1440 / o.mm).toFixed(0)} min`)
     + row('Height now', Math.round(altNow).toLocaleString() + ' km')
