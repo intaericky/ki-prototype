@@ -31,6 +31,11 @@ const nextConfig: NextConfig = {
         source: `/${page}`,
         destination: "/cleanup/index.html",
       })),
+      // Climate models: each model's own CMIP6 grid, cell by cell, with its stored values (no smoothing or regridding)
+      ...["climate-models", "climate-models-display"].map((page) => ({
+        source: `/${page}`,
+        destination: "/climate-models/index.html",
+      })),
       // the audience's launch tablet
       { source: "/entangled-tablet", destination: "/entangled-tablet/index.html" },
     ];
