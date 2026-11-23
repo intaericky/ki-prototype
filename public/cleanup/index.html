@@ -14,7 +14,7 @@
   #info { position: fixed; left: 20px; bottom: 16px; color: var(--dim); font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre; }
   #toggle { position: fixed; top: 16px; right: 16px; background: none; border: 1px solid var(--faint); color: var(--dim); font: inherit; padding: 6px 12px; border-radius: 0; cursor: pointer; }
   #toggle.on { color: var(--fg); border-color: var(--fg); }
-  #panel { position: fixed; top: 56px; right: 16px; width: 300px; max-height: calc(100vh - 80px); overflow: auto; background: #000000d9; border: 1px solid var(--faint); padding: 14px 16px; display: none; }
+  #panel { position: fixed; top: 56px; right: 16px; width: 300px; max-height: calc(100vh - 80px); overflow-y: auto; overflow-x: hidden; background: #000000d9; border: 1px solid var(--faint); padding: 14px 16px; display: none; }
   #panel.on { display: block; }
   .row { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 8px; margin: 7px 0; }
   .row label { color: var(--dim); }
@@ -35,6 +35,14 @@
   #card .nm { font-size: 17px; margin-bottom: 6px; }
   #card .r { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
   #card .r span:first-child { color: var(--dim); }
+  .cp { grid-column: 2 / 4; display: grid; gap: 8px; min-width: 0; }
+  .sv { position: relative; height: 150px; cursor: crosshair; touch-action: none; }
+  .sv .svw, .sv .svb { position: absolute; inset: 0; } .sv .svw { background: linear-gradient(to right, #fff, #fff0); } .sv .svb { background: linear-gradient(to top, #000, #0000); }
+  .hu { position: relative; height: 12px; background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); cursor: pointer; touch-action: none; }
+  .cp i { position: absolute; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px #0008; transform: translate(-50%, -50%); pointer-events: none; }
+  .hu i { top: 50%; background: transparent; }
+  .cprow { display: flex; gap: 6px; } .cprow span { width: 24px; height: 24px; border: 1px solid var(--faint); flex: none; }
+  .cprow input { flex: 1; min-width: 0; width: 100%; font: inherit; background: none; color: var(--fg); border: 1px solid var(--faint); padding: 3px 6px; }
   body.display #toggle, body.display #panel, body.display #info, body.display #card { display: none; }
   body.tablet #toggle { display: none; }
 </style>
@@ -61,10 +69,15 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: '3d', size: 84, rcs: '1', shape: 'sphere', seg: 32, hue: 0, sat: 0, lit: 100, rough: 100, metal: 0, key: 250, amb: 60, tumble: 60, light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
+const DEF = { view: '3d', size: 84, rcs: '1', shape: 'sphere', seg: 32, hue: 0, sat: 0, val: 100, rough: 100, metal: 0, key: 250, amb: 60, tumble: 60, light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
 let S = { ...DEF };
 const KEY = 'cleanup-v3';
-const pieceColor = new THREE.Color(), HSL = () => pieceColor.setHSL(S.hue / 360, S.sat / 100, S.lit / 100);
+// colour as hue / saturation / brightness (HSV, as in Figma's picker)
+const hsvRgb = (h, s, v) => { const f = (n) => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); }; return [f(5), f(3), f(1)]; };
+const pieceColor = new THREE.Color(), HSL = () => pieceColor.setRGB(...hsvRgb(S.hue, S.sat / 100, S.val / 100));
+function rgbHsv(r, g, b) { const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; let h = 0;
+  if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [Math.round(((h * 60) + 360) % 360), Math.round(mx ? d / mx * 100 : 0), Math.round(mx * 100)]; }
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
@@ -601,14 +614,18 @@ function lookFromCamera() {
 }
 
 // ---------- panel (studio) ----------
-const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['seg', 'Detail', 3, 64, () => S.seg + ''], ['hue', 'Hue', 0, 360, () => S.hue + '°'], ['sat', 'Saturation', 0, 100, () => S.sat + '%'], ['lit', 'Lightness', 0, 100, () => S.lit + '%'], ['rough', 'Roughness', 0, 100, () => (S.rough / 100).toFixed(2)], ['metal', 'Metalness', 0, 100, () => (S.metal / 100).toFixed(2)], ['key', 'Key light', 0, 600, () => (S.key / 100).toFixed(1)], ['amb', 'Ambient', 0, 300, () => (S.amb / 100).toFixed(1)], ['tumble', 'Tumble', 0, 300, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
+const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['seg', 'Detail', 3, 64, () => S.seg + ''], ['rough', 'Roughness', 0, 100, () => (S.rough / 100).toFixed(2)], ['metal', 'Metalness', 0, 100, () => (S.metal / 100).toFixed(2)], ['key', 'Key light', 0, 600, () => (S.key / 100).toFixed(1)], ['amb', 'Ambient', 0, 300, () => (S.amb / 100).toFixed(1)], ['tumble', 'Tumble', 0, 300, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
 const SHAPE_ROWS = [[['sphere', 'Sphere'], ['box', 'Box'], ['cylinder', 'Cylinder'], ['cone', 'Cone']], [['torus', 'Torus'], ['octahedron', 'Octa'], ['icosahedron', 'Icosa'], ['tetrahedron', 'Tetra']]];
 const SEG = [['view', 'View', [['3d', '3D'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], ...SHAPE_ROWS.map((o, i) => ['shape', i ? '' : 'Shape', o]), ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
   ['rcs', 'Size by', [['1', 'Radar (capped)'], ['exact', 'Radar (exact)'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]], ['flash', 'Return glow', [['1', 'On'], ['0', 'Off']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
+    + `<div class="row"><label>Colour</label><div class="cp">
+      <div id="sv" class="sv"><div class="svw"></div><div class="svb"></div><i id="svk"></i></div>
+      <div id="hu" class="hu"><i id="huk"></i></div>
+      <div class="cprow"><span id="sw"></span><input type="text" id="hex" spellcheck="false"></div></div></div>`
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
-    + `<div class="row"><label>Colour</label><input type="text" id="hex" spellcheck="false" style="font:inherit;background:none;color:var(--fg);border:1px solid var(--faint);padding:3px 6px;width:100%"><span id="sw" style="display:block;height:22px;border:1px solid var(--faint)"></span></div>
+    + `
     <div class="row"><label></label><div class="seg"><button id="again">Put all debris back</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset settings</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
@@ -616,7 +633,11 @@ function panelBuild() {
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight();
     save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
-  $('hex').onchange = (e) => { const v = e.target.value.trim(); if (/^#?[0-9a-f]{6}$/i.test(v)) { const h = {}; new THREE.Color('#' + v.replace('#', '')).getHSL(h); S.hue = Math.round(h.h * 360); S.sat = Math.round(h.s * 100); S.lit = Math.round(h.l * 100); save(); } panelSync(); };
+  $('hex').onchange = (e) => { const v = e.target.value.trim().replace('#', ''); if (/^[0-9a-f]{6}$/i.test(v)) { const c = parseInt(v, 16); [S.hue, S.sat, S.val] = rgbHsv((c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255); save(); } panelSync(); };
+  const drag = (el, fn) => { el.onpointerdown = (e) => { el.setPointerCapture(e.pointerId); fn(e); el.onpointermove = (ev) => fn(ev); }; el.onpointerup = el.onpointercancel = () => { el.onpointermove = null; save(); }; };
+  const frac = (e, el) => { const b = el.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)), Math.min(1, Math.max(0, (e.clientY - b.top) / b.height))]; };
+  drag($('sv'), (e) => { const [x, y] = frac(e, $('sv')); S.sat = Math.round(x * 100); S.val = Math.round((1 - y) * 100); panelSync(); });
+  drag($('hu'), (e) => { S.hue = Math.round(frac(e, $('hu'))[0] * 360); panelSync(); });
   $('again').onclick = startOver;
   $('now').onclick = () => { simT = Date.now(); S.spd = 0; clock = null; sendClock(); save(); panelSync(); };
   $('copy').onclick = () => {
@@ -630,7 +651,8 @@ function panelBuild() {
 function panelSync() {
   document.querySelectorAll('.seg[data-k]').forEach((s) => s.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(S[s.dataset.k]) === b.dataset.v)));
   for (const [k, , , , f] of SL) { const r = document.querySelector(`input[data-k="${k}"]`); if (r) r.value = S[k]; const o = document.querySelector(`output[data-o="${k}"]`); if (o) o.textContent = f(); }
-  const hex = '#' + HSL().getHexString(); if ($('hex') && document.activeElement !== $('hex')) $('hex').value = hex; if ($('sw')) $('sw').style.background = hex;
+  const hex = '#' + HSL().getHexString(); if ($('hex') && document.activeElement !== $('hex')) $('hex').value = hex.toUpperCase();
+  if ($('sw')) { $('sw').style.background = hex; $('sv').style.background = `hsl(${S.hue}, 100%, 50%)`; $('svk').style.left = S.sat + '%'; $('svk').style.top = (100 - S.val) + '%'; $('svk').style.background = hex; $('huk').style.left = S.hue / 3.6 + '%'; }
 }
 $('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').classList.toggle('on'); };
 panelBuild(); panelSync();
