@@ -305,6 +305,22 @@ ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.Sha
   vertexShader: `varying vec3 vN; void main(){ vN = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: `uniform sampler2D t; varying vec3 vN; void main(){ vec3 n = normalize(vN); float lo = atan(n.x, n.z), la = asin(clamp(n.y, -1.0, 1.0));
     gl_FragColor = texture2D(t, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5)); }` })));
+// 3D (lit): the same globe, but its surface really moves. Each vertex reads the height image (the mean cell value
+// at that point, the same number the shading uses) and is pushed out (Raised) or in (Carved) along its radius, in
+// proportion to that value. Where neighbouring cells differ, the surface steps, and the step faces are walls.
+// The vertex grid is 0.35° (1024 × 512), finer than every model's cells here, so each cell keeps its own flat top.
+const GU = { t: { value: eqRT.texture }, tH: { value: hRT.texture }, uLift: { value: 0 } };
+const globeScene = new THREE.Scene();
+const globe = new THREE.Mesh(new THREE.SphereGeometry(1, 1024, 512), new THREE.ShaderMaterial({ uniforms: GU,
+  vertexShader: `uniform sampler2D tH; uniform float uLift; varying vec3 vN; varying vec3 vW;
+    void main(){ vec3 n = normalize(position); float lo = atan(n.x, n.z), la = asin(clamp(n.y, -1.0, 1.0));
+      vec4 s = texture2D(tH, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5));
+      float h = s.a > 0.5 ? s.r / s.a : 0.0;
+      vN = n; vec3 p = n * (1.0 + uLift * h); vW = p; gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0); }`,
+  fragmentShader: `uniform sampler2D t; varying vec3 vN; varying vec3 vW; void main(){ vec3 n = normalize(vN); float lo = atan(n.x, n.z), la = asin(clamp(n.y, -1.0, 1.0));
+    vec3 g = normalize(cross(dFdx(vW), dFdy(vW))); float face = abs(dot(g, n)); // 1 on a cell top, toward 0 on a wall
+    gl_FragColor = vec4(texture2D(t, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5)).rgb * mix(0.25, 1.0, face), 1.0); }` }));
+globe.frustumCulled = false; globeScene.add(globe);
 
 // ---------- panel ----------
 const SEGS = [['model', 'Model', () => [...INDEX.models.map((m) => [m.source_id, m.source_id]), [ALL, 'All 4 together']]], ['organ', 'Organ', () => [['atmosphere', 'Atmosphere'], ['ocean', 'Ocean'], ['structure', 'Both grids']]],
@@ -402,7 +418,8 @@ function render() {
     if (showLines) { for (const M of Ms) { for (const x of M.fills360) x.visible = false; for (const x of M.lines) x.visible = true; } renderer.autoClear = false; renderer.render(eqScene, eqCam); renderer.autoClear = true; for (const M of Ms) for (const x of M.fills360) x.visible = true; }
     renderer.setRenderTarget(null);
     if (S.view === '360') renderer.render(blitScene, eqCam);
-    else if (S.view === '3d') { camera.position.set(Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch), Math.cos(view.pitch) * Math.cos(view.yaw)).multiplyScalar(view.dist); camera.lookAt(0, 0, 0); renderer.render(ballScene, camera); }
+    else if (S.view === '3d') { camera.position.set(Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch), Math.cos(view.pitch) * Math.cos(view.yaw)).multiplyScalar(view.dist); camera.lookAt(0, 0, 0);
+      GU.uLift.value = (S.dir === 'in' ? -1 : 1) * 0.9 * S.relief / (1 + S.relief); renderer.render(globeScene, camera); }
     else { ballCam.position.set(Math.cos(ball.pitch) * Math.sin(ball.yaw), Math.sin(ball.pitch), Math.cos(ball.pitch) * Math.cos(ball.yaw)).multiplyScalar(ball.dist); ballCam.lookAt(0, 0, 0); renderer.render(ballScene, ballCam); }
   } else if (S.view === '3d') {
     U.uMode.value = 0;
