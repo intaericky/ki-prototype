@@ -1,5 +1,14 @@
 const PAGES = [
   {
+    group: "Cleanup",
+    note: "Only real debris, every piece in orbit, shown big enough to cover the Earth. Tap a piece to clean it: it stays gone, and the Earth shows through.",
+    links: [
+      { href: "/cleanup", title: "Studio", text: "3D, 360 and sphere preview, with piece size, radar-size scaling, tumble, colour, speed, and Put all debris back." },
+      { href: "/cleanup-tablet", title: "Tablet", text: "Turn, pinch to zoom, tap a piece to clean it. The number is how much debris is left." },
+      { href: "/cleanup-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere. Same ?room= as the tablet shares cleaned pieces and the turn." },
+    ],
+  },
+  {
     group: "Refraction",
     note: "Every tracked object as a glass ball. Earth is black: its surface shows only through the glass, and popping a ball leaves only black.",
     links: [
