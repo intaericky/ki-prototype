@@ -55,9 +55,9 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: '3d', size: 84, rcs: '1', shape: 'shard', jag: 45, irreg: 100, tumble: 60, color: '#c8c8c8', light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
+const DEF = { view: '3d', size: 84, rcs: '1', shape: 'sphere', seg: 32, color: '#ffffff', rough: 100, metal: 0, key: 250, amb: 60, tumble: 60, light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
 let S = { ...DEF };
-const KEY = 'cleanup-v2';
+const KEY = 'cleanup-v3';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
@@ -93,7 +93,7 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 const NOBJ_W = 1024;
 const U = {
   tObj: { value: null }, tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 },
-  tSt: { value: null }, uWall: { value: 0 }, uFlash: { value: 1 }, uTime: { value: 0 }, uTumble: { value: 0.2 }, uIrreg: { value: 1 }, uColor: { value: new THREE.Color(0xc8c8c8) }, uLightDir: { value: new THREE.Vector3(0, 1, 0) },
+  tSt: { value: null }, uWall: { value: 0 }, uFlash: { value: 1 }, uTime: { value: 0 }, uTumble: { value: 0.2 },
   uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) },
 };
 const EARTH = /* glsl */`
@@ -106,73 +106,64 @@ const EARTH = /* glsl */`
     vec3 night = texture2D(tNight, uv).rgb;
     return mix(night * 0.7, day, smoothstep(-0.08, 0.12, dot(n, uSun)));
   }`;
-// one piece of debris: an irregular shard at the object's position (xyz km, w = size; 0 = gone), turned and flattened
-// differently for every object, slowly tumbling
-const PIECE = /* glsl */`
-  uniform highp sampler2D tObj, tSt; uniform float uTime, uTumble, uFlash, uIrreg; uniform float uWall;
+// Each piece is drawn with three.js's standard material (MeshStandardMaterial: colour, roughness, metalness, lit by
+// one directional light and ambient light). Only its placement is ours: the shader moves every instance to its
+// object's position (xyz km, w = radius; <= 0 hidden), turned on its own random axis (Tumble).
+const PIECE_HEAD = /* glsl */`
+  uniform highp sampler2D tObj, tSt; uniform float uTime, uTumble, uFlash, uWall, uShift; uniform mat3 uRotT;
+  varying float vGlow;
   vec4 obj(int j) { return texelFetch(tObj, ivec2(j & ${NOBJ_W - 1}, j >> ${Math.log2(NOBJ_W)}), 0); }
-  // how bright the "came back" glow is (1 just back, fading over ~3 s)
   float backGlow(int j) { float b = texelFetch(tSt, ivec2(j & ${NOBJ_W - 1}, j >> ${Math.log2(NOBJ_W)}), 0).y; if (b <= 0.0 || uFlash < 0.5) return 0.0; float a = uWall - b; return a < 0.0 ? 0.0 : exp(-a * 1.2); }
   float h1(uint x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return float(x) / 4294967295.0; }
   mat3 axisRot(vec3 a, float t) { float c = cos(t), s = sin(t), k = 1.0 - c;
     return mat3(c + a.x*a.x*k, a.y*a.x*k + a.z*s, a.z*a.x*k - a.y*s, a.x*a.y*k - a.z*s, c + a.y*a.y*k, a.z*a.y*k + a.x*s, a.x*a.z*k + a.y*s, a.y*a.z*k - a.x*s, c + a.z*a.z*k); }
-  bool piece(int id, out vec3 C, out vec3 W, out float shade) {
-    vec4 o = obj(id); C = o.xyz; float r = o.w;
-    if (r <= 0.0) return false;
-    uint u = uint(id) * 2654435761u + 1013904223u;
-    vec3 ax = normalize(vec3(h1(u), h1(u + 1u), h1(u + 2u)) * 2.0 - 1.0 + 1e-4);
-    float sp = (h1(u + 3u) - 0.5) * 2.0 * uTumble;
-    vec3 sc = mix(vec3(1.0), vec3(1.0, 0.45 + 0.5 * h1(u + 4u), 0.18 + 0.35 * h1(u + 5u)), uIrreg); // each piece flattened its own way
-    W = C + axisRot(ax, h1(u + 6u) * 6.2831853 + uTime * sp) * (position * sc) * r;
-    shade = 0.72 + 0.28 * h1(u + 7u);
-    return true;
-  }
 `;
-
-// --- perspective view ---
-const pieceVert = /* glsl */`${PIECE}
-  varying vec3 vW; varying float vShade, vGlow;
-  void main() {
-    vec3 C, W; float sh;
-    if (!piece(gl_InstanceID, C, W, sh)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-    vW = W; vShade = sh; vGlow = backGlow(gl_InstanceID);
-    gl_Position = projectionMatrix * viewMatrix * vec4(W, 1.0);
-  }`;
-const pieceFrag = /* glsl */`
-  uniform vec3 uColor, uLightDir;
-  varying vec3 vW; varying float vShade, vGlow;
-  vec3 lit(vec3 W, vec3 toEye, vec3 L, float shade, vec3 col) {
-    vec3 n = normalize(cross(dFdx(W), dFdy(W)));
-    if (dot(n, toEye) < 0.0) n = -n;
-    return col * shade * (0.35 + 0.65 * max(dot(n, L), 0.0));
-  }
-  void main() { gl_FragColor = vec4(lit(vW, cameraPosition - vW, uLightDir, vShade, mix(uColor, vec3(1.0, 0.33, 0.16), vGlow)), 1.0); }`;
-
-// --- the LED sphere's 360 frame: each pixel is a point on the sphere seen straight from above (outside). The Earth
-// image is the background; each piece's vertices are placed by their direction from Earth's centre, and the piece
-// higher up (nearer the viewer outside) wins. ---
-const eqVert = /* glsl */`${PIECE}
-  uniform mat3 uRotT; uniform float uShift;
-  varying vec3 vW; varying float vShade, vGlow;
-  void main() {
-    vec3 C, W; float sh;
-    if (!piece(gl_InstanceID, C, W, sh)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-    vec3 d0 = uRotT * normalize(C), d = uRotT * normalize(W);
-    float lo0 = atan(-d0.z, d0.x), lo = atan(-d.z, d.x), la = asin(clamp(d.y, -1.0, 1.0));
-    lo = lo0 + mod(lo - lo0 + 3.1415927, 6.2831853) - 3.1415927; // keep the piece in one piece across the seam
-    vW = W; vShade = sh; vGlow = backGlow(gl_InstanceID);
-    gl_Position = vec4(lo / 3.1415927 + uShift * 2.0, la / 1.5707963, clamp(1.0 - 2.0 * (length(W) - 6000.0) / 5.0e5, -1.0, 1.0), 1.0);
-  }`;
-const eqFrag = /* glsl */`
-  uniform vec3 uColor;
-  varying vec3 vW; varying float vShade, vGlow;
-  void main() {
-    vec3 up = normalize(vW);
-    vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
-    if (dot(n, up) < 0.0) n = -n;
-    vec3 L = normalize(up + 0.6 * normalize(cross(up, vec3(0.3, 1.0, 0.2))));
-    gl_FragColor = vec4(mix(uColor, vec3(1.0, 0.33, 0.16), vGlow) * vShade * (0.35 + 0.65 * max(dot(n, L), 0.0)), 1.0);
-  }`;
+// placement, done where three computes the normal (which comes first in its vertex shader)
+const PIECE_PLACE = /* glsl */`
+  vec4 pO = obj(gl_InstanceID); float pR = max(pO.w, 0.0);
+  uint pU = uint(gl_InstanceID) * 2654435761u + 1013904223u;
+  vec3 pAx = normalize(vec3(h1(pU), h1(pU + 1u), h1(pU + 2u)) * 2.0 - 1.0 + 1e-4);
+  mat3 pRot = axisRot(pAx, h1(pU + 6u) * 6.2831853 + uTime * (h1(pU + 3u) - 0.5) * 2.0 * uTumble);
+  vec3 pW = pO.xyz + pRot * position * pR;
+  vGlow = backGlow(gl_InstanceID);
+  vec3 objectNormal = pRot * normal;
+`;
+function standardPiece(eq, shift = 0) {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, { tObj: U.tObj, tSt: U.tSt, uTime: U.uTime, uTumble: U.uTumble, uFlash: U.uFlash, uWall: U.uWall, uRotT: U.uRotT, uShift: { value: shift } });
+    let v = sh.vertexShader.replace('#include <common>', '#include <common>\n' + PIECE_HEAD);
+    if (!eq) {
+      v = v.replace('#include <beginnormal_vertex>', PIECE_PLACE).replace('#include <begin_vertex>', 'vec3 transformed = pW;');
+    } else {
+      // LED 360 frame: the viewer is outside, looking straight down at every point. Light and view are worked out in
+      // each piece's own "looking down" frame (z = up from the Earth), so every piece is lit the same way wherever it is.
+      v = v.replace('#include <beginnormal_vertex>', PIECE_PLACE + `
+        vec3 pUp = normalize(pO.xyz + 1e-6), pT = normalize(cross(abs(pUp.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), pUp)), pB = cross(pUp, pT);
+        objectNormal = vec3(dot(objectNormal, pT), dot(objectNormal, pB), dot(objectNormal, pUp));`)
+        .replace('#include <begin_vertex>', 'vec3 transformed = pW;')
+        .replace('#include <project_vertex>', `
+        vec4 mvPosition = vec4(0.0, 0.0, -1.0, 1.0);
+        vec3 d0 = uRotT * normalize(pO.xyz + 1e-6), d = uRotT * normalize(pW);
+        float lo0 = atan(-d0.z, d0.x), lo = atan(-d.z, d.x), la = asin(clamp(d.y, -1.0, 1.0));
+        lo = lo0 + mod(lo - lo0 + 3.1415927, 6.2831853) - 3.1415927; // keep the piece in one piece across the seam
+        gl_Position = pR <= 0.0 ? vec4(2.0, 2.0, 2.0, 1.0) : vec4(lo / 3.1415927 + uShift * 2.0, la / 1.5707963, clamp(1.0 - 2.0 * (length(pW) - 6000.0) / 5.0e5, -1.0, 1.0), 1.0);`);
+    }
+    sh.vertexShader = v;
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vGlow;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n totalEmissiveRadiance += vec3(1.0, 0.33, 0.16) * vGlow;');
+  };
+  m.customProgramCacheKey = () => 'cleanup-piece-' + (eq ? 'eq' : '3d');
+  return m;
+}
+const pieceMat = standardPiece(false);
+const eqMats = [-1, 0, 1].map((k) => standardPiece(true, k));
+const pieceMats = [pieceMat, ...eqMats];
+// lights: one directional (follows the viewer's shoulder in 3D; fixed above-left in each piece's frame for the 360) + ambient
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.5), ambLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(keyLight, keyLight.target, ambLight);
+const eqKey = new THREE.DirectionalLight(0xffffff, 2.5), eqAmb = new THREE.AmbientLight(0xffffff, 0.6);
+eqKey.position.set(-0.4, 0.5, 1); // in each piece's own frame: up-left of straight down
 const eqEarthFrag = /* glsl */`${EARTH}
   uniform mat3 uRotM; uniform vec2 uRes;
   void main() {
@@ -182,7 +173,6 @@ const eqEarthFrag = /* glsl */`${EARTH}
   }`;
 
 const mk = (v, f, extra = {}) => new THREE.ShaderMaterial({ uniforms: { ...U, ...extra }, vertexShader: v, fragmentShader: f });
-const pieceMat = mk(pieceVert, pieceFrag);
 
 // --- the minimal tablet (as in Refraction): Earth as one outline, each piece a small circle, a cleaned piece an x,
 // a piece that just came back a filled dot that fades to a circle ---
@@ -226,7 +216,6 @@ const earthLine = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), new THRE
   fragmentShader: `varying vec3 vN, vV; void main(){ float f = dot(normalize(vN), normalize(vV)), w = fwidth(f); float a = 1.0 - smoothstep(0.0, 1.6 * w, f); gl_FragColor = vec4(vec3(a), 1.0); }`,
 }));
 earthBlack.renderOrder = earthLine.renderOrder = -1;
-const eqMats = [-1, 0, 1].map((k) => mk(eqVert, eqFrag, { uShift: { value: k } }));
 
 // Earth (the image under the debris)
 const earth = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), mk(
@@ -252,30 +241,19 @@ ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.Sha
     void main(){ vec3 n = normalize(vN); float lo = atan(-n.z, n.x), la = asin(clamp(n.y, -1.0, 1.0));
       gl_FragColor = texture2D(tFrame, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5)); }` })));
 
-// the piece's shape (the same for every piece; each piece is turned and squashed differently). Jagged pushes each
-// corner in or out by a random amount, so a sphere becomes a rock and an icosahedron a shard.
+// the piece's shape: three.js primitives at their default detail (Detail sets the sphere's segments; 32 × 16 is three's default)
 const SHAPES = {
-  shard: () => new THREE.IcosahedronGeometry(1, 0), rock: () => new THREE.IcosahedronGeometry(1, 1), sphere: () => new THREE.IcosahedronGeometry(1, 3),
-  cube: () => new THREE.BoxGeometry(1.2, 1.2, 1.2), diamond: () => new THREE.OctahedronGeometry(1, 0), shardlet: () => new THREE.TetrahedronGeometry(1, 0),
-  plate: () => new THREE.CylinderGeometry(1, 1, 0.12, 7), rod: () => new THREE.CylinderGeometry(0.18, 0.18, 2, 6), spike: () => new THREE.ConeGeometry(0.4, 2, 5),
+  sphere: (n) => new THREE.SphereGeometry(1, n, Math.max(4, n / 2)), box: () => new THREE.BoxGeometry(1.4, 1.4, 1.4),
+  cylinder: (n) => new THREE.CylinderGeometry(0.8, 0.8, 1.6, n), cone: (n) => new THREE.ConeGeometry(0.9, 1.8, n),
+  torus: (n) => new THREE.TorusGeometry(0.75, 0.28, Math.max(6, n / 2), n), octahedron: () => new THREE.OctahedronGeometry(1, 0),
+  icosahedron: () => new THREE.IcosahedronGeometry(1, 0), tetrahedron: () => new THREE.TetrahedronGeometry(1, 0),
 };
-function makeShape(kind, jag) {
-  let g = (SHAPES[kind] || SHAPES.shard)();
-  if (g.index) g = g.toNonIndexed();
-  const p = g.attributes.position, seen = new Map();
-  let s = 7;
-  const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
-  for (let i = 0; i < p.count; i++) {
-    const k = [p.getX(i), p.getY(i), p.getZ(i)].map((v) => v.toFixed(3)).join();
-    if (!seen.has(k)) seen.set(k, 1 - jag * rnd());
-    const f = seen.get(k); p.setXYZ(i, p.getX(i) * f, p.getY(i) * f, p.getZ(i) * f);
-  }
-  return g;
-}
 let shapeKey = '';
 function applyShape() {
-  const k = S.shape + ':' + S.jag; if (!geo || k === shapeKey) return;
-  shapeKey = k; geo.setAttribute('position', makeShape(S.shape, S.jag / 100).attributes.position);
+  const k = S.shape + ':' + S.seg; if (!geo || k === shapeKey) return;
+  shapeKey = k;
+  const g = (SHAPES[S.shape] || SHAPES.sphere)(Math.max(3, Math.round(S.seg)));
+  geo.setIndex(g.index); geo.setAttribute('position', g.attributes.position); geo.setAttribute('normal', g.attributes.normal);
 }
 
 // ---------- catalogue: debris only ----------
@@ -345,7 +323,7 @@ function build() {
     const M = (mat) => { const m = new THREE.Mesh(geo, mat); m.frustumCulled = false; return m; };
     const L = new THREE.Mesh(lineGeo, linesMat); L.frustumCulled = false;
     meshes = { piece: M(pieceMat), eq: eqMats.map(M), lines: L };
-    scene.add(meshes.piece, L); eqScene.add(...meshes.eq);
+    scene.add(meshes.piece, L); eqScene.add(...meshes.eq, eqKey, eqKey.target, eqAmb);
   }
   applyShape();
   geo.instanceCount = n; lineGeo.instanceCount = n;
@@ -572,8 +550,8 @@ function lookFromCamera() {
 }
 
 // ---------- panel (studio) ----------
-const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['jag', 'Jagged', 0, 90, () => S.jag + ''], ['irreg', 'Flatten', 0, 100, () => S.irreg + ''], ['tumble', 'Tumble', 0, 300, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
-const SHAPE_ROWS = [[['shard', 'Shard'], ['rock', 'Rock'], ['sphere', 'Sphere']], [['cube', 'Cube'], ['diamond', 'Diamond'], ['shardlet', 'Tetra']], [['plate', 'Plate'], ['rod', 'Rod'], ['spike', 'Spike']]];
+const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['seg', 'Detail', 3, 64, () => S.seg + ''], ['rough', 'Roughness', 0, 100, () => (S.rough / 100).toFixed(2)], ['metal', 'Metalness', 0, 100, () => (S.metal / 100).toFixed(2)], ['key', 'Key light', 0, 600, () => (S.key / 100).toFixed(1)], ['amb', 'Ambient', 0, 300, () => (S.amb / 100).toFixed(1)], ['tumble', 'Tumble', 0, 300, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
+const SHAPE_ROWS = [[['sphere', 'Sphere'], ['box', 'Box'], ['cylinder', 'Cylinder'], ['cone', 'Cone']], [['torus', 'Torus'], ['octahedron', 'Octa'], ['icosahedron', 'Icosa'], ['tetrahedron', 'Tetra']]];
 const SEG = [['view', 'View', [['3d', '3D'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], ...SHAPE_ROWS.map((o, i) => ['shape', i ? '' : 'Shape', o]), ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
   ['rcs', 'Size by', [['1', 'Radar (capped)'], ['exact', 'Radar (exact)'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]], ['flash', 'Return glow', [['1', 'On'], ['0', 'Off']]]];
 function panelBuild() {
@@ -585,7 +563,7 @@ function panelBuild() {
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
     <div class="note">Only debris: every object still in orbit that the US Space Force catalogue (via CelesTrak SATCAT) types as debris, at its real position now. Each piece is shown ×N bigger than it really is (its radius from its radar cross-section), so together they cover the Earth. A tap cleans one piece. The catalogue still has it, so after a while (Comes back, ±30%) it returns. Each return is a small Kessler cascade: every cleaned piece within Reach of it has its time left multiplied by Cascade, so returns clump together and speed up. Cleaned pieces and returns are shared with everyone in the room. Size by: Radar (capped) keeps each piece between 0.5× and 2.5× of the median debris so a few big ones don't swallow the view; Radar (exact) keeps the true proportions; Same makes every piece the median size. Pieces with no published radar size get the median.</div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight();
-    if (k === 'shape') { const rough = S.shape === 'shard' || S.shape === 'rock'; S.jag = rough ? 45 : 0; S.irreg = rough ? 100 : 0; } // a clean shape starts clean; Jagged/Flatten can still roughen it save(); panelSync(); resize(); });
+    save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
   $('col').oninput = (e) => { S.color = e.target.value; save(); };
   $('again').onclick = startOver;
@@ -630,8 +608,9 @@ function render() {
   if (loaded) update();
   const rot = -ORB.gmst(simT);
   U.uLight.value = S.light === 'sun' ? 1 : 0;
-  U.uTime.value = performance.now() / 1000; U.uWall.value = wallS() - P0; U.uFlash.value = S.flash === '0' ? 0 : 1; U.tSt.value = stTex; U.uTumble.value = S.tumble / 100; U.uIrreg.value = S.irreg / 100; applyShape();
-  U.uColor.value.set(S.color);
+  U.uTime.value = performance.now() / 1000; U.uWall.value = wallS() - P0; U.uFlash.value = S.flash === '0' ? 0 : 1; U.tSt.value = stTex; U.uTumble.value = S.tumble / 100; applyShape();
+  for (const m of pieceMats) { m.color.set(S.color); m.roughness = S.rough / 100; m.metalness = S.metal / 100; }
+  keyLight.intensity = eqKey.intensity = S.key / 100; ambLight.intensity = eqAmb.intensity = S.amb / 100;
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
 
@@ -645,7 +624,7 @@ function render() {
     camera.lookAt(0, 0, 0);
     camera.near = Math.max(5, (view.dist - RE - 2500) * 0.3); camera.far = view.dist + 60000; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
     // light from over the viewer's shoulder
-    U.uLightDir.value.copy(camera.position).normalize().addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion), 0.6).normalize();
+    keyLight.position.copy(camera.position).normalize().addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion), 0.6).addScaledVector(new THREE.Vector3(-1, 0, 0).applyQuaternion(camera.quaternion), 0.4).normalize().multiplyScalar(1e5);
     lookFromCamera();
     renderer.setRenderTarget(null); renderer.render(scene, camera);
   } else {
