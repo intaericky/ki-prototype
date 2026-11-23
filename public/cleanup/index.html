@@ -69,12 +69,15 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: '3d', size: 84, rcs: '1', shape: 'sphere', seg: 32, hue: 0, sat: 0, val: 100, rough: 100, metal: 0, key: 250, amb: 60, tumble: 60, light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
+const DEF = { view: '3d', size: 84, rcs: '1', shape: 'sphere', seg: 32, hue: 0, sat: 0, val: 100, rough: 100, metal: 0, key: 250, amb: 60, tumble: 60, light: 'day', eh: 210, es: 30, ev: 25, pick: 'deb', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
 let S = { ...DEF };
 const KEY = 'cleanup-v3';
 // colour as hue / saturation / brightness (HSV, as in Figma's picker)
 const hsvRgb = (h, s, v) => { const f = (n) => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); }; return [f(5), f(3), f(1)]; };
 const pieceColor = new THREE.Color(), HSL = () => pieceColor.setRGB(...hsvRgb(S.hue, S.sat / 100, S.val / 100));
+const earthColor = new THREE.Color(), EHSV = () => earthColor.setRGB(...hsvRgb(S.eh, S.es / 100, S.ev / 100));
+// the colour picker edits the debris colour or the Earth colour (Colour of)
+const PK = () => S.pick === 'earth' ? ['eh', 'es', 'ev'] : ['hue', 'sat', 'val'], PCOL = () => S.pick === 'earth' ? EHSV() : HSL();
 function rgbHsv(r, g, b) { const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; let h = 0;
   if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
   return [Math.round(((h * 60) + 360) % 360), Math.round(mx ? d / mx * 100 : 0), Math.round(mx * 100)]; }
@@ -112,13 +115,14 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 // ---------- shared GLSL ----------
 const NOBJ_W = 1024;
 const U = {
-  tObj: { value: null }, tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 },
+  tObj: { value: null }, tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 }, uEarthC: { value: new THREE.Color() },
   tSt: { value: null }, uWall: { value: 0 }, uFlash: { value: 1 }, uTime: { value: 0 }, uTumble: { value: 0.2 },
   uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) },
 };
 const EARTH = /* glsl */`
-  uniform sampler2D tDay, tNight; uniform vec3 uSun; uniform float uLight;
+  uniform sampler2D tDay, tNight; uniform vec3 uSun, uEarthC; uniform float uLight;
   vec3 surface(vec3 n) {
+    if (uLight > 1.5) return uEarthC; // solid colour
     vec3 e = vec3(n.x, -n.z, n.y);
     vec2 uv = vec2(atan(e.y, e.x) / 6.2831853 + 0.5, asin(clamp(e.z, -1.0, 1.0)) / 3.1415927 + 0.5);
     vec3 day = texture2D(tDay, uv).rgb;
@@ -241,7 +245,10 @@ earthBlack.renderOrder = earthLine.renderOrder = -1;
 const earth = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), mk(
   `varying vec3 vN; void main(){ vN = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   `${EARTH} varying vec3 vN; void main(){ gl_FragColor = vec4(surface(normalize(vN)), 1.0); }`));
-scene.add(earth, earthBlack, earthLine);
+// Earth as a plain solid mesh, lit by the same key + ambient light as the debris
+const earthMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
+const earthLit = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), earthMat);
+scene.add(earth, earthLit, earthBlack, earthLine);
 
 // the 360 frame is drawn into its own image (1920 × 1080), then shown flat or wrapped back onto a ball
 const eqRT = new THREE.WebGLRenderTarget(1920, 1080, { depthBuffer: true, samples: 4 });
@@ -555,7 +562,7 @@ function sendLook(force) {
   publish('/look', { q: rot360.toArray(), by: ME }, true);
 }
 // the studio's settings (everything but its own view and the speed, which has its own clock) go to every page in the room
-const SYNC_SKIP = new Set(['view', 'spd']);
+const SYNC_SKIP = new Set(['view', 'spd', 'pick']);
 let setT = null;
 function sendSettings() {
   clearTimeout(setT);
@@ -618,10 +625,11 @@ function lookFromCamera() {
 // ---------- panel (studio) ----------
 const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['seg', 'Detail', 3, 64, () => S.seg + ''], ['rough', 'Roughness', 0, 100, () => (S.rough / 100).toFixed(2)], ['metal', 'Metalness', 0, 100, () => (S.metal / 100).toFixed(2)], ['key', 'Key light', 0, 600, () => (S.key / 100).toFixed(1)], ['amb', 'Ambient', 0, 300, () => (S.amb / 100).toFixed(1)], ['tumble', 'Tumble', 0, 300, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
 const SHAPE_ROWS = [[['sphere', 'Sphere'], ['box', 'Box'], ['cylinder', 'Cylinder'], ['cone', 'Cone']], [['torus', 'Torus'], ['octahedron', 'Octa'], ['icosahedron', 'Icosa'], ['tetrahedron', 'Tetra']]];
-const SEG = [['view', 'View', [['3d', '3D'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], ...SHAPE_ROWS.map((o, i) => ['shape', i ? '' : 'Shape', o]), ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
+const SEG = [['view', 'View', [['3d', '3D'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], ...SHAPE_ROWS.map((o, i) => ['shape', i ? '' : 'Shape', o]), ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now'], ['solid', 'Solid'], ['lit', 'Solid lit']]],
   ['rcs', 'Size by', [['1', 'Radar (capped)'], ['exact', 'Radar (exact)'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]], ['flash', 'Return glow', [['1', 'On'], ['0', 'Off']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
+    + `<div class="row"><label>Colour of</label><div class="seg" data-k="pick"><button data-v="deb">Debris</button><button data-v="earth">Earth</button></div></div>`
     + `<div class="row"><label>Colour</label><div class="cp">
       <div id="sv" class="sv"><div class="svw"></div><div class="svb"></div><i id="svk"></i></div>
       <div id="hu" class="hu"><i id="huk"></i></div>
@@ -635,11 +643,11 @@ function panelBuild() {
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight();
     save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
-  $('hex').onchange = (e) => { const v = e.target.value.trim().replace('#', ''); if (/^[0-9a-f]{6}$/i.test(v)) { const c = parseInt(v, 16); [S.hue, S.sat, S.val] = rgbHsv((c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255); save(); } panelSync(); };
+  $('hex').onchange = (e) => { const v = e.target.value.trim().replace('#', ''); if (/^[0-9a-f]{6}$/i.test(v)) { const c = parseInt(v, 16); { const [a, b, c2] = PK(); [S[a], S[b], S[c2]] = rgbHsv((c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255); } save(); } panelSync(); };
   const drag = (el, fn) => { el.onpointerdown = (e) => { el.setPointerCapture(e.pointerId); fn(e); el.onpointermove = (ev) => fn(ev); }; el.onpointerup = el.onpointercancel = () => { el.onpointermove = null; save(); }; };
   const frac = (e, el) => { const b = el.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)), Math.min(1, Math.max(0, (e.clientY - b.top) / b.height))]; };
-  drag($('sv'), (e) => { const [x, y] = frac(e, $('sv')); S.sat = Math.round(x * 100); S.val = Math.round((1 - y) * 100); panelSync(); });
-  drag($('hu'), (e) => { S.hue = Math.round(frac(e, $('hu'))[0] * 360); panelSync(); });
+  drag($('sv'), (e) => { const [x, y] = frac(e, $('sv')); const [, b, c] = PK(); S[b] = Math.round(x * 100); S[c] = Math.round((1 - y) * 100); panelSync(); });
+  drag($('hu'), (e) => { S[PK()[0]] = Math.round(frac(e, $('hu'))[0] * 360); panelSync(); });
   $('again').onclick = startOver;
   $('now').onclick = () => { simT = Date.now(); S.spd = 0; clock = null; sendClock(); save(); panelSync(); };
   $('copy').onclick = () => {
@@ -653,8 +661,8 @@ function panelBuild() {
 function panelSync() {
   document.querySelectorAll('.seg[data-k]').forEach((s) => s.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(S[s.dataset.k]) === b.dataset.v)));
   for (const [k, , , , f] of SL) { const r = document.querySelector(`input[data-k="${k}"]`); if (r) r.value = S[k]; const o = document.querySelector(`output[data-o="${k}"]`); if (o) o.textContent = f(); }
-  const hex = '#' + HSL().getHexString(); if ($('hex') && document.activeElement !== $('hex')) $('hex').value = hex.toUpperCase();
-  if ($('sw')) { $('sw').style.background = hex; $('sv').style.background = `hsl(${S.hue}, 100%, 50%)`; $('svk').style.left = S.sat + '%'; $('svk').style.top = (100 - S.val) + '%'; $('svk').style.background = hex; $('huk').style.left = S.hue / 3.6 + '%'; }
+  const [kh, ks, kv] = PK(), hex = '#' + PCOL().getHexString(); if ($('hex') && document.activeElement !== $('hex')) $('hex').value = hex.toUpperCase();
+  if ($('sw')) { $('sw').style.background = hex; $('sv').style.background = `hsl(${S[kh]}, 100%, 50%)`; $('svk').style.left = S[ks] + '%'; $('svk').style.top = (100 - S[kv]) + '%'; $('svk').style.background = hex; $('huk').style.left = S[kh] / 3.6 + '%'; }
 }
 $('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').classList.toggle('on'); };
 panelBuild(); panelSync();
@@ -682,7 +690,7 @@ function render() {
   tickReturns();
   if (loaded) update();
   const rot = -ORB.gmst(simT);
-  U.uLight.value = S.light === 'sun' ? 1 : 0;
+  U.uLight.value = S.light === 'sun' ? 1 : S.light === 'solid' || S.light === 'lit' ? 2 : 0; U.uEarthC.value.copy(EHSV()); earthMat.color.copy(EHSV()).convertSRGBToLinear();
   U.uTime.value = performance.now() / 1000; U.uWall.value = wallS() - P0; U.uFlash.value = S.flash === '0' ? 0 : 1; U.tSt.value = stTex; U.uTumble.value = S.tumble / 100; applyShape();
   for (const m of pieceMats) { m.color.copy(HSL()).convertSRGBToLinear(); /* picked colour is sRGB; the output is encoded back to sRGB, so it shows as picked */ m.roughness = S.rough / 100; m.metalness = S.metal / 100; }
   keyLight.intensity = eqKey.intensity = S.key / 100; ambLight.intensity = eqAmb.intensity = S.amb / 100;
@@ -692,7 +700,7 @@ function render() {
   const v = S.view;
   if (v === '3d' || v === 'lines') {
     const ln = v === 'lines';
-    earth.visible = !ln; earthBlack.visible = earthLine.visible = ln;
+    earth.visible = !ln && S.light !== 'lit'; earthLit.visible = !ln && S.light === 'lit'; earthBlack.visible = earthLine.visible = ln;
     if (meshes.piece) { meshes.piece.visible = !ln; meshes.lines.visible = ln; }
     linesMat.uniforms.uPxK.value = 2 * Math.tan(camera.fov / 2 * D2R) / (innerHeight * renderer.getPixelRatio());
     camera.position.set(Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch), Math.cos(view.pitch) * Math.cos(view.yaw)).multiplyScalar(view.dist);
