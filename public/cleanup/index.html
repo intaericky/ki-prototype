@@ -69,7 +69,8 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: '3d', size: 84, rcs: '1', shape: 'sphere', seg: 32, hue: 0, sat: 0, val: 100, rough: 100, metal: 0, key: 250, amb: 60, tumble: 60, light: 'day', eh: 210, es: 30, ev: 25, pick: 'deb', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
+// defaults = Intae's chosen set (2026-11-23): grey boxes, ×1.6M, rough/metal 0.5, strong light, fast tumble, 58×
+const DEF = { view: '3d', size: 60, rcs: '1', shape: 'box', seg: 64, hue: 0, sat: 0, val: 42, rough: 50, metal: 50, key: 600, amb: 300, tumble: 300, light: 'day', eh: 210, es: 30, ev: 25, pick: 'deb', range: 'all', spd: 44, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
 let S = { ...DEF };
 const KEY = 'cleanup-v3';
 // colour as hue / saturation / brightness (HSV, as in Figma's picker)
