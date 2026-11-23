@@ -55,15 +55,19 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: '3d', size: 92, rcs: '1', tumble: 20, color: '#c8c8c8', light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
+const DEF = { view: '3d', size: 84, rcs: '1', shape: 'shard', jag: 45, irreg: 100, tumble: 20, color: '#c8c8c8', light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
 let S = { ...DEF };
-const KEY = 'cleanup-v1';
+const KEY = 'cleanup-v2';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
 if (ROLE === 'tablet' && !Q.has('view')) S.view = '3d';
 const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
-const SIZE_KM = () => 5 * Math.pow(100, S.size / 100); // piece size: 5 .. 500 km
+// Size is a multiplier of real size: radius = ×N of each piece's true radius from its radar cross-section (RCS taken as
+// the silhouette area). SIZE_KM is that for the median debris (RCS ≈ 0.017 m², about 7 cm across... in radius).
+const MULT = () => 1e5 * Math.pow(100, S.size / 100); // ×100,000 .. ×10,000,000
+const SIZE_KM = () => MULT() * Math.sqrt(medRcs / Math.PI) / 1000;
+const fmtX = (x) => '×' + (x >= 1e6 ? (x / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : Math.round(x / 1e3) + 'k');
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25)); // 1× .. 10,000×
 const RETURN = () => Math.max(5, S.ret);    // seconds until a cleaned piece comes back (before any cascade)
 const CASC = () => 1 - S.casc / 100;        // each return multiplies the time left of cleaned pieces nearby by this
@@ -89,7 +93,7 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 const NOBJ_W = 1024;
 const U = {
   tObj: { value: null }, tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 },
-  tSt: { value: null }, uWall: { value: 0 }, uFlash: { value: 1 }, uTime: { value: 0 }, uTumble: { value: 0.2 }, uColor: { value: new THREE.Color(0xc8c8c8) }, uLightDir: { value: new THREE.Vector3(0, 1, 0) },
+  tSt: { value: null }, uWall: { value: 0 }, uFlash: { value: 1 }, uTime: { value: 0 }, uTumble: { value: 0.2 }, uIrreg: { value: 1 }, uColor: { value: new THREE.Color(0xc8c8c8) }, uLightDir: { value: new THREE.Vector3(0, 1, 0) },
   uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) },
 };
 const EARTH = /* glsl */`
@@ -105,7 +109,7 @@ const EARTH = /* glsl */`
 // one piece of debris: an irregular shard at the object's position (xyz km, w = size; 0 = gone), turned and flattened
 // differently for every object, slowly tumbling
 const PIECE = /* glsl */`
-  uniform highp sampler2D tObj, tSt; uniform float uTime, uTumble, uFlash; uniform float uWall;
+  uniform highp sampler2D tObj, tSt; uniform float uTime, uTumble, uFlash, uIrreg; uniform float uWall;
   vec4 obj(int j) { return texelFetch(tObj, ivec2(j & ${NOBJ_W - 1}, j >> ${Math.log2(NOBJ_W)}), 0); }
   // how bright the "came back" glow is (1 just back, fading over ~3 s)
   float backGlow(int j) { float b = texelFetch(tSt, ivec2(j & ${NOBJ_W - 1}, j >> ${Math.log2(NOBJ_W)}), 0).y; if (b <= 0.0 || uFlash < 0.5) return 0.0; float a = uWall - b; return a < 0.0 ? 0.0 : exp(-a * 1.2); }
@@ -118,7 +122,7 @@ const PIECE = /* glsl */`
     uint u = uint(id) * 2654435761u + 1013904223u;
     vec3 ax = normalize(vec3(h1(u), h1(u + 1u), h1(u + 2u)) * 2.0 - 1.0 + 1e-4);
     float sp = (h1(u + 3u) - 0.5) * 2.0 * uTumble;
-    vec3 sc = vec3(1.0, 0.45 + 0.5 * h1(u + 4u), 0.18 + 0.35 * h1(u + 5u));
+    vec3 sc = mix(vec3(1.0), vec3(1.0, 0.45 + 0.5 * h1(u + 4u), 0.18 + 0.35 * h1(u + 5u)), uIrreg); // each piece flattened its own way
     W = C + axisRot(ax, h1(u + 6u) * 6.2831853 + uTime * sp) * (position * sc) * r;
     shade = 0.72 + 0.28 * h1(u + 7u);
     return true;
@@ -205,23 +209,36 @@ ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.Sha
     void main(){ vec3 n = normalize(vN); float lo = atan(-n.z, n.x), la = asin(clamp(n.y, -1.0, 1.0));
       gl_FragColor = texture2D(tFrame, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5)); }` })));
 
-// the shard: an icosahedron with its corners pushed in and out (the same shape for every piece; each piece is
-// turned and squashed differently)
-const shard = (() => {
-  const g = new THREE.IcosahedronGeometry(1, 0), p = g.attributes.position, seen = new Map();
+// the piece's shape (the same for every piece; each piece is turned and squashed differently). Jagged pushes each
+// corner in or out by a random amount, so a sphere becomes a rock and an icosahedron a shard.
+const SHAPES = {
+  shard: () => new THREE.IcosahedronGeometry(1, 0), rock: () => new THREE.IcosahedronGeometry(1, 1), sphere: () => new THREE.IcosahedronGeometry(1, 3),
+  cube: () => new THREE.BoxGeometry(1.2, 1.2, 1.2), diamond: () => new THREE.OctahedronGeometry(1, 0), shardlet: () => new THREE.TetrahedronGeometry(1, 0),
+  plate: () => new THREE.CylinderGeometry(1, 1, 0.12, 7), rod: () => new THREE.CylinderGeometry(0.18, 0.18, 2, 6), spike: () => new THREE.ConeGeometry(0.4, 2, 5),
+};
+function makeShape(kind, jag) {
+  let g = (SHAPES[kind] || SHAPES.shard)();
+  if (g.index) g = g.toNonIndexed();
+  const p = g.attributes.position, seen = new Map();
   let s = 7;
   const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
   for (let i = 0; i < p.count; i++) {
     const k = [p.getX(i), p.getY(i), p.getZ(i)].map((v) => v.toFixed(3)).join();
-    if (!seen.has(k)) seen.set(k, 0.55 + 0.45 * rnd());
+    if (!seen.has(k)) seen.set(k, 1 - jag * rnd());
     const f = seen.get(k); p.setXYZ(i, p.getX(i) * f, p.getY(i) * f, p.getZ(i) * f);
   }
   return g;
-})();
+}
+let shapeKey = '';
+function applyShape() {
+  const k = S.shape + ':' + S.jag; if (!geo || k === shapeKey) return;
+  shapeKey = k; geo.setAttribute('position', makeShape(S.shape, S.jag / 100).attributes.position);
+}
 
 // ---------- catalogue: debris only ----------
 let objs = [], catQ = [], T0 = Date.now(), simT = Date.now();
-let meta = { fetched: null, errors: [] }, loaded = false, medRcs = 0.05;
+let meta = { fetched: null, errors: [] }, loaded = false;
+var medRcs = 0.0168; // median RCS of the debris (m²), recomputed from the catalogue
 let geo = null, meshes = {};
 const BASE = Date.UTC(2026, 0, 1);
 const wallS = () => (Date.now() - BASE) / 1000;
@@ -235,7 +252,8 @@ const jitter = (n) => { const x = Math.sin(n * 12.9898) * 43758.5453; return 0.7
 
 function weight(o) {
   if (S.rcs !== '1' || !(o.rcs > 0)) return 1;
-  return Math.min(2.5, Math.max(0.5, Math.sqrt(o.rcs / medRcs)));
+  const k = Math.sqrt(o.rcs / medRcs);
+  return S.rcs === 'exact' ? k : Math.min(2.5, Math.max(0.5, k));
 }
 const elW = NOBJ_W;
 let elTex = [], stArr = null, stTex = null, posRT = null, nRows = 1, weights = null;
@@ -281,11 +299,11 @@ function build() {
   U.tObj.value = posRT.texture;
   if (!geo) {
     geo = new THREE.InstancedBufferGeometry();
-    geo.setAttribute('position', shard.attributes.position);
     const M = (mat) => { const m = new THREE.Mesh(geo, mat); m.frustumCulled = false; return m; };
     meshes = { piece: M(pieceMat), eq: eqMats.map(M) };
     scene.add(meshes.piece); eqScene.add(...meshes.eq);
   }
+  applyShape();
   geo.instanceCount = n;
 }
 function reweight() {
@@ -510,9 +528,10 @@ function lookFromCamera() {
 }
 
 // ---------- panel (studio) ----------
-const SL = [['size', 'Size', 0, 100, () => Math.round(SIZE_KM()) + ' km'], ['tumble', 'Tumble', 0, 100, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
-const SEG = [['view', 'View', [['3d', '3D'], ['360', '360'], ['ball', 'Sphere']]], ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
-  ['rcs', 'Size by', [['1', 'Radar size'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]], ['flash', 'Return glow', [['1', 'On'], ['0', 'Off']]]];
+const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['jag', 'Jagged', 0, 90, () => S.jag + ''], ['irreg', 'Flatten', 0, 100, () => S.irreg + ''], ['tumble', 'Tumble', 0, 100, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
+const SHAPE_ROWS = [[['shard', 'Shard'], ['rock', 'Rock'], ['sphere', 'Sphere']], [['cube', 'Cube'], ['diamond', 'Diamond'], ['shardlet', 'Tetra']], [['plate', 'Plate'], ['rod', 'Rod'], ['spike', 'Spike']]];
+const SEG = [['view', 'View', [['3d', '3D'], ['360', '360'], ['ball', 'Sphere']]], ...SHAPE_ROWS.map((o, i) => ['shape', i ? '' : 'Shape', o]), ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
+  ['rcs', 'Size by', [['1', 'Radar size'], ['exact', 'Exact'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]], ['flash', 'Return glow', [['1', 'On'], ['0', 'Off']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
@@ -520,7 +539,7 @@ function panelBuild() {
     <div class="row"><label></label><div class="seg"><button id="again">Put all debris back</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset settings</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Only debris: every object still in orbit that the US Space Force catalogue (via CelesTrak SATCAT) types as debris, at its real position now. Each piece is shown much bigger than it is, so together they cover the Earth. A tap cleans one piece. The catalogue still has it, so after a while (Comes back, ±30%) it returns. Each return is a small Kessler cascade: every cleaned piece within Reach of it has its time left multiplied by Cascade, so returns clump together and speed up. Cleaned pieces and returns are shared with everyone in the room. Radar size: bigger radar cross-section, bigger piece (relative to the median debris, kept between 0.5× and 2.5×).</div>`;
+    <div class="note">Only debris: every object still in orbit that the US Space Force catalogue (via CelesTrak SATCAT) types as debris, at its real position now. Each piece is shown ×N bigger than it really is (its radius from its radar cross-section), so together they cover the Earth. A tap cleans one piece. The catalogue still has it, so after a while (Comes back, ±30%) it returns. Each return is a small Kessler cascade: every cleaned piece within Reach of it has its time left multiplied by Cascade, so returns clump together and speed up. Cleaned pieces and returns are shared with everyone in the room. Size by: Radar size keeps each piece between 0.5× and 2.5× of the median debris so a few big ones don't swallow the view; Exact keeps the true proportions; Same makes every piece the median size. Pieces with no published radar size get the median.</div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight(); save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
   $('col').oninput = (e) => { S.color = e.target.value; save(); };
@@ -566,7 +585,7 @@ function render() {
   if (loaded) update();
   const rot = -ORB.gmst(simT);
   U.uLight.value = S.light === 'sun' ? 1 : 0;
-  U.uTime.value = performance.now() / 1000; U.uWall.value = wallS() - P0; U.uFlash.value = S.flash === '0' ? 0 : 1; U.tSt.value = stTex; U.uTumble.value = S.tumble / 100;
+  U.uTime.value = performance.now() / 1000; U.uWall.value = wallS() - P0; U.uFlash.value = S.flash === '0' ? 0 : 1; U.tSt.value = stTex; U.uTumble.value = S.tumble / 100; U.uIrreg.value = S.irreg / 100; applyShape();
   U.uColor.value.set(S.color);
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
