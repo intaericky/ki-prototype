@@ -55,7 +55,7 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: '3d', size: 84, rcs: '1', tumble: 20, color: '#c8c8c8', light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
+const DEF = { view: '3d', size: 92, rcs: '1', tumble: 20, color: '#c8c8c8', light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
 let S = { ...DEF };
 const KEY = 'cleanup-v1';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -235,7 +235,7 @@ const jitter = (n) => { const x = Math.sin(n * 12.9898) * 43758.5453; return 0.7
 
 function weight(o) {
   if (S.rcs !== '1' || !(o.rcs > 0)) return 1;
-  return Math.min(3, Math.max(0.5, Math.sqrt(o.rcs / medRcs)));
+  return Math.min(2.5, Math.max(0.5, Math.sqrt(o.rcs / medRcs)));
 }
 const elW = NOBJ_W;
 let elTex = [], stArr = null, stTex = null, posRT = null, nRows = 1, weights = null;
@@ -520,7 +520,7 @@ function panelBuild() {
     <div class="row"><label></label><div class="seg"><button id="again">Put all debris back</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset settings</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Only debris: every object still in orbit that the US Space Force catalogue (via CelesTrak SATCAT) types as debris, at its real position now. Each piece is shown much bigger than it is, so together they cover the Earth. A tap cleans one piece. The catalogue still has it, so after a while (Comes back, ±30%) it returns. Each return is a small Kessler cascade: every cleaned piece within Reach of it has its time left multiplied by Cascade, so returns clump together and speed up. Cleaned pieces and returns are shared with everyone in the room. Radar size: bigger radar cross-section, bigger piece (relative to the median debris, kept between 0.5× and 3×).</div>`;
+    <div class="note">Only debris: every object still in orbit that the US Space Force catalogue (via CelesTrak SATCAT) types as debris, at its real position now. Each piece is shown much bigger than it is, so together they cover the Earth. A tap cleans one piece. The catalogue still has it, so after a while (Comes back, ±30%) it returns. Each return is a small Kessler cascade: every cleaned piece within Reach of it has its time left multiplied by Cascade, so returns clump together and speed up. Cleaned pieces and returns are shared with everyone in the room. Radar size: bigger radar cross-section, bigger piece (relative to the median debris, kept between 0.5× and 2.5×).</div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight(); save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
   $('col').oninput = (e) => { S.color = e.target.value; save(); };
