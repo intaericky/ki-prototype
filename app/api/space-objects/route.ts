@@ -69,8 +69,8 @@ async function fetchPart(part: string) {
     if (!r.ok) throw new Error(`CelesTrak SATCAT ${r.status}`);
     const all = parseCsv(await r.text()).filter((o) => !o.DECAY_DATE && o.ORBIT_CENTER === "EA");
     sources.push("CelesTrak SATCAT (on-orbit, Earth-centred)");
-    // [norad, type (PAY/R/B/DEB/UNK), rcs m² or null]
-    rows = all.map((o) => [parseInt(o.NORAD_CAT_ID), o.OBJECT_TYPE, o.RCS ? Math.round(parseFloat(o.RCS) * 1e4) / 1e4 : null]);
+    // [norad, type (PAY/R/B/DEB/UNK), rcs m² or null, owner code]
+    rows = all.map((o) => [parseInt(o.NORAD_CAT_ID), o.OBJECT_TYPE, o.RCS ? Math.round(parseFloat(o.RCS) * 1e4) / 1e4 : null, o.OWNER || null]);
   } else {
     const queries = part === "debris" ? ["NAME=DEB", "GROUP=cosmos-1408-debris", "GROUP=fengyun-1c-debris", "GROUP=iridium-33-debris", "GROUP=cosmos-2251-debris"]
       : part === "rocket" ? ["NAME=R/B"] : ["GROUP=active"];
@@ -92,7 +92,7 @@ async function fetchPart(part: string) {
   return { part, fetched: new Date().toISOString(), sources, errors, count: rows.length, rows };
 }
 
-const cachedPart = (part: string) => unstable_cache(() => fetchPart(part), ["space-objects-v2", part], { revalidate: 7200, tags: ["space-objects"] })();
+const cachedPart = (part: string) => unstable_cache(() => fetchPart(part), ["space-objects-v2", part === "satcat" ? "satcat-owner" : part], { revalidate: 7200, tags: ["space-objects"] })();
 
 export async function GET(req: Request) {
   const raw = new URL(req.url).searchParams.get("part") ?? "active";
