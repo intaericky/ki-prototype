@@ -55,9 +55,10 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: '3d', size: 84, rcs: '1', shape: 'sphere', seg: 32, color: '#ffffff', rough: 100, metal: 0, key: 250, amb: 60, tumble: 60, light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
+const DEF = { view: '3d', size: 84, rcs: '1', shape: 'sphere', seg: 32, hue: 0, sat: 0, lit: 100, rough: 100, metal: 0, key: 250, amb: 60, tumble: 60, light: 'day', range: 'all', spd: 0, q360: 100, ret: 90, casc: 50, reach: 1500, flash: '1' };
 let S = { ...DEF };
 const KEY = 'cleanup-v3';
+const pieceColor = new THREE.Color(), HSL = () => pieceColor.setHSL(S.hue / 360, S.sat / 100, S.lit / 100);
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
@@ -550,14 +551,14 @@ function lookFromCamera() {
 }
 
 // ---------- panel (studio) ----------
-const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['seg', 'Detail', 3, 64, () => S.seg + ''], ['rough', 'Roughness', 0, 100, () => (S.rough / 100).toFixed(2)], ['metal', 'Metalness', 0, 100, () => (S.metal / 100).toFixed(2)], ['key', 'Key light', 0, 600, () => (S.key / 100).toFixed(1)], ['amb', 'Ambient', 0, 300, () => (S.amb / 100).toFixed(1)], ['tumble', 'Tumble', 0, 300, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
+const SL = [['size', 'Size', 0, 100, () => fmtX(MULT())], ['seg', 'Detail', 3, 64, () => S.seg + ''], ['hue', 'Hue', 0, 360, () => S.hue + '°'], ['sat', 'Saturation', 0, 100, () => S.sat + '%'], ['lit', 'Lightness', 0, 100, () => S.lit + '%'], ['rough', 'Roughness', 0, 100, () => (S.rough / 100).toFixed(2)], ['metal', 'Metalness', 0, 100, () => (S.metal / 100).toFixed(2)], ['key', 'Key light', 0, 600, () => (S.key / 100).toFixed(1)], ['amb', 'Ambient', 0, 300, () => (S.amb / 100).toFixed(1)], ['tumble', 'Tumble', 0, 300, () => S.tumble + ''], ['ret', 'Comes back', 5, 600, () => RETURN() + ' s'], ['casc', 'Cascade', 0, 95, () => S.casc ? '×' + CASC().toFixed(2) : 'off'], ['reach', 'Reach', 100, 5000, () => S.reach.toLocaleString() + ' km'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
 const SHAPE_ROWS = [[['sphere', 'Sphere'], ['box', 'Box'], ['cylinder', 'Cylinder'], ['cone', 'Cone']], [['torus', 'Torus'], ['octahedron', 'Octa'], ['icosahedron', 'Icosa'], ['tetrahedron', 'Tetra']]];
 const SEG = [['view', 'View', [['3d', '3D'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], ...SHAPE_ROWS.map((o, i) => ['shape', i ? '' : 'Shape', o]), ['light', 'Earth', [['day', 'All day'], ['sun', 'Sun now']]],
   ['rcs', 'Size by', [['1', 'Radar (capped)'], ['exact', 'Radar (exact)'], ['0', 'Same']]], ['range', 'Debris', [['all', 'All'], ['leo', 'Below 2,000 km']]], ['flash', 'Return glow', [['1', 'On'], ['0', 'Off']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
-    + `<div class="row"><label>Colour</label><input type="color" id="col"></div>
+    + `<div class="row"><label>Colour</label><input type="text" id="hex" spellcheck="false" style="font:inherit;background:none;color:var(--fg);border:1px solid var(--faint);padding:3px 6px;width:100%"><span id="sw" style="display:block;height:22px;border:1px solid var(--faint)"></span></div>
     <div class="row"><label></label><div class="seg"><button id="again">Put all debris back</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset settings</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
@@ -565,7 +566,7 @@ function panelBuild() {
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight();
     save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
-  $('col').oninput = (e) => { S.color = e.target.value; save(); };
+  $('hex').onchange = (e) => { const v = e.target.value.trim(); if (/^#?[0-9a-f]{6}$/i.test(v)) { const h = {}; new THREE.Color('#' + v.replace('#', '')).getHSL(h); S.hue = Math.round(h.h * 360); S.sat = Math.round(h.s * 100); S.lit = Math.round(h.l * 100); save(); } panelSync(); };
   $('again').onclick = startOver;
   $('now').onclick = () => { simT = Date.now(); S.spd = 0; clock = null; sendClock(); save(); panelSync(); };
   $('copy').onclick = () => {
@@ -579,7 +580,7 @@ function panelBuild() {
 function panelSync() {
   document.querySelectorAll('.seg[data-k]').forEach((s) => s.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(S[s.dataset.k]) === b.dataset.v)));
   for (const [k, , , , f] of SL) { const r = document.querySelector(`input[data-k="${k}"]`); if (r) r.value = S[k]; const o = document.querySelector(`output[data-o="${k}"]`); if (o) o.textContent = f(); }
-  const c = $('col'); if (c) c.value = S.color;
+  const hex = '#' + HSL().getHexString(); if ($('hex') && document.activeElement !== $('hex')) $('hex').value = hex; if ($('sw')) $('sw').style.background = hex;
 }
 $('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').classList.toggle('on'); };
 panelBuild(); panelSync();
@@ -609,7 +610,7 @@ function render() {
   const rot = -ORB.gmst(simT);
   U.uLight.value = S.light === 'sun' ? 1 : 0;
   U.uTime.value = performance.now() / 1000; U.uWall.value = wallS() - P0; U.uFlash.value = S.flash === '0' ? 0 : 1; U.tSt.value = stTex; U.uTumble.value = S.tumble / 100; applyShape();
-  for (const m of pieceMats) { m.color.set(S.color); m.roughness = S.rough / 100; m.metalness = S.metal / 100; }
+  for (const m of pieceMats) { m.color.copy(HSL()).convertSRGBToLinear(); // the picked colour is sRGB; the renderer encodes its output back to sRGB, so it shows as picked m.roughness = S.rough / 100; m.metalness = S.metal / 100; }
   keyLight.intensity = eqKey.intensity = S.key / 100; ambLight.intensity = eqAmb.intensity = S.amb / 100;
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
