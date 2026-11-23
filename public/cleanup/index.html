@@ -273,7 +273,7 @@ let gen = 0, nBack = 0; const cleaned = new Map(); // norad → { t: wall s clea
 const jitter = (n) => { const x = Math.sin(n * 12.9898) * 43758.5453; return 0.7 + 0.6 * (x - Math.floor(x)); }; // same on every screen
 
 function weight(o) {
-  if (S.rcs !== '1' || !(o.rcs > 0)) return 1;
+  if (S.rcs === '0' || !(o.rcs > 0)) return 1;
   const k = Math.sqrt(o.rcs / medRcs);
   return S.rcs === 'exact' ? k : Math.min(2.5, Math.max(0.5, k));
 }
