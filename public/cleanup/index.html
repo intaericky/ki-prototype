@@ -63,7 +63,7 @@ if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.g
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
 if (ROLE === 'tablet' && !Q.has('view')) S.view = 'lines';
-const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+const save = () => { if (ROLE === 'studio' && !TEST) { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} sendSettings(); } };
 // Size is a multiplier of real size: radius = ×N of each piece's true radius from its radar cross-section (RCS taken as
 // the silhouette area). SIZE_KM is that for the median debris (RCS ≈ 0.017 m², about 7 cm across... in radius).
 const MULT = () => 1e5 * Math.pow(100, S.size / 100); // ×100,000 .. ×10,000,000
@@ -507,13 +507,27 @@ function sendLook(force) {
   const n = performance.now(); if (!force && n - lookT < 50) return; lookT = n;
   publish('/look', { q: rot360.toArray(), by: ME }, true);
 }
+// the studio's settings (everything but its own view and the speed, which has its own clock) go to every page in the room
+const SYNC_SKIP = new Set(['view', 'spd']);
+let setT = null;
+function sendSettings() {
+  clearTimeout(setT);
+  setT = setTimeout(() => { const o = {}; for (const k of Object.keys(DEF)) if (!SYNC_SKIP.has(k)) o[k] = S[k]; publish('/settings', { s: o, by: ME }, true); }, 80);
+}
+function applySettings(o) {
+  if (ROLE === 'studio' || !o || typeof o !== 'object') return;
+  const rcs = S.rcs;
+  for (const k of Object.keys(DEF)) if (!SYNC_SKIP.has(k) && k in o && typeof o[k] === typeof DEF[k] && (typeof o[k] !== 'number' || Number.isFinite(o[k]))) S[k] = o[k];
+  if (S.rcs !== rcs) reweight();
+  panelSync();
+}
 function sendClock() { clock = { wall0: Date.now(), sim0: simT, speed: SPEED(), by: ME }; publish('/clock', clock, true); }
 function startOver() { resetRound(Date.now()); sendSnapshot(); }
 if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m) => {
   const mqtt = m.default || m;
   mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
   mq.on('close', () => { relayOk = false; }); mq.on('offline', () => { relayOk = false; });
-  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/clean', TOPIC + '/cleaned', TOPIC + '/back', TOPIC + '/look', TOPIC + '/clock']); });
+  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/clean', TOPIC + '/cleaned', TOPIC + '/back', TOPIC + '/look', TOPIC + '/clock', TOPIC + '/settings']); if (ROLE === 'studio') sendSettings(); });
   mq.on('message', (t, msg) => {
     let d; try { d = JSON.parse(msg.toString()); } catch { return; }
     if (!d || d.by === ME) return;
@@ -534,6 +548,8 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
       if (Number.isFinite(d.n) && d.gen === gen) comeBack(d.n, wallS(), false);
     } else if (k === '/look') {
       if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size) rot360.fromArray(d.q).normalize();
+    } else if (k === '/settings') {
+      applySettings(d.s);
     } else if (k === '/clock') {
       if ([d.wall0, d.sim0, d.speed].every(Number.isFinite)) { clock = d; S.spd = Math.log10(Math.max(1, d.speed)) * 25; panelSync(); }
     }
@@ -562,7 +578,7 @@ function panelBuild() {
     <div class="row"><label></label><div class="seg"><button id="again">Put all debris back</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset settings</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Only debris: every object still in orbit that the US Space Force catalogue (via CelesTrak SATCAT) types as debris, at its real position now. Each piece is shown ×N bigger than it really is (its radius from its radar cross-section), so together they cover the Earth. A tap cleans one piece. The catalogue still has it, so after a while (Comes back, ±30%) it returns. Each return is a small Kessler cascade: every cleaned piece within Reach of it has its time left multiplied by Cascade, so returns clump together and speed up. Cleaned pieces and returns are shared with everyone in the room. Size by: Radar (capped) keeps each piece between 0.5× and 2.5× of the median debris so a few big ones don't swallow the view; Radar (exact) keeps the true proportions; Same makes every piece the median size. Pieces with no published radar size get the median.</div>`;
+    <div class="note">Only debris: every object still in orbit that the US Space Force catalogue (via CelesTrak SATCAT) types as debris, at its real position now. Each piece is shown ×N bigger than it really is (its radius from its radar cross-section), so together they cover the Earth. Everything here (except View and Speed, which has its own shared clock) applies live to the tablet and the display in the same room. A tap cleans one piece. The catalogue still has it, so after a while (Comes back, ±30%) it returns. Each return is a small Kessler cascade: every cleaned piece within Reach of it has its time left multiplied by Cascade, so returns clump together and speed up. Cleaned pieces and returns are shared with everyone in the room. Size by: Radar (capped) keeps each piece between 0.5× and 2.5× of the median debris so a few big ones don't swallow the view; Radar (exact) keeps the true proportions; Same makes every piece the median size. Pieces with no published radar size get the median.</div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight();
     save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
@@ -610,7 +626,7 @@ function render() {
   const rot = -ORB.gmst(simT);
   U.uLight.value = S.light === 'sun' ? 1 : 0;
   U.uTime.value = performance.now() / 1000; U.uWall.value = wallS() - P0; U.uFlash.value = S.flash === '0' ? 0 : 1; U.tSt.value = stTex; U.uTumble.value = S.tumble / 100; applyShape();
-  for (const m of pieceMats) { m.color.copy(HSL()).convertSRGBToLinear(); // the picked colour is sRGB; the renderer encodes its output back to sRGB, so it shows as picked m.roughness = S.rough / 100; m.metalness = S.metal / 100; }
+  for (const m of pieceMats) { m.color.copy(HSL()).convertSRGBToLinear(); /* picked colour is sRGB; the output is encoded back to sRGB, so it shows as picked */ m.roughness = S.rough / 100; m.metalness = S.metal / 100; }
   keyLight.intensity = eqKey.intensity = S.key / 100; ambLight.intensity = eqAmb.intensity = S.amb / 100;
   const se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
