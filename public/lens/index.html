@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', size: 50, min: 662, fit: 'add', res: 100, q360: 100, light: 'day', unk: 'est', geo: '0', spd: 52, env: 25, lights: 'off', lsize: 50, ...CROWN, gain: 100, lift: 100 };
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', one: 717, size: 50, min: 662, fit: 'add', res: 100, q360: 100, light: 'day', unk: 'est', geo: '0', spd: 52, env: 25, lights: 'off', lsize: 50, ...CROWN, gain: 100, lift: 100 };
 let S = { ...DEF };
 const KEY = 'lens-v4';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -76,6 +76,7 @@ const SCALE = () => Math.pow(10, (S.size - 50) / 50); // ×0.1 .. ×10 of the re
 const PR = () => ROLE === 'display' ? 1 : Math.min(S.res / 100, devicePixelRatio || 1, 2);
 // Minimum slider: 0 = none, then logarithmic from 1 km to 3,000 km (fine steps near the smallest real swaths)
 const MINKM = () => S.min <= 0 ? 0 : Math.pow(3000, S.min / 1000);
+const ONEKM = () => Math.pow(3000, S.one / 1000); // One size slider: 1 .. 3,000 km, logarithmic
 const minSlider = (km) => Math.max(1, Math.round(1000 * Math.log(Math.max(1, km)) / Math.log(3000)));
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25));
 
@@ -373,6 +374,7 @@ let N = 0, order = [], aC = null, aF = null, meshes = null;
 // their kind, or nothing (minimum). Minimum is either added to every width (all stay distinct) or a floor.
 function widthKm(s) { return s.swath ?? (S.unk === 'est' ? s.est : S.unk === 'typ' ? s.typ : null); }
 function radiusKm(s) {
+  if (S.sizing === 'same') return S.unk === 'hide' && s.swath == null ? 0 : ONEKM() / 2; // every satellite the same size
   if ((S.unk === 'hide' && s.swath == null) || (S.geo === '0' && s.disk)) return 0;
   const w = (widthKm(s) ?? 0) * SCALE();
   const m = MINKM(); return (S.fit === 'add' ? m + w : Math.max(w, m)) / 2;
@@ -620,12 +622,12 @@ function lookFromCamera() { // the point facing the viewer becomes the LED frame
 
 // ---------- panel (studio) ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
+const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['one', 'One size', 0, 1000, () => (ONEKM() < 10 ? ONEKM().toFixed(1) : Math.round(ONEKM()).toLocaleString()) + ' km'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
   ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['env', 'Studio light', 0, 100, () => S.env + ''], ['lsize', 'Light size', 5, 100, () => S.lsize + ''],
   ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 300, () => (S.refl / 100).toFixed(1) + '×'],
   ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
-  ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
+  ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
   ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['fit', 'Minimum is', [['add', 'Added'], ['floor', 'A floor']]], ['lights', 'Lights', [['off', 'Off'], ['round', 'Round'], ['ring', 'Ring'], ['room', 'Room']]], ['geo', 'Full disk', [['0', 'Hide'], ['1', 'Show']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
@@ -636,8 +638,8 @@ function panelBuild() {
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
     <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> draws a width for each satellite without a published swath from the published swaths of its own kind (optical, radar, weather, Earth science), fixed per satellite; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to name it.</div>
     <div class="list" id="lists"></div>`;
-  $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit') reorder(); save(); panelSync(); });
-  $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min') reorder(); if (k === 'res') resize(); save(); panelSync(); });
+  $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit' || k === 'sizing') reorder(); save(); panelSync(); });
+  $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min' || k === 'one') reorder(); if (k === 'res') resize(); save(); panelSync(); });
   $('tint').oninput = (e) => { S.tint = e.target.value; save(); };
   $('smallest').onclick = () => { if (kindStats.all?.lo) { S.min = minSlider(kindStats.all.lo); reorder(); save(); panelSync(); } };
   $('crown').onclick = () => { Object.assign(S, CROWN); save(); panelSync(); };
