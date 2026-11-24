@@ -537,7 +537,7 @@ function ingest(parts) {
     const nm = new Map((parts.active?.rows ?? []).map((r) => [r[0], r[10]])), miss = [];
     objs = objs.filter((o) => {
       o.name = nm.get(o.norad) || ''; const m = matchSwath(o.name);
-      if (!m) { miss.push(o.name); return false; }
+      if (!m || m.none) { miss.push(o.name); return false; }
       o.inst = m.inst; o.src = m.src;
       if (m.disk) { const a = Math.cbrt(ORB.MU / (o.mm * TAU / 86400) ** 2); o.swath = 2 * RE * Math.acos(RE / a); } else o.swath = m.km;
       o.cov = o.swath / 2; return true;
