@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Lens</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400&display=swap">
 <style>
   :root { --fg: #fff; --dim: #ffffff73; --faint: #ffffff2e; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -34,9 +35,10 @@
   .err { color: #fff; }
   body.display #toggle, body.display #panel, body.display #info, body.display #card { display: none; }
   /* the tapped satellite (tablet): its name at the top centre, a few plain facts under it in grey */
-  #card { position: fixed; top: 28px; left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 40px)); text-align: center; pointer-events: none; text-shadow: 0 0 3px #000, 0 0 6px #000, 0 0 10px #000; }
-  #card .nm { color: #fff; font-size: 24px; line-height: 1.3; }
-  #card .ln { color: #8c8c8c; font-size: 16px; line-height: 1.55; margin-top: 4px; }
+  /* tablet: the counts top left, the tapped satellite bottom left; every word the same font, size and weight */
+  #card { position: fixed; left: 24px; bottom: 22px; max-width: calc(100vw - 48px); pointer-events: none; white-space: pre-line; }
+  body.tablet #card, body.tablet #info { font: 400 18px/1.5 Inter, -apple-system, sans-serif; color: #9a9a9a; text-shadow: 0 0 3px #000, 0 0 6px #000, 0 0 10px #000; }
+  body.tablet #info { top: 20px; left: 24px; bottom: auto; }
   body.tablet #toggle { display: none; }
 </style>
 </head>
@@ -1078,7 +1080,14 @@ function render() {
   }
   overlay(); info();
 }
-let cardKey = -2;
+let cardKey = -2, cardAlt = 0;
+// the tablet caption: name / country, who runs it / launched, height / what it does
+function caption(p) {
+  const pur = [...new Set((p.cat || '').split('/').map((c) => PURPOSE[c.replace(/[?*]/g, '').trim()]).filter(Boolean))].join(', ');
+  return [p.name, [STATE[p.state] || p.state, CLASS[p.cls]].filter(Boolean).join(', '),
+    [p.year ? 'Launched in ' + p.year : '', p.alt != null ? Math.round(p.alt).toLocaleString() + ' km up' : ''].filter(Boolean).join(', '),
+    pur ? pur[0].toUpperCase() + pur.slice(1) : ''].filter(Boolean);
+}
 function info() {
   const el = $('info');
   if (!loaded) { el.innerHTML = meta.errors.length ? '<span class="err">Could not load the catalogue. Nothing is shown (no stand-in data).</span>' : 'Loading the catalogue…'; return; }
@@ -1095,7 +1104,7 @@ function info() {
   ].filter(Boolean).join('\n') + '\n\n' : '';
   if (ROLE === 'tablet') {
     const key = p ? p.norad : -1;
-    if (key !== cardKey) { cardKey = key; const c = $('card'); if (key < 0) c.innerHTML = ''; else { const [nm, ...ls] = about(p); c.innerHTML = `<div class="nm">${esc(nm)}</div>` + ls.map((l) => `<div class="ln">${esc(l)}</div>`).join(''); } }
+    if (key !== cardKey || (key >= 0 && Math.round(p.alt || 0) !== cardAlt)) { cardKey = key; cardAlt = key >= 0 ? Math.round(p.alt || 0) : 0; $('card').textContent = key < 0 ? '' : caption(p).join('\n'); }
     el.textContent = `${sats.length.toLocaleString()}   ${np ? '× ' + np : ''}`; return;
   }
   el.textContent = card
