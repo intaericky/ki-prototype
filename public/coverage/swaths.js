@@ -35,9 +35,10 @@ export const SWATHS = [
   { re: /^JILIN-1 GAOFEN 0?3[BD]/, inst: 'GF03 camera', km: 17, src: 'eoPortal, Jilin-1 constellation' },
   { re: /^SUPERVIEW-1\b|^GAOJING-1\b/, inst: 'SuperView-1 camera', km: 12, src: 'eoPortal, SuperView / GaoJing' },
   { re: /^NUSAT|^NEWSAT/, inst: 'Satellogic multispectral', km: 5, src: 'SkyFi provider specifications (Satellogic)' },
+<<<<<<< HEAD
   // --- UP42 swath table (docs.up42.com/data/swath-width, nadir, updated 2026-11-23)
   { re: /^GRUS|^AXELGLOBE/, inst: 'GRUS multispectral', km: 55, src: 'UP42 swath table (AxelGlobe)' },
-  { re: /^KOMPSAT-3A|^ARIRANG-3A/, inst: 'AEISS-A', km: 13, src: 'UP42 swath table' },
+  { re: /^KOMPSAT-3A|^ARIRANG-3A/, inst: 'AEISS-A', km: 12, src: 'eoPortal KOMPSAT-3A, Charter poster (UP42 says 13)' },
   { re: /^KOMPSAT-3\b|^ARIRANG-3\b/, inst: 'AEISS', km: 16, src: 'UP42 swath table' },
   { re: /^PELICAN/, inst: 'Pelican imager', km: 8, src: 'UP42 swath table (Planet Pelican)' },
   { re: /^DEIMOS-1|^GEOSAT[- ]1/, inst: 'SLIM6', km: 600, src: 'UP42 swath table (GEOSAT 1)' },
@@ -73,6 +74,11 @@ export const SWATHS = [
   { re: /^JILIN[- ]1[- ]0[3-8]\b/, inst: 'PMS (Jilin-1 video/optical)', km: 11, src: 'International Charter satellites poster (2021) (Jilin-01 Optical A, 03-08)' },
   { re: /^OHS|^ZHUHAI(-1| YI HAO) 0?3/, inst: 'OHS hyperspectral', km: 150, src: 'International Charter satellites poster (2021) (listed for OHS-2A-2D; Zhuhai-1 group 03 are OHS satellites)' },
   { re: /^GAOFEN-4/, inst: 'Staring imager (geostationary)', km: 650, src: 'International Charter satellites poster (2021)' },
+=======
+>>>>>>> origin/main
+  { re: /^CSG|^COSMO-SKYMED SECOND/, inst: 'CSG-SAR (ScanSAR-2)', km: 200, src: 'eoPortal, COSMO-SkyMed Second Generation' },
+  { re: /^STRIX/, inst: 'X-band SAR (stripmap)', km: 20, src: 'Synspective SAR Data Product Guide v19.0' },
+  { re: /^ENMAP/, inst: 'HSI hyperspectral', km: 30, src: 'eoPortal, EnMAP' },
   { re: /^SPOT [67]/, inst: 'NAOMI', km: 60, src: 'Airbus, SPOT 6/7' },
   // --- very high resolution ---
   { re: /^FLOCK 4/, inst: 'PlanetScope SuperDove (PSB.SD)', km: 32.5, src: 'Planet docs, PlanetScope (scene 32.5 × 19.6 km)' },
