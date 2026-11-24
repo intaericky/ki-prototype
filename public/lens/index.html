@@ -32,13 +32,18 @@
   .list { color: var(--dim); font-size: 11.5px; line-height: 1.5; margin-top: 10px; }
   .list .k { color: var(--fg); }
   .err { color: #fff; }
-  body.display #toggle, body.display #panel, body.display #info { display: none; }
+  body.display #toggle, body.display #panel, body.display #info, body.display #card { display: none; }
+  /* the tapped satellite (tablet): its name at the top centre, a few plain facts under it in grey */
+  #card { position: fixed; top: 28px; left: 50%; transform: translateX(-50%); width: min(640px, calc(100vw - 40px)); text-align: center; pointer-events: none; text-shadow: 0 0 3px #000, 0 0 6px #000, 0 0 10px #000; }
+  #card .nm { color: #fff; font-size: 24px; line-height: 1.3; }
+  #card .ln { color: #8c8c8c; font-size: 16px; line-height: 1.55; margin-top: 4px; }
   body.tablet #toggle { display: none; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas><canvas id="ov" style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
 <div id="info"></div>
+<div id="card"></div>
 <button id="toggle">Settings</button>
 <div id="panel"></div>
 <script type="importmap">{ "imports": { "three": "/sphere-assets/vendor/three.module.min.js" } }</script>
@@ -770,7 +775,7 @@ const CLASS = { A: 'amateur or university', B: 'commercial', C: 'civil governmen
 const STATE = { US: 'United States', CN: 'China', RU: 'Russia', SU: 'Soviet Union', J: 'Japan', IN: 'India', F: 'France', D: 'Germany', I: 'Italy', E: 'Spain', UK: 'United Kingdom', CA: 'Canada', KR: 'South Korea', KP: 'North Korea', TW: 'Taiwan', IL: 'Israel', BR: 'Brazil', AR: 'Argentina', AU: 'Australia', NL: 'Netherlands', 'I-ESA': 'European Space Agency', 'I-EUM': 'EUMETSAT (Europe)', 'I-EU': 'European Union', TH: 'Thailand', VN: 'Vietnam', SG: 'Singapore', AE: 'United Arab Emirates', SA: 'Saudi Arabia', TR: 'Türkiye', EG: 'Egypt', NG: 'Nigeria', DZ: 'Algeria', ZA: 'South Africa', KZ: 'Kazakhstan', UZ: 'Uzbekistan', PK: 'Pakistan', ID: 'Indonesia', MY: 'Malaysia', PH: 'Philippines', MX: 'Mexico', CL: 'Chile', PE: 'Peru', BD: 'Bangladesh', NO: 'Norway', FI: 'Finland', DK: 'Denmark', S: 'Sweden', PL: 'Poland', L: 'Luxembourg', CH: 'Switzerland', AT: 'Austria', B: 'Belgium', GR: 'Greece', P: 'Portugal', IR: 'Iran', BY: 'Belarus', UA: 'Ukraine', AZ: 'Azerbaijan', LT: 'Lithuania', NZ: 'New Zealand', QA: 'Qatar', KE: 'Kenya', MN: 'Mongolia', NP: 'Nepal', LK: 'Sri Lanka', BT: 'Bhutan', GT: 'Guatemala', BO: 'Bolivia', EC: 'Ecuador', CO: 'Colombia', VE: 'Venezuela', HU: 'Hungary', CZ: 'Czechia', SK: 'Slovakia', SI: 'Slovenia', ET: 'Ethiopia', RW: 'Rwanda', GH: 'Ghana', MA: 'Morocco', TN: 'Tunisia', JO: 'Jordan', OM: 'Oman', KW: 'Kuwait', BH: 'Bahrain', IQ: 'Iraq', TM: 'Turkmenistan', BG: 'Bulgaria', RO: 'Romania', EE: 'Estonia', LV: 'Latvia', IE: 'Ireland', IS: 'Iceland', MU: 'Mauritius', SN: 'Senegal', ZW: 'Zimbabwe', UG: 'Uganda', SD: 'Sudan', AO: 'Angola', CR: 'Costa Rica', PY: 'Paraguay', UY: 'Uruguay' };
 function about(p) {
   const pur = [...new Set((p.cat || '').split('/').map((c) => PURPOSE[c.replace(/[?*]/g, '').trim()]).filter(Boolean))].join(', ') || 'observes the Earth';
-  const who = [STATE[p.state] || p.state, CLASS[p.cls], p.owner && p.owner !== p.state ? p.owner : ''].filter(Boolean).join(' · ');
+  const who = [STATE[p.state] || p.state, CLASS[p.cls]].filter(Boolean).join(' · ');
   return [p.name, who, pur, [p.alt != null ? Math.round(p.alt).toLocaleString() + ' km up' : '', p.year ? 'launched ' + p.year : ''].filter(Boolean).join(' · ')].filter(Boolean);
 }
 // where satellite k is on the screen (3D views), or null when hidden, behind the Earth or behind the camera
@@ -1009,7 +1014,8 @@ function touched() { lastInput = Date.now(); if (idling) { idling = false; lookT
 const simAt = (wall) => clock ? clock.sim0 + (wall - clock.wall0) * clock.speed : simT - (Date.now() - wall) * SPEED();
 function idleTick(dt) {
   const on = S.idle > 0 && following < 0 && Date.now() - lastInput > S.idle * 1000;
-  if (on && !idling) { idling = true; idleSim0 = simAt(lastInput ? lastInput + S.idle * 1000 : Date.now()); }
+  if (on && !idling) { idling = true; picked = -1; // the last tapped satellite's caption clears
+    idleSim0 = simAt(lastInput ? lastInput + S.idle * 1000 : Date.now()); }
   if (!on) { idling = false; return; }
   const lon = KOREA.lon - (ORB.gmst(simT) - ORB.gmst(idleSim0)), c = Math.cos(KOREA.lat);
   const n = new THREE.Vector3(c * Math.cos(lon), Math.sin(KOREA.lat), -c * Math.sin(lon));
@@ -1072,6 +1078,7 @@ function render() {
   }
   overlay(); info();
 }
+let cardKey = -2;
 function info() {
   const el = $('info');
   if (!loaded) { el.innerHTML = meta.errors.length ? '<span class="err">Could not load the catalogue. Nothing is shown (no stand-in data).</span>' : 'Loading the catalogue…'; return; }
@@ -1086,7 +1093,11 @@ function info() {
       : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + (S.unk === 'est' && p.est != null ? ' · estimated ' + Math.round(p.est).toLocaleString() + ' km (' + p.from + ' angle at its altitude)' : S.unk === 'typ' && p.typ != null ? ' · typical ' + Math.round(p.typ).toLocaleString() + ' km (' + p.from + ')' : ' · shown at minimum'),
     isPopped(p, tn) ? `taken away · back in ${Math.ceil(REVIVE() - (tn - popped.get(p.norad).t))} s` : '',
   ].filter(Boolean).join('\n') + '\n\n' : '';
-  if (ROLE === 'tablet') { el.textContent = (S.tapdo === 'pop' ? card : '') + `${sats.length.toLocaleString()}   ${np ? '× ' + np : ''}`; return; }
+  if (ROLE === 'tablet') {
+    const key = p ? p.norad : -1;
+    if (key !== cardKey) { cardKey = key; const c = $('card'); if (key < 0) c.innerHTML = ''; else { const [nm, ...ls] = about(p); c.innerHTML = `<div class="nm">${esc(nm)}</div>` + ls.map((l) => `<div class="ln">${esc(l)}</div>`).join(''); } }
+    el.textContent = `${sats.length.toLocaleString()}   ${np ? '× ' + np : ''}`; return;
+  }
   el.textContent = card
     + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} ${S.unk === 'est' ? 'estimated' : S.unk === 'typ' ? 'typical' : S.unk === 'hide' ? 'hidden' : 'at minimum'} · ${np} taken away\n`
     + `${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
