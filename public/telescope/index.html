@@ -61,7 +61,7 @@ THREE.ColorManagement.enabled = false;
 // public catalogue), at its real position now. The audience screen shows what that camera sees.
 //
 // The scene is built the way it will be built in Unreal (see /mnt/project-files/.../telescope/UNREAL.md):
-//   Observatory: Pedestal (fixed) + Screen (fixed, shows the eye camera) + Dome (yaw = azimuth) + Telescope (pitch =
+//   Observatory: Pedestal (fixed) + Screen (fixed at the centre of the front, shows the eye camera) + Dome (yaw = azimuth) + Telescope (pitch =
 //   elevation) carrying the Eye camera. Sky: a black world around the eye with one emissive mesh per object, placed by
 //   its direction from Daejeon. LED frame: a 360 capture of the observatory from its centre, keeping the outermost
 //   surface in each direction (reversed depth), so the frame is the outside of the apparatus wrapped on the sphere.
@@ -309,14 +309,14 @@ function buildObs() {
   const rail = new THREE.Mesh(new THREE.TorusGeometry(1.004, 0.009, 12, 256), dark); rail.rotation.x = Math.PI / 2; obs.add(rail);
   obs.add(new THREE.Mesh(new THREE.SphereGeometry(1.008, 256, 2, 0, TAU, Math.PI / 2 + 1.0 * D2R, 2.6 * D2R), white));
   // the audience screen: diameter = screen% of the sphere's, centred on the front panel, below the band
-  const capA = Math.asin(clamp(S.screen / 100, 0.1, 0.6)), lat = -(capA + 5.5 * D2R);
+  const capA = Math.asin(clamp(S.screen / 100, 0.1, 0.6)), lat = 0; // centred on the sphere's middle, in front of the bearing
   const axis = new THREE.Vector3(0, Math.sin(lat), Math.cos(lat));
   SU.uA.value = capA;
   const scrMat = new THREE.ShaderMaterial({ uniforms: SU, vertexShader: SCREEN_V, fragmentShader: SCREEN_F, side: THREE.DoubleSide }); mats.push(scrMat);
-  const scr = new THREE.Mesh(new THREE.SphereGeometry(1.003, 128, 32, 0, TAU, 0, capA), scrMat);
+  const scr = new THREE.Mesh(new THREE.SphereGeometry(1.03, 128, 32, 0, TAU, 0, capA), scrMat);
   scr.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis); obs.add(scr);
-  const bez = new THREE.Mesh(new THREE.TorusGeometry(Math.sin(capA) * 1.004, 0.011, 12, 192), dark);
-  bez.position.copy(axis).multiplyScalar(Math.cos(capA) * 1.004); bez.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis); obs.add(bez);
+  const bez = new THREE.Mesh(new THREE.TorusGeometry(Math.sin(capA) * 1.031, 0.011, 12, 192), dark);
+  bez.position.copy(axis).multiplyScalar(Math.cos(capA) * 1.031); bez.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis); obs.add(bez);
   // dome: the upper half, with a straight slit from the horizon over the zenith (shader cut), and two pairs of shutter
   // ribs along the slit's edges
   obs.add(dome);
@@ -707,7 +707,7 @@ function drawRig(ctx, b) {
   const n = Math.max(3, S.seams), pw = TAU / n;
   for (let k = 0; k < n; k++) { const lo = -pw / 2 + k * pw; path((t) => sph(-t * Math.PI / 2, lo), 40); } // pedestal seams
   // audience screen
-  const capA = Math.asin(clamp(S.screen / 100, 0.1, 0.6)), lat = -(capA + 5.5 * D2R);
+  const capA = Math.asin(clamp(S.screen / 100, 0.1, 0.6)), lat = 0;
   const ax = [0, Math.sin(lat), Math.cos(lat)], e1 = [1, 0, 0], e2 = [0, Math.cos(lat), -Math.sin(lat)];
   path((t) => { const a = t * TAU, s = Math.sin(capA), c = Math.cos(capA); return [ax[0] * c + (e1[0] * Math.cos(a) + e2[0] * Math.sin(a)) * s, ax[1] * c + (e1[1] * Math.cos(a) + e2[1] * Math.sin(a)) * s, ax[2] * c + (e1[2] * Math.cos(a) + e2[2] * Math.sin(a)) * s]; }, 96);
   // dome: slit edges and the telescope, turned by the mount
