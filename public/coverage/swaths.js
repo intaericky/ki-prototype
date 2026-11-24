@@ -33,7 +33,7 @@ export const SWATHS = [
   { re: /^GAOFEN[- ]?2\b/, inst: 'PMS-2 (two cameras)', km: 45, src: 'eoPortal, Gaofen-2' },
   { re: /^ICEYE/, inst: 'X-band SAR (strip mode)', km: 30, src: 'ICEYE product guide' },
   { re: /^JILIN-1 GAOFEN 0?3[BD]/, inst: 'GF03 camera', km: 17, src: 'eoPortal, Jilin-1 constellation' },
-  { re: /^SUPERVIEW-1\b|^GAOJING-1\b/, inst: 'SuperView-1 camera', km: 12, src: 'eoPortal, SuperView / GaoJing' },
+  { re: /^SUPERVIEW[- ]?1\b|^GAOJING[- ]?1\b/, inst: 'SuperView-1 camera', km: 12, src: 'eoPortal, SuperView / GaoJing' },
   { re: /^NUSAT|^NEWSAT/, inst: 'Satellogic multispectral', km: 5, src: 'SkyFi provider specifications (Satellogic)' },
   // --- UP42 swath table (docs.up42.com/data/swath-width, nadir, updated 2026-11-23)
   { re: /^GRUS|^AXELGLOBE/, inst: 'GRUS multispectral', km: 55, src: 'UP42 swath table (AxelGlobe)' },
