@@ -88,6 +88,7 @@ renderer.setClearColor(0x000000, 1);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 1, 10, 500000);
 const view = { yaw: 0.4, pitch: 0.3, dist: 24000 };
+let lookTarget = null;
 const rot360 = new THREE.Quaternion(); // LED frame orientation (frame centre = scene direction rot360·(1,0,0))
 const rot360M = new THREE.Matrix3(), rot360T = new THREE.Matrix3();
 const ball = { yaw: Math.PI / 2, pitch: 0.12, dist: 4.8 };
@@ -699,7 +700,7 @@ function followTick() {
   const n = new THREE.Vector3(a[k * 4] / L, a[k * 4 + 1] / L, a[k * 4 + 2] / L);
   if (S.view === 'glass' || S.view === 'lines') { view.pitch = Math.asin(Math.max(-1, Math.min(1, n.y))); view.yaw = Math.atan2(n.x, n.z); return; } // lookFromCamera passes it on to the sphere
   const up = new THREE.Vector3(0, 1, 0).addScaledVector(n, -n.y); if (up.lengthSq() < 1e-6) up.set(1, 0, 0); up.normalize();
-  rot360.setFromRotationMatrix(new THREE.Matrix4().makeBasis(n, up, new THREE.Vector3().crossVectors(n, up)));
+  lookTarget = null; rot360.setFromRotationMatrix(new THREE.Matrix4().makeBasis(n, up, new THREE.Vector3().crossVectors(n, up)));
   if (performance.now() - followLookT > 33) { followLookT = performance.now(); sendLook(true); }
 }
 // what the satellite is: from GCAT (Jonathan McDowell): its category, operator class, state and owner
@@ -768,7 +769,7 @@ document.addEventListener('touchmove', (e) => { if (e.target === canvas) e.preve
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { zoom(Math.exp(e.deltaY * 0.0012)); e.preventDefault(); }, { passive: false });
 function turn(dx, dy) {
-  following = -1; // turning lets go
+  following = -1; lookTarget = null; // turning lets go
   if (S.view === 'ball') { ball.yaw -= dx * 0.006; ball.pitch = Math.max(-1.45, Math.min(1.45, ball.pitch + dy * 0.006)); return; }
   if (S.view === '360') {
     const k = Math.PI / innerHeight;
@@ -819,7 +820,10 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
     else if (k === '/pops') { if (Array.isArray(d.list)) for (const e of d.list) { if (Array.isArray(e) && e.length === 3 && e.every(Number.isFinite)) setPop(e[0], e[1], e[2]); } }
     else if (k === '/revive') { if (Number.isFinite(d.s) && ROLE !== 'studio') S.revive = d.s; }
     else if (k === '/look' || k === '/look/live') { if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size && following < 0) {
-      rot360.fromArray(d.q).normalize(); gotLook = true;
+      gotLook = true;
+      // the flat 360 frame and the LED display glide to each new turn instead of jumping (messages arrive unevenly)
+      if (S.view === '360' || S.view === 'ball') { lookTarget = (lookTarget || new THREE.Quaternion()).fromArray(d.q).normalize(); return; }
+      rot360.fromArray(d.q).normalize();
       // the 3D views take the sphere's turn too, so tablet and sphere always show the same face
       if (S.view === 'glass' || S.view === 'lines') { const v = new THREE.Vector3(1, 0, 0).applyQuaternion(rot360); view.pitch = Math.asin(Math.max(-1, Math.min(1, v.y))); view.yaw = Math.atan2(v.x, v.z); camQ = null; adopted = true; }
     } }
@@ -909,6 +913,7 @@ function frame(now) {
   if (!TEST) requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000); last = now; frameDt = dt; fps = fps * 0.95 + 0.05 / Math.max(dt, 1e-3);
   simT = clock ? simNow() : simT + dt * 1000 * SPEED();
+  if (lookTarget) { rot360.slerp(lookTarget, 1 - Math.exp(-dt / 0.06)); if (rot360.angleTo(lookTarget) < 1e-4) { rot360.copy(lookTarget); lookTarget = null; } }
   render();
 }
 function render() {
