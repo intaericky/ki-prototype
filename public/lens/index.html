@@ -502,19 +502,19 @@ ballScene.add(ballMesh);
 // sats: every Earth-observation satellite with a public orbit. swath = published nadir swath (km) or null
 let sats = [], catQ = [], noOrbit = [], T0 = Date.now(), simT = Date.now(), loaded = false, meta = { errors: [], sources: [] };
 let N = 0, order = [], rank = new Int32Array(0), aC = null, aF = null, aP = null, meshes = null;
-// ---------- pop: a tap takes a ball away; it comes back by itself after Revive seconds, or when its x is tapped ----------
+// ---------- pop: a tap takes a ball away; it comes back by itself after Revive seconds ----------
 const popped = new Map(); // norad → { t: wall s popped, ev: wall ms of the last change }
 const wallS = () => Date.now() / 1000, REVIVE = () => Math.max(3, S.revive);
 const isPopped = (s, now) => { const p = popped.get(s.norad); return !!(p && p.t > 0 && now - p.t < REVIVE()); };
-// a pop: the ball swells a little, then collapses (0.3 s); when it comes back it springs open (0.6 s)
-const POPD = 0.3, GROWD = 0.6;
+// a pop: a slight swell, then it is gone (0.15 s); when it comes back it simply grows to full size (0.6 s)
+const POPD = 0.15, GROWD = 0.6;
 function popScale(s, now) {
   const p = popped.get(s.norad); if (!p || !(p.t > 0)) return 1;
   const age = now - p.t, R = REVIVE(); if (age < 0) return 1;
-  if (age < POPD) { const t = age / POPD; return t < 0.25 ? 1 + 0.25 * Math.sin(t / 0.25 * Math.PI / 2) : 1.25 * Math.pow(1 - (t - 0.25) / 0.75, 3); }
+  if (age < POPD) { const t = age / POPD; return t < 0.3 ? 1 + 0.06 * Math.sin(t / 0.3 * Math.PI / 2) : 1.06 * (1 - Math.pow((t - 0.3) / 0.7, 2)); }
   if (age < R) return 0;
   const g = (age - R) / GROWD; if (g >= 1) return 1;
-  return Math.pow(2, -10 * g) * Math.sin((g * 10 - 0.75) * TAU / 3) + 1; // springs past full size, settles
+  return 1 - Math.pow(1 - g, 3); // eases out to full size
 }
 function setPop(n, t, ev = Date.now()) { const cur = popped.get(n); if (cur && cur.ev > ev) return; popped.set(n, { t, ev }); }
 // width shown: the published swath, or for satellites without one (by the No swath setting) an estimate, the typical value of
@@ -750,7 +750,6 @@ function tap(x, y) {
   let k = pick(R, false);
   if (k >= 0 && S.tapdo === 'follow') { following = picked = order[k]; return; } // follow: it stays in front of the audience
   if (k >= 0) { const s = sats[order[k]]; picked = order[k]; setPop(s.norad, now); sendPop(s.norad, now); update(); return; }
-  if (S.view === 'lines') { k = pick(R, true); if (k >= 0) { const s = sats[order[k]], t = now - REVIVE() - 0.001; picked = order[k]; setPop(s.norad, t); sendPop(s.norad, t); update(); return; } }
   picked = following = -1;
 }
 // ---------- follow: the tapped satellite stays in front of the audience; the Earth and the others turn past it ----------
@@ -803,13 +802,9 @@ function overlay() {
       const [sx, sy, kpx] = sp, rp = Math.max((pop ? aP.array[k] : a[k * 4 + 3]) * kpx, CR); // true size as seen, never smaller than the smallest circle
       if (pop) { const q = rp * 0.7071; og.moveTo(sx - q, sy - q); og.lineTo(sx + q, sy + q); og.moveTo(sx - q, sy + q); og.lineTo(sx + q, sy - q); }
       else { og.moveTo(sx + rp, sy); og.arc(sx, sy, rp, 0, TAU); }
-      // just popped: a ring flies out and fades
-      const pp = popped.get(sats[order[k]].norad), age = pp && pp.t > 0 ? tn - pp.t : 9;
-      if (age >= 0 && age < 0.45) bursts.push([sx, sy, Math.max(aP.array[k] || a[k * 4 + 3], 0) * kpx || rp, age / 0.45]);
     }
     og.stroke();
-    for (const [bx, by, br, f] of bursts) { og.globalAlpha = 1 - f; og.beginPath(); og.arc(bx, by, Math.max(br, CR) * (1 + 1.4 * Math.sqrt(f)) + 4, 0, TAU); og.stroke(); }
-    og.globalAlpha = 1; bursts.length = 0;
+
   }
   if (following >= 0) { // the followed satellite sits in the middle; what it is, under it
     const t = about(sats[following]);
@@ -949,7 +944,7 @@ function panelBuild() {
     + `<div class="row"><label></label><div class="seg"><button id="smallest">Min = smallest swath</button><button id="crown">Crown glass</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; <b>Fill with Earth</b> lowers the refraction of a ball only as far as needed for the Earth beneath it to fill it out to that share of its radius (far balls see a small Earth, so they need weaker glass); 0 = off; <b>Dispersion</b> is given for crown glass and scales with each ball's refraction (n − 1); overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>lifted</b> (the smallest published swath becomes the minimum and widths up to 10× the minimum spread on a log curve, keeping their order and ratios; wider ones stay true), <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. <b>Tap</b>: <b>Follow</b> keeps the tapped satellite in front of the audience (the Earth and the others turn past it, the LED sphere too) and shows what it is under it; turning lets go. <b>Take away</b>: tap a ball to take it away (it shows only black) and name it; it <b>comes back</b> by itself after that many seconds, or when its x is tapped in Lines. Taps are shared with the tablet and the LED display. <b>Glow</b> gives every ball light of its own (Glow colour). <b>Trail</b> leaves an afterimage that fades by half every <b>Trail length</b>: of the <b>whole ball</b> (the Earth it shows smears along its path) or of its <b>glow only</b>.</div>
+    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; <b>Fill with Earth</b> lowers the refraction of a ball only as far as needed for the Earth beneath it to fill it out to that share of its radius (far balls see a small Earth, so they need weaker glass); 0 = off; <b>Dispersion</b> is given for crown glass and scales with each ball's refraction (n − 1); overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>lifted</b> (the smallest published swath becomes the minimum and widths up to 10× the minimum spread on a log curve, keeping their order and ratios; wider ones stay true), <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. <b>Tap</b>: <b>Follow</b> keeps the tapped satellite in front of the audience (the Earth and the others turn past it, the LED sphere too) and shows what it is under it; turning lets go. <b>Take away</b>: tap a ball to take it away (it shows only black) and name it; it <b>comes back</b> by itself after that many seconds. Taps are shared with the tablet and the LED display. <b>Glow</b> gives every ball light of its own (Glow colour). <b>Trail</b> leaves an afterimage that fades by half every <b>Trail length</b>: of the <b>whole ball</b> (the Earth it shows smears along its path) or of its <b>glow only</b>.</div>
     <div class="list" id="lists"></div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit' || k === 'sizing' || k === 'scale') reorder(); save(); panelSync(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min' || k === 'one') reorder(); if (k === 'res') resize(); if (k === 'revive') sendRevive(); save(); panelSync(); });
