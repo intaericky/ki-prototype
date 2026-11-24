@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, iorfar: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0, fill: 90 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(60),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50 }; // Intae's look (2026-11-24)
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30 }; // Intae's look (2026-11-24)
 let S = { ...DEF };
 const KEY = 'lens-v5';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -300,6 +300,15 @@ const ringVert = /* glsl */`
 const ringFrag = /* glsl */`
   varying float vT, vF;
   void main() { if (vF > 0.5 && mod(floor(vT * 12.0 / 3.1415927), 2.0) > 0.5) discard; gl_FragColor = vec4(1.0); }`;
+// --- lines (tablet): a popped ball is an x at its centre, a fixed size on screen
+const xVert = /* glsl */`
+  attribute vec4 aC; attribute float aP; uniform vec2 uView;
+  void main() {
+    if (aP < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    vec4 c = projectionMatrix * viewMatrix * vec4(aC.xyz, 1.0);
+    float i = position.x; vec2 o = i < 0.5 ? vec2(-1.0, -1.0) : i < 1.5 ? vec2(1.0, 1.0) : i < 2.5 ? vec2(-1.0, 1.0) : vec2(1.0, -1.0);
+    c.xy += o * 7.0 / uView * 2.0 * c.w; gl_Position = c;
+  }`;
 // --- 360 frame for the LED sphere: each piece drawn straight into the equirect image, seen from directly above
 const eqVert = /* glsl */`
   uniform mat3 uRotT; uniform vec2 uRes; uniform float uShift;
@@ -348,6 +357,7 @@ const idMat = new THREE.ShaderMaterial({ uniforms: { tDome: U.tDome, uVP: { valu
 const traceMat = new THREE.ShaderMaterial({ uniforms: { ...U, tId: { value: null }, uInvVP: { value: new THREE.Matrix4() }, uViewRot: { value: new THREE.Matrix3() }, uCam: { value: new THREE.Vector3() }, uView: { value: new THREE.Vector2(1, 1) } },
   vertexShader: quadVert, fragmentShader: traceFrag, depthTest: false, depthWrite: false });
 const ringMat = mat(ringVert, ringFrag); ringMat.depthTest = true; ringMat.transparent = false;
+const xMat = new THREE.ShaderMaterial({ vertexShader: xVert, fragmentShader: 'void main() { gl_FragColor = vec4(1.0); }', uniforms: { uView: { value: new THREE.Vector2(1, 1) } } });
 const eqMats = [-1, 0, 1].map((k) => new THREE.ShaderMaterial({ uniforms: { tDome: U.tDome, uRotM: U.uRotM, uRotT: U.uRotT, uRes: U.uRes, uTop: U.uTop, uShift: { value: k } }, vertexShader: eqVert, fragmentShader: eqIdFrag }));
 const eqTraceMat = new THREE.ShaderMaterial({ uniforms: { ...U, tId: { value: null } }, vertexShader: quadVert, fragmentShader: eqTraceFrag, depthTest: false, depthWrite: false });
 const allMats = [traceMat, eqTraceMat];
@@ -386,7 +396,12 @@ ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.Sha
 // ---------- catalogue ----------
 // sats: every Earth-observation satellite with a public orbit. swath = published nadir swath (km) or null
 let sats = [], catQ = [], noOrbit = [], T0 = Date.now(), simT = Date.now(), loaded = false, meta = { errors: [], sources: [] };
-let N = 0, order = [], aC = null, aF = null, meshes = null;
+let N = 0, order = [], aC = null, aF = null, aP = null, meshes = null;
+// ---------- pop: a tap takes a ball away; it comes back by itself after Revive seconds, or when its x is tapped ----------
+const popped = new Map(); // norad → { t: wall s popped, ev: wall ms of the last change }
+const wallS = () => Date.now() / 1000, REVIVE = () => Math.max(3, S.revive);
+const isPopped = (s, now) => { const p = popped.get(s.norad); return !!(p && p.t > 0 && now - p.t < REVIVE()); };
+function setPop(n, t, ev = Date.now()) { const cur = popped.get(n); if (cur && cur.ev > ev) return; popped.set(n, { t, ev }); }
 // width shown: the published swath, or for satellites without one (by the No swath setting) an estimate, the typical value of
 // their kind, or nothing (minimum). Minimum is either added to every width (all stay distinct) or a floor.
 function widthKm(s) { return s.swath ?? (S.unk === 'est' ? s.est : S.unk === 'typ' ? s.typ : null); }
@@ -417,6 +432,7 @@ function build() {
   if (meshes) { idScene.remove(meshes.dome); scene.remove(meshes.ring); eqScene.clear(); }
   aC = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(N, 1) * 4), 4); aC.setUsage(THREE.DynamicDrawUsage);
   aF = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(N, 1)), 1);
+  aP = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(N, 1)), 1); aP.setUsage(THREE.DynamicDrawUsage);
   domeTex?.dispose(); const rows = Math.max(1, Math.ceil(N / DOME_W));
   domeTex = new THREE.DataTexture(new Float32Array(DOME_W * rows * 8), DOME_W, rows * 2, THREE.RGBAFormat, THREE.FloatType);
   if (!cellTex) cellTex = new THREE.DataTexture(new Float32Array(CELL_W * CELL_H * 2), CELL_W, CELL_H, THREE.RGFormat, THREE.FloatType);
@@ -429,29 +445,31 @@ function build() {
   const rg = new THREE.InstancedBufferGeometry(); rg.setAttribute('position', new THREE.BufferAttribute(rp, 3)); rg.setAttribute('aC', aC); rg.setAttribute('aF', aF); rg.instanceCount = N;
   const qd = new THREE.PlaneGeometry(2, 2), eg = new THREE.InstancedBufferGeometry();
   eg.index = qd.index; eg.setAttribute('position', qd.getAttribute('position')); eg.setAttribute('aC', aC); eg.instanceCount = N;
-  const dome = new THREE.Mesh(dg, idMat), ring = new THREE.LineSegments(rg, ringMat);
-  for (const o of [dome, ring]) o.frustumCulled = false;
-  idScene.add(dome); scene.add(ring);
+  const xg = new THREE.InstancedBufferGeometry(); xg.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0]), 3)); xg.setAttribute('aC', aC); xg.setAttribute('aP', aP); xg.instanceCount = N;
+  const dome = new THREE.Mesh(dg, idMat), ring = new THREE.LineSegments(rg, ringMat), xs = new THREE.LineSegments(xg, xMat);
+  for (const o of [dome, ring, xs]) o.frustumCulled = false;
+  idScene.add(dome); scene.add(ring, xs);
   for (const m of eqMats) { const e = new THREE.Mesh(eg, m); e.frustumCulled = false; eqScene.add(e); }
-  meshes = { dome, ring };
+  meshes = { dome, ring, xs };
   reorder();
 }
 const tmpP = [0, 0, 0];
 function update() { // sub-satellite points (unit vectors, scene frame) for every satellite, in draw order
-  const dt = (simT - T0) / 1000, rot = -ORB.gmst(simT), c = Math.cos(rot), s = Math.sin(rot), a = aC.array; let top = RE;
+  const dt = (simT - T0) / 1000, rot = -ORB.gmst(simT), c = Math.cos(rot), s = Math.sin(rot), a = aC.array, now = wallS(); let top = RE;
   for (let k = 0; k < N; k++) {
     const j = order[k]; ORB.posEci(catQ[j], dt, tmpP);
     const x = c * tmpP[0] - s * tmpP[1], y = s * tmpP[0] + c * tmpP[1], z = tmpP[2], L = Math.hypot(x, y, z);
     // n: the geocentric direction (the ground straight below the satellite is RE·n)
-    const nx = x / L, ny = z / L, nz = -y / L, r = radiusKm(sats[j]);
-    const h = S.place === 'orbit' ? L : S.shape === 'sphere' ? RE + r : RE; // centre: real position, or on the ground
+    const nx = x / L, ny = z / L, nz = -y / L, r0 = radiusKm(sats[j]), pop = r0 > 0 && isPopped(sats[j], now), r = pop ? 0 : r0;
+    const h = S.place === 'orbit' ? L : S.shape === 'sphere' ? RE + r0 : RE; // centre: real position, or on the ground
+    aP.array[k] = pop ? 1 : 0;
     a[k * 4] = nx * h; a[k * 4 + 1] = ny * h; a[k * 4 + 2] = nz * h; a[k * 4 + 3] = r;
     const dd = domeTex.image.data;
     dd[k * 8] = nx * h; dd[k * 8 + 1] = ny * h; dd[k * 8 + 2] = nz * h; dd[k * 8 + 3] = r;
     dd[k * 8 + 4] = nx; dd[k * 8 + 5] = ny; dd[k * 8 + 6] = nz; dd[k * 8 + 7] = (S.shape === 'dome' ? 1 : 0) + (sats[j].swath == null ? 2 : 0); // +2: no published swath
     if (r > 0 && h + r > top) top = h + r;
   }
-  aC.needsUpdate = true; domeTex.needsUpdate = true; U.uTop.value = top + 50;
+  aC.needsUpdate = true; aP.needsUpdate = true; domeTex.needsUpdate = true; U.uTop.value = top + 50;
   buildGrid(a);
 }
 let domeTex = null, cellTex = null, itemTex = null;
@@ -561,30 +579,53 @@ function sunEci(ms) {
 }
 let clock = null;
 
-// ---------- tap (studio): name the satellite under the finger ----------
+// ---------- tap: pops the ball under the finger (and names it in the studio); in Lines, tapping an x brings it back ----------
 let picked = -1;
-function tap(x, y) {
-  if (!loaded || ROLE !== 'studio') return;
-  let dir;
+function rayFromTap(x, y) {
   if (S.view === 'glass' || S.view === 'lines') {
-    const p = new THREE.Vector3(x / innerWidth * 2 - 1, -(y / innerHeight) * 2 + 1, 0.5).unproject(camera), o = camera.position, d = p.sub(o).normalize();
-    const b = o.dot(d), h = b * b - (o.lengthSq() - RE * RE); if (h < 0) { picked = -1; return; }
-    dir = o.clone().addScaledVector(d, -b - Math.sqrt(h)).normalize();
-  } else if (S.view === '360') {
-    const lo = (x / innerWidth - 0.5) * TAU, la = (0.5 - y / innerHeight) * Math.PI;
-    dir = new THREE.Vector3(Math.cos(la) * Math.cos(lo), Math.sin(la), -Math.cos(la) * Math.sin(lo)).applyMatrix3(rot360M);
-  } else return;
-  // the smallest dome containing the point (the one drawn on top)
-  let best = -1, bestR = Infinity; const a = aC.array;
-  for (let k = 0; k < N; k++) {
-    const r = a[k * 4 + 3]; if (r <= 0) continue;
-    const ang = Math.acos(Math.min(1, dir.x * a[k * 4] + dir.y * a[k * 4 + 1] + dir.z * a[k * 4 + 2])) * RE;
-    if (ang <= r && r < bestR) { bestR = r; best = order[k]; }
+    const rd = new THREE.Vector3(x / innerWidth * 2 - 1, -(y / innerHeight) * 2 + 1, 0.5).unproject(camera).sub(camera.position).normalize();
+    const k = 2 * Math.tan(camera.fov / 2 * D2R) / innerHeight;
+    return { ro: camera.position.clone(), rd, pxAt: (t) => k * t };
   }
-  picked = best;
+  let n;
+  if (S.view === '360') { const lo = (x / innerWidth - 0.5) * TAU, la = (0.5 - y / innerHeight) * Math.PI; n = new THREE.Vector3(Math.cos(la) * Math.cos(lo), Math.sin(la), -Math.cos(la) * Math.sin(lo)); }
+  else {
+    const p = new THREE.Vector3(x / innerWidth * 2 - 1, -(y / innerHeight) * 2 + 1, 0.5).unproject(ballCam), o = ballCam.position, d = p.sub(o).normalize();
+    const b = o.dot(d), h = b * b - (o.lengthSq() - 1); if (h < 0) return null;
+    n = o.clone().addScaledVector(d, -b - Math.sqrt(h)).normalize();
+  }
+  // 360: the frame is seen from the Earth's centre outwards
+  const d = n.applyMatrix3(rot360M);
+  return { ro: new THREE.Vector3(), rd: d, pxAt: (t) => Math.PI / 1080 * t, inside: true };
+}
+// the nearest ball the ray enters (popped: the nearest x within a finger's reach)
+function pick(R, wantPopped) {
+  const a = aC.array, ro = R.ro, rd = R.rd, now = wallS();
+  const eb = ro.dot(rd), eh = eb * eb - (ro.lengthSq() - RE * RE), tEarth = R.inside ? Infinity : eh > 0 ? -eb - Math.sqrt(eh) : Infinity;
+  let best = -1, bestT = Infinity, near = -1, nearK = Infinity;
+  for (let k = 0; k < N; k++) {
+    const s = sats[order[k]], pop = aP.array[k] > 0.5;
+    if (pop !== wantPopped) continue;
+    const r = wantPopped ? 0 : a[k * 4 + 3]; if (!wantPopped && r <= 0) continue;
+    const ox = a[k * 4] - ro.x, oy = a[k * 4 + 1] - ro.y, oz = a[k * 4 + 2] - ro.z, t = ox * rd.x + oy * rd.y + oz * rd.z;
+    if (t <= 0 || t > tEarth + (R.inside ? 0 : r)) continue;
+    const dm = Math.sqrt(Math.max(0, ox * ox + oy * oy + oz * oz - t * t)), tol = R.pxAt(t) * 14;
+    if (r > 0 && dm < r) { const t0 = t - Math.sqrt(r * r - dm * dm); if (t0 < bestT) { bestT = t0; best = k; } }
+    else if (dm < r + tol && dm / (r + tol) < nearK) { nearK = dm / (r + tol); near = k; }
+  }
+  return best >= 0 ? best : near;
+}
+function tap(x, y) {
+  if (!loaded || !aP) return;
+  const R = rayFromTap(x, y); if (!R) return;
+  const now = wallS();
+  let k = pick(R, false);
+  if (k >= 0) { const s = sats[order[k]]; picked = order[k]; setPop(s.norad, now); sendPop(s.norad, now); update(); return; }
+  if (S.view === 'lines') { k = pick(R, true); if (k >= 0) { const s = sats[order[k]], t = now - REVIVE() - 1; picked = order[k]; setPop(s.norad, t); sendPop(s.norad, t); update(); return; } }
+  picked = -1;
 }
 
-// ---------- touch: one finger turns, two fingers zoom ----------
+// ---------- touch: one finger turns, two fingers zoom, a tap pops ----------
 const ptrs = new Map(); let gesture = null, pinch0 = null;
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -633,16 +674,23 @@ function sendLook(force) {
   publish('/look', { q: rot360.toArray(), by: ME }, true);
 }
 function sendClock() { clock = { wall0: Date.now(), sim0: simT, speed: SPEED(), by: ME }; publish('/clock', clock, true); }
+let snapT = null;
+function sendPop(n, t) { publish('/pop', { n, t, ev: Date.now(), by: ME }); clearTimeout(snapT); snapT = setTimeout(sendSnapshot, 400); }
+function sendSnapshot() { const now = wallS(), list = []; for (const [n, p] of popped) if (p.t > 0 && now - p.t < REVIVE() + 2) list.push([n, p.t, p.ev]); publish('/pops', { list, by: ME }, true); }
+function sendRevive() { if (ROLE === 'studio') publish('/revive', { s: S.revive, by: ME }, true); }
 if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m) => {
   const mqtt = m.default || m;
   mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
   mq.on('close', () => { relayOk = false; }); mq.on('offline', () => { relayOk = false; });
-  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/look', TOPIC + '/clock']); });
+  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/look', TOPIC + '/clock', TOPIC + '/pop', TOPIC + '/pops', TOPIC + '/revive']); if (ROLE === 'studio') sendRevive(); });
   mq.on('message', (t, msg) => {
     let d; try { d = JSON.parse(msg.toString()); } catch { return; }
     if (!d || d.by === ME) return;
     const k = t.slice(TOPIC.length);
-    if (k === '/look') { if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size) rot360.fromArray(d.q).normalize(); }
+    if (k === '/pop') { if (Number.isFinite(d.n) && Number.isFinite(d.t)) setPop(d.n, d.t, d.ev || Date.now()); }
+    else if (k === '/pops') { if (Array.isArray(d.list)) for (const e of d.list) { if (Array.isArray(e) && e.length === 3 && e.every(Number.isFinite)) setPop(e[0], e[1], e[2]); } }
+    else if (k === '/revive') { if (Number.isFinite(d.s) && ROLE !== 'studio') S.revive = d.s; }
+    else if (k === '/look') { if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size) rot360.fromArray(d.q).normalize(); }
     else if (k === '/clock') { if ([d.wall0, d.sim0, d.speed].every(Number.isFinite)) { clock = d; S.spd = Math.log10(Math.max(1, d.speed)) * 25; panelSync(); } }
   });
 }).catch(() => {});
@@ -660,7 +708,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['one', 'One size', 0, 1000, () => (ONEKM() < 10 ? ONEKM().toFixed(1) : Math.round(ONEKM()).toLocaleString()) + ' km'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
   ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], 
   ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['iorfar', 'Far refraction', 100, 250, () => (S.iorfar / 100).toFixed(2)], ['fill', 'Fill with Earth', 0, 100, () => S.fill ? 'to ' + S.fill + '% of radius' : 'off'], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 300, () => (S.refl / 100).toFixed(1) + '×'],
-  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
+  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
   ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['scale', 'Scale', [['true', 'True width'], ['area', 'Area (√)']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
   ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['unkmat', 'No-swath glass', [['same', 'Same'], ['frost', 'Frosted'], ['smoke', 'Smoky'], ['milk', 'Milky']]], ['fit', 'Minimum is', [['lift', 'Lifted'], ['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['clamp', 'Clamp'], ['1', 'Real'], ['0', 'Hide']]]];
@@ -671,10 +719,10 @@ function panelBuild() {
     + `<div class="row"><label></label><div class="seg"><button id="smallest">Min = smallest swath</button><button id="crown">Crown glass</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; <b>Fill with Earth</b> lowers the refraction of a ball only as far as needed for the Earth beneath it to fill it out to that share of its radius (far balls see a small Earth, so they need weaker glass); 0 = off; <b>Dispersion</b> is given for crown glass and scales with each ball's refraction (n − 1); overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>lifted</b> (the smallest published swath becomes the minimum and widths up to 10× the minimum spread on a log curve, keeping their order and ratios; wider ones stay true), <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to name it.</div>
+    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; <b>Fill with Earth</b> lowers the refraction of a ball only as far as needed for the Earth beneath it to fill it out to that share of its radius (far balls see a small Earth, so they need weaker glass); 0 = off; <b>Dispersion</b> is given for crown glass and scales with each ball's refraction (n − 1); overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>lifted</b> (the smallest published swath becomes the minimum and widths up to 10× the minimum spread on a log curve, keeping their order and ratios; wider ones stay true), <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to take it away (it shows only black) and name it; it <b>comes back</b> by itself after that many seconds, or when its x is tapped in Lines. Taps are shared with the tablet and the LED display.</div>
     <div class="list" id="lists"></div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit' || k === 'sizing' || k === 'scale') reorder(); save(); panelSync(); });
-  $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min' || k === 'one') reorder(); if (k === 'res') resize(); save(); panelSync(); });
+  $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min' || k === 'one') reorder(); if (k === 'res') resize(); if (k === 'revive') sendRevive(); save(); panelSync(); });
   $('tint').oninput = (e) => { S.tint = e.target.value; save(); };
   $('smallest').onclick = () => { if (kindStats.all?.lo) { S.min = minSlider(kindStats.all.lo); reorder(); save(); panelSync(); } };
   $('crown').onclick = () => { Object.assign(S, CROWN); save(); panelSync(); };
@@ -739,7 +787,7 @@ function render() {
     camera.near = Math.max(1, (view.dist - RE - 1500) * 0.3); camera.far = view.dist + 20000; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
     U.uPxK.value = 2 * Math.tan(camera.fov / 2 * D2R) / (innerHeight * renderer.getPixelRatio());
     earthLine.visible = v === 'lines';
-    if (meshes) meshes.ring.visible = v === 'lines';
+    if (meshes) { meshes.ring.visible = meshes.xs.visible = v === 'lines'; xMat.uniforms.uView.value.set(innerWidth, innerHeight); }
     lookFromCamera();
     if (v === 'glass') {
       const sz = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -770,10 +818,11 @@ function info() {
   const el = $('info');
   if (!loaded) { el.innerHTML = meta.errors.length ? '<span class="err">Could not load the catalogue. Nothing is shown (no stand-in data).</span>' : 'Loading the catalogue…'; return; }
   const d = new Date(simT), live = Math.abs(simT - Date.now()) < 5000, unk = sats.reduce((n, s) => n + (s.swath == null), 0);
-  if (ROLE === 'tablet') { el.textContent = sats.length.toLocaleString(); return; }
+  const tn = wallS(); let np = 0; for (const p of popped.values()) if (p.t > 0 && tn - p.t < REVIVE()) np++;
+  if (ROLE === 'tablet') { el.textContent = `${sats.length.toLocaleString()}   ${np ? '× ' + np : ''}`; return; }
   const p = picked >= 0 ? sats[picked] : null;
   el.textContent = (p ? `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''} · ${p.swath != null ? p.inst + ' · ' + Math.round(p.swath).toLocaleString() + ' km swath' : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + (S.unk === 'est' && p.est != null ? ' · estimated ' + Math.round(p.est).toLocaleString() + ' km (' + p.from + ' angle at its altitude)' : S.unk === 'typ' && p.typ != null ? ' · typical ' + Math.round(p.typ).toLocaleString() + ' km (' + p.from + ')' : ' · shown at minimum')}${p.cat ? ' · ' + p.cat : ''}\n` : '')
-    + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} ${S.unk === 'est' ? 'estimated' : S.unk === 'typ' ? 'typical' : S.unk === 'hide' ? 'hidden' : 'at minimum'}\n`
+    + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} ${S.unk === 'est' ? 'estimated' : S.unk === 'typ' ? 'typical' : S.unk === 'hide' ? 'hidden' : 'at minimum'} · ${np} taken away\n`
     + `${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
 }
 
