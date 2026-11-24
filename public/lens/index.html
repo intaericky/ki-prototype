@@ -59,16 +59,20 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: 'glass', shape: 'dome', place: 'ground', size: 50, min: 200, ior: 50, disp: 0, tint: '#ffffff', abs: 0, frost: 0, refl: 100, rim: 20, bounces: 4, gain: 100, lift: 100, q360: 100, light: 'day', unk: '1', geo: '0', spd: 0 };
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', size: 50, min: 200, fit: 'add', res: 100, q360: 100, light: 'day', unk: 'est', geo: '0', spd: 52 };
 let S = { ...DEF };
-const KEY = 'lens-v2';
+const KEY = 'lens-v3';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
 if (ROLE === 'tablet' && !Q.has('view')) S.view = 'lines';
 const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
 const SCALE = () => Math.pow(10, (S.size - 50) / 50); // ×0.1 .. ×10 of the real swath (50 → ×1)
-const IOR = () => 1 + S.ior / 100;                  // 1.0 (flat window) .. 2.0 (glass ≈ 1.5)
+// the glass: clear crown glass (Schott N-BK7). Refractive index at 550 nm 1.5185; red (620 nm) 1.5157, blue (460 nm) 1.5245
+// (Schott datasheet, Sellmeier fit). The bending and reflection follow from these by Snell's law and Fresnel; nothing else is set.
+const GLASS = { ior: 1.5185, disp: 0.0044 };
+// render pixels per screen point (each one is ray traced): 1 by default, up to the screen's own density
+const PR = () => ROLE === 'display' ? 1 : Math.min(S.res / 100, devicePixelRatio || 1, 2);
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25));
 
 // ---------- renderer ----------
@@ -91,7 +95,6 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 // A dome = the part of a glass sphere (centre on the ground, radius = half the swath) that stands above the ground.
 // A ray refracts into the glass, runs down to the ground under it (the Earth image) or out through the far side.
 const U = { tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 }, uIor: { value: 1.5 }, uDisp: { value: 0 },
-  uTint: { value: new THREE.Color(1, 1, 1) }, uAbs: { value: 0 }, uFrost: { value: 0 }, uRefl: { value: 1 }, uRim: { value: 0.2 }, uGain: { value: 1 }, uLift: { value: 1 }, uBounces: { value: 4 },
   uPxK: { value: 0.001 }, uTop: { value: 8000 }, uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) }, uShift: { value: 0 },
   tDome: { value: null }, tCell: { value: null }, tItem: { value: null } };
 // Light through the glass, traced per pixel (three.js's own transmission only bends what is already on screen, and
@@ -101,39 +104,12 @@ const U = { tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new
 // ground (the Earth image) or refracts out again and may enter the next piece. Ground no glass-bent light reaches stays black.
 // Pieces near a ray are found through a 1° grid on the sky (each piece listed in every cell its outline covers).
 const DOME_W = 1024, ITEM_W = 4096, CELL_W = 360, CELL_H = 180, MAXC = 40;
-const OPTICS = /* glsl */`
-  uniform sampler2D tDay, tNight; uniform vec3 uSun, uTint; uniform float uLight, uIor, uDisp, uAbs, uFrost, uRefl, uRim, uGain, uLift; uniform int uBounces;
-  uniform highp sampler2D tDome, tCell, tItem;
-  const float RE = 6378.137;
-  vec3 surface(vec3 n, float lod) {
-    vec3 e = vec3(n.x, -n.z, n.y);
-    vec2 uv = vec2(atan(e.y, e.x) / 6.2831853 + 0.5, asin(clamp(e.z, -1.0, 1.0)) / 3.1415927 + 0.5);
-    lod += uFrost;
-    vec3 day = textureLod(tDay, uv, lod).rgb;
-    if (uLight < 0.5) return day;
-    vec3 night = textureLod(tNight, uv, lod).rgb;
-    return mix(night * 0.7, day, smoothstep(-0.08, 0.12, dot(n, uSun)));
-  }
-  float earthT(vec3 ro, vec3 rd) {
-    float b = dot(ro, rd), c = dot(ro, ro) - RE * RE, h = b * b - c;
-    if (h < 0.0) return 1e9;
-    float s = sqrt(h), t = -b - s;
-    if (t > 0.0) return t;
-    t = -b + s; return (c < 0.0 && t > 0.0) ? 0.0 : 1e9;
-  }
+// one piece of glass: where a ray enters and leaves it (shared by the id pass and the tracer)
+const PIECE = /* glsl */`
+  uniform highp sampler2D tDome;
   ivec2 tx(int i) { return ivec2(i & ${DOME_W - 1}, i >> ${Math.log2(DOME_W)}); }
   vec4 pc(int k) { return texelFetch(tDome, tx(2 * k), 0); }      // centre (km), radius
   vec4 pn(int k) { return texelFetch(tDome, tx(2 * k + 1), 0); }  // outward axis, 1 = dome (half), 0 = sphere
-  int cand[${MAXC}]; int nc = 0;
-  void addCand(int k) { if (nc >= ${MAXC}) return; for (int i = 0; i < ${MAXC}; i++) { if (i >= nc) break; if (cand[i] == k) return; } cand[nc++] = k; }
-  void addCell(vec3 p) {
-    vec3 n = normalize(p);
-    int x = int(floor((atan(-n.z, n.x) / 6.2831853 + 0.5) * ${CELL_W}.0)), y = int(floor((asin(clamp(n.y, -1.0, 1.0)) / 3.1415927 + 0.5) * ${CELL_H}.0));
-    x = (x + ${CELL_W}) % ${CELL_W}; y = clamp(y, 0, ${CELL_H - 1});
-    vec2 c = texelFetch(tCell, ivec2(x, y), 0).xy;
-    int i0 = int(c.x), n0 = int(c.y);
-    for (int i = 0; i < ${MAXC}; i++) { if (i >= n0) break; int ii = i0 + i; addCand(int(texelFetch(tItem, ivec2(ii & ${ITEM_W - 1}, ii >> ${Math.log2(ITEM_W)}), 0).r)); }
-  }
   // the span [t0, t1] of the ray inside piece k, with the outward normals where it enters and leaves
   bool span(vec3 ro, vec3 rd, int k, out float t0, out float t1, out vec3 n0, out vec3 n1) {
     vec4 a = pc(k); if (a.w <= 0.0) return false;
@@ -149,6 +125,37 @@ const OPTICS = /* glsl */`
     }
     return t1 > t0;
   }
+  vec4 idColor(int k) { int i = k + 1; return vec4(float(i & 255), float((i >> 8) & 255), float((i >> 16) & 255), 255.0) / 255.0; }
+  int idOf(vec4 e) { return int(e.r * 255.0 + 0.5) + int(e.g * 255.0 + 0.5) * 256 + int(e.b * 255.0 + 0.5) * 65536 - 1; }`;
+const OPTICS = /* glsl */`${PIECE}
+  uniform sampler2D tDay, tNight; uniform vec3 uSun; uniform float uLight, uIor, uDisp;
+  uniform highp sampler2D tCell, tItem;
+  const float RE = 6378.137;
+  vec3 surface(vec3 n, float lod) {
+    vec3 e = vec3(n.x, -n.z, n.y);
+    vec2 uv = vec2(atan(e.y, e.x) / 6.2831853 + 0.5, asin(clamp(e.z, -1.0, 1.0)) / 3.1415927 + 0.5);
+    vec3 day = textureLod(tDay, uv, lod).rgb;
+    if (uLight < 0.5) return day;
+    vec3 night = textureLod(tNight, uv, lod).rgb;
+    return mix(night * 0.7, day, smoothstep(-0.08, 0.12, dot(n, uSun)));
+  }
+  float earthT(vec3 ro, vec3 rd) {
+    float b = dot(ro, rd), c = dot(ro, ro) - RE * RE, h = b * b - c;
+    if (h < 0.0) return 1e9;
+    float s = sqrt(h), t = -b - s;
+    if (t > 0.0) return t;
+    t = -b + s; return (c < 0.0 && t > 0.0) ? 0.0 : 1e9;
+  }
+  int cand[${MAXC}]; int nc = 0;
+  void addCand(int k) { if (nc >= ${MAXC}) return; for (int i = 0; i < ${MAXC}; i++) { if (i >= nc) break; if (cand[i] == k) return; } cand[nc++] = k; }
+  void addCell(vec3 p) {
+    vec3 n = normalize(p);
+    int x = int(floor((atan(-n.z, n.x) / 6.2831853 + 0.5) * ${CELL_W}.0)), y = int(floor((asin(clamp(n.y, -1.0, 1.0)) / 3.1415927 + 0.5) * ${CELL_H}.0));
+    x = (x + ${CELL_W}) % ${CELL_W}; y = clamp(y, 0, ${CELL_H - 1});
+    vec2 c = texelFetch(tCell, ivec2(x, y), 0).xy;
+    int i0 = int(c.x), n0 = int(c.y);
+    for (int i = 0; i < ${MAXC}; i++) { if (i >= n0) break; int ii = i0 + i; addCand(int(texelFetch(tItem, ivec2(ii & ${ITEM_W - 1}, ii >> ${Math.log2(ITEM_W)}), 0).r)); }
+  }
   bool inside(vec3 q, int k) {
     vec4 a = pc(k); if (a.w <= 0.0 || distance(q, a.xyz) >= a.w - 0.01) return false;
     vec4 c = pn(k); return c.w < 0.5 || dot(q - a.xyz, c.xyz) > 0.01;
@@ -159,7 +166,7 @@ const OPTICS = /* glsl */`
   vec3 path(vec3 P, vec3 N, vec3 rd, float ior, float lod) {
     vec3 thr = vec3(1.0 - fres(-dot(rd, N)));
     vec3 dir = refract(rd, N, 1.0 / ior), pos = P;
-    for (int bounce = 0; bounce < 8; bounce++) {
+    for (int bounce = 0; bounce < 4; bounce++) {
       // inside: where the ray leaves the fused glass, or the ground
       float tG = earthT(pos, dir), tq = 1e9; vec3 nq = vec3(0.0); int kq = -1;
       for (int i = 0; i < ${MAXC}; i++) {
@@ -170,26 +177,13 @@ const OPTICS = /* glsl */`
         tq = t1; nq = n1; kq = cand[i];
       }
       float len = min(tG, tq);
-      if (len < 1e8) thr *= pow(uTint, vec3(len / 1000.0)) * exp(-uAbs * len / 1000.0);
       if (tG <= tq || kq < 0) return tG < 1e8 ? thr * surface(normalize(pos + dir * tG), lod) : vec3(0.0);
       vec3 Q = pos + dir * tq, o = refract(dir, -nq, ior);
       if (dot(o, o) < 0.5) { dir = reflect(dir, -nq); pos = Q - nq * 0.02; continue; } // total internal reflection
       thr *= 1.0 - fres(dot(dir, nq));
-      dir = o; pos = Q + dir * 0.02;
-      float tE = earthT(pos, dir);
-      if (bounce >= uBounces) return tE < 1e8 ? thr * surface(normalize(pos + dir * tE), lod) : vec3(0.0);
-      addCell(pos + dir * min(tE, 600.0)); addCell(pos + dir * min(tE, 3000.0));
-      // outside: the next piece along the ray, or the bare ground (black), or space
-      float tn = 1e9; vec3 nn = vec3(0.0);
-      for (int i = 0; i < ${MAXC}; i++) {
-        if (i >= nc) break;
-        float t0, t1; vec3 n0, n1;
-        if (!span(pos, dir, cand[i], t0, t1, n0, n1) || t0 <= 0.02 || t0 >= tn) continue;
-        tn = t0; nn = n0;
-      }
-      if (tn >= 1e8 || tE < tn) return tE < 1e8 ? thr * surface(normalize(pos + dir * tE), lod) : vec3(0.0); // light that came through glass shows the ground it lands on
-      pos += dir * tn; thr *= 1.0 - fres(-dot(dir, nn));
-      dir = refract(dir, nn, 1.0 / ior);
+      // out of the glass: it shows the ground it lands on, or space (black)
+      float tE = earthT(Q, o);
+      return tE < 1e8 ? thr * surface(normalize(Q + o * tE), lod) : vec3(0.0);
     }
     return vec3(0.0);
   }
@@ -210,8 +204,8 @@ const OPTICS = /* glsl */`
     float ci = clamp(-dot(rd, N), 0.0, 1.0);
     vec3 rr = reflect(rd, N); float tR = earthT(Pin + N * 0.02, rr);
     vec3 refl = tR < 1e8 ? surface(normalize(Pin + N * 0.02 + rr * tR), lod) : vec3(0.0);
-    c += uRefl * fres(ci) * refl;
-    return vec4(pow(clamp(uGain * c, 0.0, 1.0), vec3(1.0 / uLift)) + uRim * pow(1.0 - ci, 3.0), 1.0);
+    c += fres(ci) * refl;
+    return vec4(clamp(c, 0.0, 1.0), 1.0);
   }`;
 
 // --- 3D: one sphere mesh per piece (instanced); the exact glass is found per pixel
@@ -223,17 +217,32 @@ const domeVert = /* glsl */`
     vW = vC + position * vR * 1.02;
     gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.0);
   }`;
-const domeFrag = /* glsl */`${OPTICS}
-  uniform float uPxK; varying vec3 vW, vC; varying float vR; flat varying int vK;
+// pass 1: which piece of glass each pixel sees first (exact entry point, written as depth); pass 2: trace that pixel once
+const idFrag = /* glsl */`${PIECE}
+  uniform mat4 uVP; varying vec3 vW, vC; varying float vR; flat varying int vK;
   void main() {
-    vec3 ro = cameraPosition, rd = normalize(vW - ro), oc = ro - vC;
-    float b = dot(oc, rd), dm = length(cross(oc, rd));
-    if (dm >= vR) discard;
-    float t = -b - sqrt(vR * vR - dm * dm);
-    float px = uPxK * max(t, 1.0), cov = clamp((vR - dm) / px + 0.5, 0.0, 1.0);
-    vec4 c = shade(ro, ro + rd * t, rd, vK, max(0.0, log2(px / uIor / 9.8)));
-    if (c.a <= 0.0) discard;
-    gl_FragColor = vec4(c.rgb, cov);
+    vec3 ro = cameraPosition, rd = normalize(vW - ro);
+    float t0, t1; vec3 n0, n1;
+    if (!span(ro, rd, vK, t0, t1, n0, n1) || t1 <= 0.0) discard;
+    vec4 cp = uVP * vec4(ro + rd * max(t0, 0.0), 1.0);
+    gl_FragDepth = clamp(cp.z / cp.w * 0.5 + 0.5, 0.0, 1.0);
+    gl_FragColor = idColor(vK);
+  }`;
+const quadVert = /* glsl */`void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+const traceFrag = /* glsl */`${OPTICS}
+  uniform sampler2D tId; uniform mat4 uInvVP; uniform vec3 uCam; uniform vec2 uView; uniform float uPxK;
+  void main() {
+    int k = idOf(texelFetch(tId, ivec2(gl_FragCoord.xy), 0));
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    if (k < 0) return;
+    vec4 w = uInvVP * vec4(gl_FragCoord.xy / uView * 2.0 - 1.0, 1.0, 1.0);
+    vec3 ro = uCam, rd = normalize(w.xyz / w.w - ro);
+    float t0, t1; vec3 n0, n1;
+    if (!span(ro, rd, k, t0, t1, n0, n1)) return;
+    vec4 a = pc(k); float dm = length(cross(ro - a.xyz, rd));
+    float px = uPxK * max(t0, 1.0), cov = clamp((a.w - dm) / px + 0.5, 0.0, 1.0);
+    vec4 c = shade(ro, ro + rd * max(t0, 0.0), rd, k, max(0.0, log2(px / uIor / 9.8)));
+    gl_FragColor = vec4(c.rgb * c.a * cov, 1.0);
   }`;
 // --- lines (tablet): one circle per piece, its outline as seen; dashed when the swath is not published
 const ringVert = /* glsl */`
@@ -262,26 +271,47 @@ const eqVert = /* glsl */`
     vec2 p = vec2(lo + position.x * hw, clamp(la + position.y * a, -1.5708, 1.5708));
     gl_Position = vec4(p.x / 3.1415927 + uShift * 2.0, p.y / 1.5707963, 0.0, 1.0);
   }`;
-const eqFrag = /* glsl */`${OPTICS}
-  uniform mat3 uRotM; uniform vec2 uRes; uniform float uTop; varying vec3 vC; varying float vR; flat varying int vK;
+const EQRAY = /* glsl */`
+  uniform mat3 uRotM; uniform vec2 uRes; uniform float uTop;
+  vec3 eqDir() { vec2 uv = gl_FragCoord.xy / uRes; float lo = (uv.x - 0.5) * 6.2831853, la = (uv.y - 0.5) * 3.1415927;
+    return uRotM * vec3(cos(la) * cos(lo), sin(la), -cos(la) * sin(lo)); }`;
+const eqIdFrag = /* glsl */`${PIECE}${EQRAY}
+  varying vec3 vC; varying float vR; flat varying int vK;
   void main() {
-    vec2 uv = gl_FragCoord.xy / uRes;
-    float lo = (uv.x - 0.5) * 6.2831853, la = (uv.y - 0.5) * 3.1415927;
-    vec3 d = uRotM * vec3(cos(la) * cos(lo), sin(la), -cos(la) * sin(lo));
-    vec3 ro = d * uTop, rd = -d, oc = ro - vC;
-    float b = dot(oc, rd), dm = length(cross(oc, rd));
-    if (dm >= vR) discard;
-    vec3 P = ro + rd * (-b - sqrt(vR * vR - dm * dm));
-    float px = 3.1415927 / uRes.y * length(vC), cov = clamp((vR - dm) / px + 0.5, 0.0, 1.0);
-    vec4 c = shade(ro, P, rd, vK, max(0.0, log2(3.1415927 / uRes.y * RE / uIor / 9.8)));
-    if (c.a <= 0.0) discard;
-    gl_FragColor = vec4(c.rgb, cov);
+    vec3 d = eqDir(), ro = d * uTop, rd = -d;
+    float t0, t1; vec3 n0, n1;
+    if (!span(ro, rd, vK, t0, t1, n0, n1) || t1 <= 0.0) discard;
+    gl_FragDepth = clamp(max(t0, 0.0) / (2.0 * uTop), 0.0, 1.0);
+    gl_FragColor = idColor(vK);
+  }`;
+const eqTraceFrag = /* glsl */`${OPTICS}${EQRAY}
+  uniform sampler2D tId;
+  void main() {
+    int k = idOf(texelFetch(tId, ivec2(gl_FragCoord.xy), 0));
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    if (k < 0) return;
+    vec3 d = eqDir(), ro = d * uTop, rd = -d;
+    float t0, t1; vec3 n0, n1;
+    if (!span(ro, rd, k, t0, t1, n0, n1)) return;
+    vec4 a = pc(k); float dm = length(cross(ro - a.xyz, rd));
+    float px = 3.1415927 / uRes.y * length(a.xyz), cov = clamp((a.w - dm) / px + 0.5, 0.0, 1.0);
+    vec4 c = shade(ro, ro + rd * max(t0, 0.0), rd, k, max(0.0, log2(3.1415927 / uRes.y * RE / uIor / 9.8)));
+    gl_FragColor = vec4(c.rgb * c.a * cov, 1.0);
   }`;
 const mat = (v, f, extra = {}) => new THREE.ShaderMaterial({ uniforms: { ...U, ...extra }, vertexShader: v, fragmentShader: f, transparent: true, depthWrite: false });
-const domeMat = mat(domeVert, domeFrag); domeMat.depthTest = true;
+const idMat = new THREE.ShaderMaterial({ uniforms: { tDome: U.tDome, uVP: { value: new THREE.Matrix4() } }, vertexShader: domeVert, fragmentShader: idFrag });
+const traceMat = new THREE.ShaderMaterial({ uniforms: { ...U, tId: { value: null }, uInvVP: { value: new THREE.Matrix4() }, uCam: { value: new THREE.Vector3() }, uView: { value: new THREE.Vector2(1, 1) } },
+  vertexShader: quadVert, fragmentShader: traceFrag, depthTest: false, depthWrite: false });
 const ringMat = mat(ringVert, ringFrag); ringMat.depthTest = true; ringMat.transparent = false;
-const eqMats = [-1, 0, 1].map((k) => { const m = mat(eqVert, eqFrag, { uShift: { value: k } }); m.depthTest = false; return m; });
-const allMats = [domeMat, ...eqMats];
+const eqMats = [-1, 0, 1].map((k) => new THREE.ShaderMaterial({ uniforms: { tDome: U.tDome, uRotM: U.uRotM, uRotT: U.uRotT, uRes: U.uRes, uTop: U.uTop, uShift: { value: k } }, vertexShader: eqVert, fragmentShader: eqIdFrag }));
+const eqTraceMat = new THREE.ShaderMaterial({ uniforms: { ...U, tId: { value: null } }, vertexShader: quadVert, fragmentShader: eqTraceFrag, depthTest: false, depthWrite: false });
+const allMats = [traceMat, eqTraceMat];
+const idTarget = (w, h) => { const t = new THREE.WebGLRenderTarget(w, h, { depthBuffer: true, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false }); return t; };
+const idRT = idTarget(16, 16), eqIdRT = idTarget(1920, 1080);
+traceMat.uniforms.tId.value = idRT.texture; eqTraceMat.uniforms.tId.value = eqIdRT.texture;
+const idScene = new THREE.Scene(), traceScene = new THREE.Scene(), eqTraceScene = new THREE.Scene();
+const quad = (m) => { const q = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), m); q.frustumCulled = false; return q; };
+traceScene.add(quad(traceMat)); eqTraceScene.add(quad(eqTraceMat));
 
 // Earth: always black (it hides the far side). In the lines view it gets a single outline.
 const earthBlack = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), new THREE.MeshBasicMaterial({ color: 0x000000 }));
@@ -290,6 +320,7 @@ const earthLine = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), new THRE
   fragmentShader: `varying vec3 vN, vV; void main(){ float f = dot(normalize(vN), normalize(vV)), w = fwidth(f); float a = 1.0 - smoothstep(0.0, 1.6 * w, f); gl_FragColor = vec4(vec3(a), 1.0); }`,
 }));
 earthBlack.renderOrder = -2; earthLine.renderOrder = -1;
+idScene.add(new THREE.Mesh(earthBlack.geometry, new THREE.MeshBasicMaterial({ color: 0x000000 })));
 scene.add(earthBlack, earthLine);
 
 // the 360 frame: drawn into its own image, then shown flat or wrapped back onto a ball (sphere preview)
@@ -311,14 +342,21 @@ ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.Sha
 // sats: every Earth-observation satellite with a public orbit. swath = published nadir swath (km) or null
 let sats = [], catQ = [], noOrbit = [], T0 = Date.now(), simT = Date.now(), loaded = false, meta = { errors: [], sources: [] };
 let N = 0, order = [], aC = null, aF = null, meshes = null;
-function radiusKm(s) { return (S.unk === '0' && s.swath == null) || (S.geo === '0' && s.disk) ? 0 : Math.max((s.swath ?? 0) * SCALE(), S.min) / 2; }
+// width shown: the published swath, or for satellites without one (by the No swath setting) an estimate, the typical value of
+// their kind, or nothing (minimum). Minimum is either added to every width (all stay distinct) or a floor.
+function widthKm(s) { return s.swath ?? (S.unk === 'est' ? s.est : S.unk === 'typ' ? s.typ : null); }
+function radiusKm(s) {
+  if ((S.unk === 'hide' && s.swath == null) || (S.geo === '0' && s.disk)) return 0;
+  const w = (widthKm(s) ?? 0) * SCALE();
+  return (S.fit === 'add' ? S.min + w : Math.max(w, S.min)) / 2;
+}
 function reorder() { // the smallest domes are drawn last, so every satellite stays visible on top of the wide ones
   order = sats.map((s, j) => j).sort((a, b) => radiusKm(sats[b]) - radiusKm(sats[a]));
   if (aF) { order.forEach((j, k) => { aF.array[k] = sats[j].swath == null ? 1 : 0; }); aF.needsUpdate = true; }
 }
 function build() {
   N = sats.length; catQ = sats.map((s) => ORB.prep(s, T0));
-  if (meshes) { scene.remove(meshes.dome, meshes.ring); eqScene.clear(); }
+  if (meshes) { idScene.remove(meshes.dome); scene.remove(meshes.ring); eqScene.clear(); }
   aC = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(N, 1) * 4), 4); aC.setUsage(THREE.DynamicDrawUsage);
   aF = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(N, 1)), 1);
   domeTex?.dispose(); const rows = Math.max(1, Math.ceil(N / DOME_W));
@@ -333,9 +371,9 @@ function build() {
   const rg = new THREE.InstancedBufferGeometry(); rg.setAttribute('position', new THREE.BufferAttribute(rp, 3)); rg.setAttribute('aC', aC); rg.setAttribute('aF', aF); rg.instanceCount = N;
   const qd = new THREE.PlaneGeometry(2, 2), eg = new THREE.InstancedBufferGeometry();
   eg.index = qd.index; eg.setAttribute('position', qd.getAttribute('position')); eg.setAttribute('aC', aC); eg.instanceCount = N;
-  const dome = new THREE.Mesh(dg, domeMat), ring = new THREE.LineSegments(rg, ringMat);
+  const dome = new THREE.Mesh(dg, idMat), ring = new THREE.LineSegments(rg, ringMat);
   for (const o of [dome, ring]) o.frustumCulled = false;
-  scene.add(dome, ring);
+  idScene.add(dome); scene.add(ring);
   for (const m of eqMats) { const e = new THREE.Mesh(eg, m); e.frustumCulled = false; eqScene.add(e); }
   meshes = { dome, ring };
   reorder();
@@ -356,7 +394,6 @@ function update() { // sub-satellite points (unit vectors, scene frame) for ever
     if (r > 0 && h + r > top) top = h + r;
   }
   aC.needsUpdate = true; domeTex.needsUpdate = true; U.uTop.value = top + 50;
-  for (const m of eqMats) m.uniforms.uTop.value = top + 50;
   buildGrid(a);
 }
 let domeTex = null, cellTex = null, itemTex = null;
@@ -411,8 +448,34 @@ function ingest(parts) {
     if (!m) o.why = /MET-RO/.test(cat) ? 'ro' : (gr?.[3] === 'D' || /^(USA|YAOGAN|KOSMOS|OFEQ|CSO|SAR-LUPE|SARAH)/i.test(name)) ? 'secret' : 'unknown';
     out.push(o);
   }
+  estimate(out);
   sats = out.sort((a, b) => a.name.localeCompare(b.name)); noOrbit.sort();
   T0 = simT; build(); loaded = true; panelSync();
+}
+// Satellites without a published swath get an estimate drawn from the published swaths of their own kind (GCAT category:
+// optical imaging, radar imaging, weather, Earth science), so the widths follow the real spread of that kind instead of
+// all sitting at one size. The draw is fixed per satellite (seeded by its catalogue number) and smoothed a little
+// (log-normal, ±25 %) so repeated values don't stack. Kinds with no published swaths use all of them. Radio occultation
+// satellites take no images and keep no width. typ = the median of the kind.
+const KINDS = { IMG: 'optical imaging', 'IMG-R': 'radar imaging', MET: 'weather', EOSCI: 'Earth science' };
+let kindStats = {};
+function estimate(list) {
+  const by = {}, all = [];
+  for (const o of list) { o.kind = (o.cat || '').split('/')[0].replace(/[?*]/g, ''); if (o.swath != null && !o.disk) { (by[o.kind] ??= []).push(o.swath); all.push(o.swath); } }
+  const med = (a) => a[Math.floor(a.length / 2)];
+  for (const k in by) by[k].sort((a, b) => a - b); all.sort((a, b) => a - b);
+  kindStats = Object.fromEntries(Object.entries(by).map(([k, a]) => [k, { n: a.length, lo: a[0], med: med(a), hi: a[a.length - 1] }]));
+  kindStats.all = { n: all.length, lo: all[0], med: med(all), hi: all[all.length - 1] };
+  for (const o of list) {
+    if (o.swath != null) continue;
+    o.est = o.typ = null;
+    if (o.why === 'ro' || !all.length) continue;
+    const a = by[o.kind]?.length ? by[o.kind] : all;
+    let h = (o.norad * 2654435761) >>> 0; const rnd = () => { h = (h + 0x6D2B79F5) >>> 0; let t = h; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const g = Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(TAU * rnd());
+    o.est = Math.min(a[a.length - 1], Math.max(a[0], a[Math.floor(rnd() * a.length)] * Math.exp(0.25 * g)));
+    o.typ = med(a); o.from = by[o.kind]?.length ? (KINDS[o.kind] || o.kind) : 'all kinds';
+  }
 }
 const good = {};
 async function load() {
@@ -529,25 +592,20 @@ function lookFromCamera() { // the point facing the viewer becomes the LED frame
 
 // ---------- panel (studio) ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['min', 'Minimum', 0, 1000, () => S.min + ' km'],
-  ['ior', 'Refraction', 0, 100, () => IOR().toFixed(2)], ['disp', 'Dispersion', 0, 100, () => S.disp + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''],
-  ['frost', 'Frost', 0, 100, () => S.frost + ''], ['refl', 'Reflection', 0, 200, () => (S.refl / 100).toFixed(1) + '×'], ['rim', 'Edge glow', 0, 100, () => S.rim + ''],
-  ['bounces', 'Through', 0, 6, () => S.bounces ? '+' + S.bounces + ' pieces' : '1 piece'], ['gain', 'Brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'],
-  ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
+const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['min', 'Minimum', 0, 3000, () => S.min.toLocaleString() + ' km'],
+  ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
   ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
-  ['unk', 'No swath', [['1', 'Show at minimum'], ['0', 'Hide']]], ['geo', 'Full disk', [['0', 'Hide'], ['1', 'Show']]]];
+  ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['fit', 'Minimum is', [['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['0', 'Hide'], ['1', 'Show']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
-    + `<div class="row"><label>Tint</label><input type="color" id="tint" style="grid-column:2/4;width:100%;height:22px;background:none;border:1px solid var(--faint);padding:0"></div>`
     + `<div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Every Earth-observation satellite with a public orbit, as a piece of glass: a <b>dome</b> (half sphere, flat face towards the Earth) or a full <b>sphere</b>, lying <b>on the ground</b> right under the satellite or at its <b>real orbit</b> position, moving with it. All pieces are one glass: where they overlap they fuse, and light leaving one can enter the next (<b>Through</b>). <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>Full disk</b>: geostationary weather imagers see a whole hemisphere (horizon to horizon, about 18,000 km), so together they cover the entire Earth and hide everything else; they are hidden unless you show them. <b>Minimum</b>: no dome is drawn narrower than this, so every satellite stays visible; satellites with no published swath are drawn at the minimum (dashed in Lines). Earth is black; its surface shows only through the domes, bent by <b>Refraction</b> (1.00 = no bending, glass ≈ 1.5, diamond 2.4). <b>Tint</b> and <b>Absorption</b> colour and darken the light by how far it travels in the glass (per 1,000 km); <b>Frost</b> blurs it like sandblasted glass; <b>Dispersion</b> splits colours at the edges. Tap a dome to name it.</div>
+    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> draws a width for each satellite without a published swath from the published swaths of its own kind (optical, radar, weather, Earth science), fixed per satellite; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to name it.</div>
     <div class="list" id="lists"></div>`;
-  $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo') reorder(); save(); panelSync(); });
-  $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min') reorder(); save(); panelSync(); });
-  $('tint').oninput = (e) => { S.tint = e.target.value; save(); };
+  $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit') reorder(); save(); panelSync(); });
+  $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min') reorder(); if (k === 'res') resize(); save(); panelSync(); });
   $('now').onclick = () => { simT = Date.now(); S.spd = 0; clock = null; sendClock(); save(); panelSync(); };
   $('copy').onclick = () => {
     const q = new URLSearchParams(); for (const k of Object.keys(DEF)) if (k !== 'view' && String(S[k]) !== String(DEF[k])) q.set(k, S[k]);
@@ -560,7 +618,6 @@ function panelBuild() {
 let listsFor = -1;
 function panelSync() {
   document.querySelectorAll('.seg[data-k]').forEach((s) => s.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(S[s.dataset.k]) === b.dataset.v)));
-  if ($('tint')) $('tint').value = S.tint;
   for (const [k, , , , f] of SL) { const r = document.querySelector(`input[data-k="${k}"]`); if (r) r.value = S[k]; const o = document.querySelector(`output[data-o="${k}"]`); if (o) o.textContent = f(); }
   if (loaded && $('lists') && listsFor !== sats.length) {
     listsFor = sats.length;
@@ -569,6 +626,7 @@ function panelSync() {
     const unk = sats.filter((s) => s.swath == null), grp = (w) => unk.filter((s) => s.why === w).map((s) => s.name);
     $('lists').innerHTML = `<span class="k">${sats.length} satellites</span> · ${sats.length - unk.length} with a published swath · ${unk.length} without<br>Sources: ${esc(meta.sources.join('; '))}${meta.errors.length ? '<br>Not loaded: ' + esc(meta.errors.join(', ')) : ''}<br><br>`
       + `<span class="k">Swaths</span><br>` + rows.map(([i, km, src, n]) => `${n} × ${esc(i)}: ${(+km).toLocaleString()} km <span style="opacity:.6">(${esc(src)})</span>`).join('<br>')
+      + `<br><br><span class="k">Estimates</span> (No swath: Estimate): each satellite without a published swath gets one drawn from the published swaths of its own kind, fixed per satellite. Published range by kind: ${Object.entries(kindStats).filter(([k]) => KINDS[k] || k === 'all').map(([k, v]) => `${KINDS[k] || 'all'} ${v.n} known, ${Math.round(v.lo)}–${Math.round(v.hi).toLocaleString()} km, median ${Math.round(v.med)} km`).join('; ')}. Typical = that median.`
       + `<br><br><span class="k">Radio occultation (${grp('ro').length})</span>: they take no pictures; they measure the atmosphere from how GPS signals bend through it, so there is no swath. Drawn at the minimum:<br>${esc(grp('ro').join(', '))}`
       + `<br><br><span class="k">Military, not published (${grp('secret').length})</span>, drawn at the minimum:<br>${esc(grp('secret').join(', '))}`
       + `<br><br><span class="k">Swath not found (${grp('unknown').length})</span>, drawn at the minimum:<br>${esc(grp('unknown').join(', '))}`
@@ -579,9 +637,8 @@ $('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').cla
 panelBuild(); panelSync();
 
 // ---------- sizing ----------
-const PR_MAX = ROLE === 'display' ? 1 : Math.min(devicePixelRatio || 1, 2);
 function resize() {
-  renderer.setPixelRatio(PR_MAX); renderer.setSize(innerWidth, innerHeight, false);
+  renderer.setPixelRatio(PR()); renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   ballCam.aspect = innerWidth / innerHeight; ballCam.updateProjectionMatrix();
 }
@@ -599,8 +656,7 @@ function frame(now) {
 function render() {
   if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; catQ = sats.map((s) => ORB.prep(s, T0)); }
   if (loaded) update();
-  U.uDisp.value = S.disp / 1000; U.uAbs.value = S.abs / 25; U.uFrost.value = S.frost / 20; U.uRefl.value = S.refl / 100; U.uBounces.value = S.bounces; U.uTint.value.set(S.tint);
-  U.uIor.value = IOR(); U.uRim.value = S.rim / 100; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uLight.value = S.light === 'sun' ? 1 : 0;
+  U.uIor.value = GLASS.ior; U.uDisp.value = GLASS.disp; U.uLight.value = S.light === 'sun' ? 1 : 0;
   const rot = -ORB.gmst(simT), se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
   const v = S.view;
@@ -610,15 +666,24 @@ function render() {
     camera.near = Math.max(1, (view.dist - RE - 1500) * 0.3); camera.far = view.dist + 20000; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
     U.uPxK.value = 2 * Math.tan(camera.fov / 2 * D2R) / (innerHeight * renderer.getPixelRatio());
     earthLine.visible = v === 'lines';
-    if (meshes) { meshes.dome.visible = v === 'glass'; meshes.ring.visible = v === 'lines'; }
+    if (meshes) meshes.ring.visible = v === 'lines';
     lookFromCamera();
-    renderer.setRenderTarget(null); renderer.render(scene, camera);
+    if (v === 'glass') {
+      const sz = renderer.getDrawingBufferSize(new THREE.Vector2());
+      if (idRT.width !== sz.x || idRT.height !== sz.y) idRT.setSize(sz.x, sz.y);
+      idMat.uniforms.uVP.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      renderer.setRenderTarget(idRT); renderer.setClearColor(0x000000, 1); renderer.clear(); renderer.render(idScene, camera);
+      const tu = traceMat.uniforms; tu.uInvVP.value.multiplyMatrices(camera.matrixWorld, camera.projectionMatrixInverse); tu.uCam.value.copy(camera.position); tu.uView.value.copy(sz);
+      renderer.setRenderTarget(null); renderer.render(traceScene, eqCam);
+    } else { renderer.setRenderTarget(null); renderer.render(scene, camera); }
   } else {
     rot360M.setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rot360)); rot360T.copy(rot360M).transpose();
     const qs = S.q360 / 100, ew = Math.round(1920 * qs), eh = Math.round(1080 * qs);
-    if (eqRT.width !== ew) eqRT.setSize(ew, eh);
+    if (eqRT.width !== ew) { eqRT.setSize(ew, eh); eqIdRT.setSize(ew, eh); }
     U.uRes.value.set(ew, eh);
-    renderer.setRenderTarget(eqRT); renderer.setClearColor(0x000000, 1); renderer.clear(); renderer.render(eqScene, eqCam);
+    renderer.setClearColor(0x000000, 1);
+    renderer.setRenderTarget(eqIdRT); renderer.clear(); renderer.render(eqScene, eqCam);
+    renderer.setRenderTarget(eqRT); renderer.render(eqTraceScene, eqCam);
     renderer.setRenderTarget(null);
     if (v === '360') renderer.render(blitScene, eqCam);
     else {
@@ -634,8 +699,8 @@ function info() {
   const d = new Date(simT), live = Math.abs(simT - Date.now()) < 5000, unk = sats.reduce((n, s) => n + (s.swath == null), 0);
   if (ROLE === 'tablet') { el.textContent = sats.length.toLocaleString(); return; }
   const p = picked >= 0 ? sats[picked] : null;
-  el.textContent = (p ? `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''} · ${p.swath != null ? p.inst + ' · ' + Math.round(p.swath).toLocaleString() + ' km swath' : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + ' · shown at minimum'}${p.cat ? ' · ' + p.cat : ''}\n` : '')
-    + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} at minimum\n`
+  el.textContent = (p ? `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''} · ${p.swath != null ? p.inst + ' · ' + Math.round(p.swath).toLocaleString() + ' km swath' : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + (S.unk === 'est' && p.est != null ? ' · estimated ' + Math.round(p.est).toLocaleString() + ' km (drawn from ' + p.from + ')' : S.unk === 'typ' && p.typ != null ? ' · typical ' + Math.round(p.typ).toLocaleString() + ' km (' + p.from + ')' : ' · shown at minimum')}${p.cat ? ' · ' + p.cat : ''}\n` : '')
+    + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} ${S.unk === 'est' ? 'estimated' : S.unk === 'typ' ? 'typical' : S.unk === 'hide' ? 'hidden' : 'at minimum'}\n`
     + `${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
 }
 
