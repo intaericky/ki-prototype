@@ -18,6 +18,15 @@ const PAGES = [
     ],
   },
   {
+    group: "Lens",
+    note: "Every Earth-observation satellite in operation as a glass dome lying on the ground right under it, as wide as the strip of ground it images. Earth is black: its surface shows only through the domes, magnified.",
+    links: [
+      { href: "/lens", title: "Studio", text: "Glass, lines, 360 and sphere preview, with size, minimum size, magnification and speed. Settings list every satellite, its swath and source." },
+      { href: "/lens-tablet", title: "Tablet", text: "Minimal lines: one circle per satellite on the Earth (dashed when no swath is published). Turn and pinch." },
+      { href: "/lens-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere, synced with the lens tablet." },
+    ],
+  },
+  {
     group: "Coverage",
     note: "Only real Earth-observation and weather satellites as glass balls, each as wide as the strip of ground it actually images (published swath, ×1 = real).",
     links: [

@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Lens</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+  :root { --fg: #fff; --dim: #ffffff73; --faint: #ffffff2e; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--fg); font: 13px/1.45 Pretendard, -apple-system, sans-serif; font-weight: 400; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+  #info { position: fixed; left: 20px; bottom: 16px; color: var(--dim); font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre; }
+  #toggle { position: fixed; top: 16px; right: 16px; background: none; border: 1px solid var(--faint); color: var(--dim); font: inherit; padding: 6px 12px; border-radius: 0; cursor: pointer; }
+  #toggle.on { color: var(--fg); border-color: var(--fg); }
+  #panel { position: fixed; top: 56px; right: 16px; width: 320px; max-height: calc(100vh - 80px); overflow: auto; background: #000000d9; border: 1px solid var(--faint); padding: 14px 16px; display: none; user-select: text; -webkit-user-select: text; }
+  #panel.on { display: block; }
+  .row { display: grid; grid-template-columns: 92px 1fr 64px; align-items: center; gap: 8px; margin: 7px 0; }
+  .row label { color: var(--dim); }
+  .row output { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .seg { grid-column: 2 / 4; display: flex; gap: 0; }
+  .seg button { flex: 1; background: none; color: var(--dim); border: 1px solid var(--faint); margin-left: -1px; padding: 4px 0; font: inherit; cursor: pointer; }
+  .seg button.on { color: #000; background: var(--fg); border-color: var(--fg); }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; background: none; height: 18px; }
+  input[type=range]::-webkit-slider-runnable-track { height: 1px; background: var(--dim); }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 11px; height: 11px; border-radius: 50%; background: #000; border: 1px solid var(--fg); margin-top: -5px; }
+  input[type=range]::-moz-range-track { height: 1px; background: var(--dim); }
+  input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 50%; background: #000; border: 1px solid var(--fg); }
+  .note { color: var(--dim); font-size: 12px; margin-top: 12px; line-height: 1.5; }
+  .note b { color: var(--fg); font-weight: 400; }
+  .list { color: var(--dim); font-size: 11.5px; line-height: 1.5; margin-top: 10px; }
+  .list .k { color: var(--fg); }
+  .err { color: #fff; }
+  body.display #toggle, body.display #panel, body.display #info { display: none; }
+  body.tablet #toggle { display: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info"></div>
+<button id="toggle">Settings</button>
+<div id="panel"></div>
+<script type="importmap">{ "imports": { "three": "/sphere-assets/vendor/three.module.min.js" } }</script>
+<script type="module">
+// Lens: every Earth-observation satellite as a glass dome lying on the Earth at the point right under it, moving along
+// its real ground track. Each dome is as wide as the strip of ground the satellite images (published swath). Earth is
+// black: its surface shows only through the domes, magnified, like a reading glass laid on a map.
+import * as THREE from 'three';
+import * as ORB from '/entangled/orbit.js';
+import { matchSwath } from '/coverage/swaths.js';
+const { RE, D2R, TAU } = ORB;
+THREE.ColorManagement.enabled = false;
+
+const Q = new URLSearchParams(location.search);
+const ROLE = location.pathname.includes('display') || Q.has('display') ? 'display' : location.pathname.includes('tablet') || Q.has('tablet') ? 'tablet' : 'studio';
+document.body.classList.add(ROLE);
+const TEST = location.hash.includes('test');
+const $ = (id) => document.getElementById(id);
+
+// ---------- settings ----------
+const DEF = { view: 'glass', size: 50, min: 200, ior: 50, rim: 20, gain: 100, lift: 100, q360: 100, light: 'day', unk: '1', geo: '0', spd: 0 };
+let S = { ...DEF };
+const KEY = 'lens-v1';
+if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
+for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
+if (ROLE === 'display') S.view = '360';
+if (ROLE === 'tablet' && !Q.has('view')) S.view = 'lines';
+const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+const SCALE = () => Math.pow(10, (S.size - 50) / 50); // ×0.1 .. ×10 of the real swath (50 → ×1)
+const IOR = () => 1 + S.ior / 100;                  // 1.0 (flat window) .. 2.0 (glass ≈ 1.5)
+const SPEED = () => Math.round(Math.pow(10, S.spd / 25));
+
+// ---------- renderer ----------
+const canvas = $('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: TEST });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.setClearColor(0x000000, 1);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 10, 500000);
+const view = { yaw: 0.4, pitch: 0.3, dist: 24000 };
+const rot360 = new THREE.Quaternion(); // LED frame orientation (frame centre = scene direction rot360·(1,0,0))
+const rot360M = new THREE.Matrix3(), rot360T = new THREE.Matrix3();
+const ball = { yaw: Math.PI / 2, pitch: 0.12, dist: 4.8 };
+
+const tl = new THREE.TextureLoader();
+const tex = (u) => { const t = tl.load(u); t.wrapS = THREE.RepeatWrapping; t.minFilter = THREE.LinearMipmapLinearFilter; t.anisotropy = 8; return t; };
+const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-assets/blackmarble-4k.jpg'); // NASA Blue Marble / Black Marble
+
+// ---------- optics (shared GLSL) ----------
+// A dome = the part of a glass sphere (centre on the ground, radius = half the swath) that stands above the ground.
+// A ray refracts into the glass, runs down to the ground under it (the Earth image) or out through the far side.
+const U = { tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 }, uIor: { value: 1.5 },
+  uRim: { value: 0.2 }, uGain: { value: 1 }, uLift: { value: 1 }, uPxK: { value: 0.001 }, uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) }, uShift: { value: 0 } };
+const OPTICS = /* glsl */`
+  uniform sampler2D tDay, tNight; uniform vec3 uSun; uniform float uLight, uIor, uRim, uGain, uLift;
+  const float RE = 6378.137;
+  vec3 surface(vec3 n, float lod) {
+    vec3 e = vec3(n.x, -n.z, n.y);
+    vec2 uv = vec2(atan(e.y, e.x) / 6.2831853 + 0.5, asin(clamp(e.z, -1.0, 1.0)) / 3.1415927 + 0.5);
+    vec3 day = textureLod(tDay, uv, lod).rgb;
+    if (uLight < 0.5) return day;
+    vec3 night = textureLod(tNight, uv, lod).rgb;
+    return mix(night * 0.7, day, smoothstep(-0.08, 0.12, dot(n, uSun)));
+  }
+  float earthT(vec3 ro, vec3 rd) {
+    float b = dot(ro, rd), c = dot(ro, ro) - RE * RE, h = b * b - c;
+    if (h < 0.0) return 1e9;
+    float s = sqrt(h), t = -b - s;
+    if (t > 0.0) return t;
+    t = -b + s; return (c < 0.0 && t > 0.0) ? 0.0 : 1e9; // starting just under the ground: the ground is right here
+  }
+  vec3 lens(vec3 P, vec3 rd, vec3 C, float R, float lod) {
+    vec3 N = (P - C) / R;
+    float ci = clamp(-dot(rd, N), 0.0, 1.0), F = 0.04 + 0.96 * pow(1.0 - ci, 5.0);
+    vec3 t1 = refract(rd, N, 1.0 / uIor), col = vec3(0.0);
+    float chord = -2.0 * dot(P - C, t1), tE = earthT(P, t1);
+    if (tE <= chord) col = surface(normalize(P + t1 * tE), lod);
+    else {
+      vec3 P2 = P + t1 * chord, N2 = (P2 - C) / R, t2 = refract(t1, -N2, uIor);
+      if (dot(t2, t2) < 0.5) t2 = reflect(t1, -N2);
+      float tE2 = earthT(P2, t2);
+      if (tE2 < 1e8) col = surface(normalize(P2 + t2 * tE2), lod);
+    }
+    vec3 rr = reflect(rd, N); float tR = earthT(P + N * 0.01, rr);
+    vec3 refl = tR < 1e8 ? surface(normalize(P + N * 0.01 + rr * tR), lod) : vec3(0.0);
+    return pow(clamp(uGain * ((1.0 - F) * col + F * refl), 0.0, 1.0), vec3(1.0 / uLift)) + uRim * pow(1.0 - ci, 3.0);
+  }`;
+
+// --- 3D: one sphere mesh per dome (instanced), the part under the ground discarded; exact surface ray-traced per pixel
+const domeVert = /* glsl */`
+  attribute vec4 aC; varying vec3 vW, vC; varying float vR;
+  void main() {
+    vR = aC.w; vC = aC.xyz * 6378.137;
+    if (vR <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    vW = vC + position * vR * 1.02; // a touch larger than the sphere: the exact surface is found per pixel
+    gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.0);
+  }`;
+const domeFrag = /* glsl */`${OPTICS}
+  uniform float uPxK; varying vec3 vW, vC; varying float vR;
+  void main() {
+    vec3 ro = cameraPosition, rd = normalize(vW - ro), oc = ro - vC;
+    float b = dot(oc, rd), dm = length(cross(oc, rd));
+    if (dm >= vR) discard;
+    float t = -b - sqrt(vR * vR - dm * dm);
+    vec3 P = ro + rd * t;
+    if (length(P) < RE) discard; // below the ground: not part of the dome
+    float px = uPxK * t, cov = clamp((vR - dm) / px + 0.5, 0.0, 1.0);
+    float lod = max(0.0, log2(px / uIor / 9.8));
+    gl_FragColor = vec4(lens(P, rd, vC, vR, lod), cov);
+  }`;
+// --- lines (tablet): one circle per dome where it meets the ground; dashed when the swath is not published
+const ringVert = /* glsl */`
+  attribute vec4 aC; attribute float aF; varying float vT, vF;
+  void main() {
+    float r = aC.w; vT = position.x; vF = aF;
+    if (r <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    vec3 n = aC.xyz, e1 = normalize(cross(n, abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))), e2 = cross(n, e1);
+    float a = r / 6378.137;
+    vec3 P = 6378.137 * 1.0004 * (cos(a) * n + sin(a) * (cos(vT) * e1 + sin(vT) * e2));
+    gl_Position = projectionMatrix * viewMatrix * vec4(P, 1.0);
+  }`;
+const ringFrag = /* glsl */`
+  varying float vT, vF;
+  void main() { if (vF > 0.5 && mod(floor(vT * 12.0 / 3.1415927), 2.0) > 0.5) discard; gl_FragColor = vec4(1.0); }`;
+// --- 360 frame for the LED sphere: each dome drawn straight into the equirect image, seen from directly above
+const eqVert = /* glsl */`
+  uniform mat3 uRotT; uniform vec2 uRes; uniform float uShift;
+  attribute vec4 aC; varying vec3 vC; varying float vR;
+  void main() {
+    float r = aC.w; vC = aC.xyz * 6378.137; vR = r;
+    if (r <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    vec3 d0 = uRotT * aC.xyz;
+    float lo = atan(-d0.z, d0.x), la = asin(clamp(d0.y, -1.0, 1.0));
+    float a = min(1.5707, r / 6378.137 * 1.05) + 3.0 * 3.1415927 / uRes.y;
+    float hw = abs(la) + a >= 1.5707 ? 3.1415927 : asin(min(1.0, sin(a) / cos(la)));
+    vec2 p = vec2(lo + position.x * hw, clamp(la + position.y * a, -1.5708, 1.5708));
+    gl_Position = vec4(p.x / 3.1415927 + uShift * 2.0, p.y / 1.5707963, 0.0, 1.0);
+  }`;
+const eqFrag = /* glsl */`${OPTICS}
+  uniform mat3 uRotM; uniform vec2 uRes; varying vec3 vC; varying float vR;
+  void main() {
+    vec2 uv = gl_FragCoord.xy / uRes;
+    float lo = (uv.x - 0.5) * 6.2831853, la = (uv.y - 0.5) * 3.1415927;
+    vec3 d = uRotM * vec3(cos(la) * cos(lo), sin(la), -cos(la) * sin(lo));
+    vec3 ro = d * (RE + 2.0 * vR + 10.0), rd = -d, oc = ro - vC;
+    float b = dot(oc, rd), dm = length(cross(oc, rd));
+    if (dm >= vR) discard;
+    vec3 P = ro + rd * (-b - sqrt(vR * vR - dm * dm));
+    float px = 3.1415927 / uRes.y * RE, h = length(P) - RE;
+    if (h < -0.5 * px) discard;
+    float cov = clamp((vR - dm) / px + 0.5, 0.0, 1.0) * clamp(h / px + 0.5, 0.0, 1.0);
+    float lod = max(0.0, log2(px / uIor / 9.8));
+    gl_FragColor = vec4(lens(P, rd, vC, vR, lod), cov);
+  }`;
+const mat = (v, f, extra = {}) => new THREE.ShaderMaterial({ uniforms: { ...U, ...extra }, vertexShader: v, fragmentShader: f, glslVersion: THREE.GLSL3 === undefined ? null : null, transparent: true, depthWrite: false });
+const domeMat = mat(domeVert, domeFrag); domeMat.depthTest = true;
+const ringMat = mat(ringVert, ringFrag); ringMat.depthTest = true; ringMat.transparent = false;
+const eqMats = [-1, 0, 1].map((k) => { const m = mat(eqVert, eqFrag, { uShift: { value: k } }); m.depthTest = false; return m; });
+
+// Earth: always black (it hides the far side). In the lines view it gets a single outline.
+const earthBlack = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+const earthLine = new THREE.Mesh(new THREE.SphereGeometry(RE, 128, 64), new THREE.ShaderMaterial({
+  vertexShader: `varying vec3 vN, vV; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vN = normalize(position); vV = normalize(cameraPosition - w.xyz); gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: `varying vec3 vN, vV; void main(){ float f = dot(normalize(vN), normalize(vV)), w = fwidth(f); float a = 1.0 - smoothstep(0.0, 1.6 * w, f); gl_FragColor = vec4(vec3(a), 1.0); }`,
+}));
+earthBlack.renderOrder = -2; earthLine.renderOrder = -1;
+scene.add(earthBlack, earthLine);
+
+// the 360 frame: drawn into its own image, then shown flat or wrapped back onto a ball (sphere preview)
+const eqRT = new THREE.WebGLRenderTarget(1920, 1080, { depthBuffer: false });
+const eqScene = new THREE.Scene(), eqCam = new THREE.Camera();
+const blitScene = new THREE.Scene(), ballScene = new THREE.Scene();
+const blit = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({ uniforms: { tFrame: { value: eqRT.texture } }, depthTest: false, depthWrite: false,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `uniform sampler2D tFrame; varying vec2 vUv; void main(){ gl_FragColor = texture2D(tFrame, vUv); }` }));
+blit.frustumCulled = false; blitScene.add(blit);
+const ballCam = new THREE.PerspectiveCamera(32, 1, 0.05, 100);
+ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.ShaderMaterial({ uniforms: { tFrame: { value: eqRT.texture } },
+  vertexShader: `varying vec3 vN; void main(){ vN = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform sampler2D tFrame; varying vec3 vN;
+    void main(){ vec3 n = normalize(vN); float lo = atan(-n.z, n.x), la = asin(clamp(n.y, -1.0, 1.0));
+      gl_FragColor = texture2D(tFrame, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5)); }` })));
+
+// ---------- catalogue ----------
+// sats: every Earth-observation satellite with a public orbit. swath = published nadir swath (km) or null
+let sats = [], catQ = [], noOrbit = [], T0 = Date.now(), simT = Date.now(), loaded = false, meta = { errors: [], sources: [] };
+let N = 0, order = [], aC = null, aF = null, meshes = null;
+function radiusKm(s) { return (S.unk === '0' && s.swath == null) || (S.geo === '0' && s.disk) ? 0 : Math.max((s.swath ?? 0) * SCALE(), S.min) / 2; }
+function reorder() { // the smallest domes are drawn last, so every satellite stays visible on top of the wide ones
+  order = sats.map((s, j) => j).sort((a, b) => radiusKm(sats[b]) - radiusKm(sats[a]));
+  if (aF) { order.forEach((j, k) => { aF.array[k] = sats[j].swath == null ? 1 : 0; }); aF.needsUpdate = true; }
+}
+function build() {
+  N = sats.length; catQ = sats.map((s) => ORB.prep(s, T0));
+  if (meshes) { scene.remove(meshes.dome, meshes.ring); eqScene.clear(); }
+  aC = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(N, 1) * 4), 4); aC.setUsage(THREE.DynamicDrawUsage);
+  aF = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(N, 1)), 1);
+  const sph = new THREE.SphereGeometry(1, 48, 24), dg = new THREE.InstancedBufferGeometry();
+  dg.index = sph.index; dg.setAttribute('position', sph.getAttribute('position')); dg.setAttribute('aC', aC); dg.instanceCount = N;
+  const segs = 96, rp = new Float32Array(segs * 2 * 3);
+  for (let i = 0; i < segs; i++) { rp[i * 6] = i / segs * TAU; rp[i * 6 + 3] = (i + 1) / segs * TAU; }
+  const rg = new THREE.InstancedBufferGeometry(); rg.setAttribute('position', new THREE.BufferAttribute(rp, 3)); rg.setAttribute('aC', aC); rg.setAttribute('aF', aF); rg.instanceCount = N;
+  const qd = new THREE.PlaneGeometry(2, 2), eg = new THREE.InstancedBufferGeometry();
+  eg.index = qd.index; eg.setAttribute('position', qd.getAttribute('position')); eg.setAttribute('aC', aC); eg.instanceCount = N;
+  const dome = new THREE.Mesh(dg, domeMat), ring = new THREE.LineSegments(rg, ringMat);
+  for (const o of [dome, ring]) o.frustumCulled = false;
+  scene.add(dome, ring);
+  for (const m of eqMats) { const e = new THREE.Mesh(eg, m); e.frustumCulled = false; eqScene.add(e); }
+  meshes = { dome, ring };
+  reorder();
+}
+const tmpP = [0, 0, 0];
+function update() { // sub-satellite points (unit vectors, scene frame) for every satellite, in draw order
+  const dt = (simT - T0) / 1000, rot = -ORB.gmst(simT), c = Math.cos(rot), s = Math.sin(rot), a = aC.array;
+  for (let k = 0; k < N; k++) {
+    const j = order[k]; ORB.posEci(catQ[j], dt, tmpP);
+    const x = c * tmpP[0] - s * tmpP[1], y = s * tmpP[0] + c * tmpP[1], z = tmpP[2], L = Math.hypot(x, y, z);
+    // geocentric sub-satellite point (the ground straight below, towards Earth's centre)
+    a[k * 4] = x / L; a[k * 4 + 1] = z / L; a[k * 4 + 2] = -y / L; a[k * 4 + 3] = radiusKm(sats[j]);
+  }
+  aC.needsUpdate = true;
+}
+function ingest(parts) {
+  const orb = new Map();
+  for (const r of parts.active?.rows ?? []) orb.set(r[0], r);
+  const ct = new Map(); for (const r of parts.eo?.rows ?? []) { ct.set(r[0], r[10]); if (!orb.has(r[0])) orb.set(r[0], r); }
+  const g = new Map(); for (const r of parts.gcat?.rows ?? []) g.set(r[0], r); // [norad, name, category, class, state]
+  const ids = new Set([...ct.keys(), ...g.keys()]);
+  const out = []; noOrbit = [];
+  for (const id of ids) {
+    const gr = g.get(id), name = ct.get(id) || gr?.[1] || String(id), r = orb.get(id);
+    if (!r) { noOrbit.push(gr?.[1] || name); continue; }
+    const [norad, intl, ep, mm, ecc, inc, raan, argp, ma, ndot] = r;
+    if (![ep, mm, ecc, inc, raan, argp, ma].every(Number.isFinite) || ecc >= 1 || mm < 0.5) continue;
+    const m = matchSwath(name) || (gr ? matchSwath(gr[1].toUpperCase()) : null);
+    const o = { norad, name, gname: gr?.[1] || '', cat: gr?.[2] || (parts.eo ? 'CelesTrak EO group' : ''), state: gr?.[4] || '', ep, mm, ecc, inc, raan, argp, ma, ndot: Number.isFinite(ndot) ? ndot : 0, swath: null, inst: '', src: '' };
+    if (m) {
+      o.inst = m.inst; o.src = m.src; o.disk = !!m.disk;
+      // geostationary full disk: the whole visible disc, horizon to horizon, from the orbit's own radius
+      o.swath = m.disk ? 2 * RE * Math.acos(RE / Math.cbrt(ORB.MU / (mm * TAU / 86400) ** 2)) : m.km;
+    }
+    out.push(o);
+  }
+  sats = out.sort((a, b) => a.name.localeCompare(b.name)); noOrbit.sort();
+  T0 = simT; build(); loaded = true; panelSync();
+}
+const good = {};
+async function load() {
+  const names = ['gcat', 'eo', 'active'];
+  const res = await Promise.all(names.map((p) => fetch('/api/space-objects?part=' + (p === 'gcat' ? 'gcateo' : p)).then((r) => r.json()).catch((e) => ({ rows: [], errors: [String(e)] }))));
+  const failed = [];
+  names.forEach((p, i) => { if (res[i].rows?.length) good[p] = res[i]; else failed.push(p); });
+  meta = { errors: failed, sources: Object.values(good).flatMap((r) => r.sources || []), fetched: Object.values(good).map((r) => r.fetched).filter(Boolean).sort()[0] ?? null };
+  if (good.eo || good.gcat) ingest(good);
+  if (failed.length) setTimeout(load, 10 * 60e3);
+}
+
+// ---------- time ----------
+function sunEci(ms) {
+  const n = ms / 864e5 + 2440587.5 - 2451545, L = (280.46 + 0.9856474 * n) * D2R, g = (357.528 + 0.9856003 * n) * D2R;
+  const lam = L + (1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * D2R, eps = 23.439 * D2R;
+  return [Math.cos(lam), Math.cos(eps) * Math.sin(lam), Math.sin(eps) * Math.sin(lam)];
+}
+let clock = null;
+
+// ---------- tap (studio): name the satellite under the finger ----------
+let picked = -1;
+function tap(x, y) {
+  if (!loaded || ROLE !== 'studio') return;
+  let dir;
+  if (S.view === 'glass' || S.view === 'lines') {
+    const p = new THREE.Vector3(x / innerWidth * 2 - 1, -(y / innerHeight) * 2 + 1, 0.5).unproject(camera), o = camera.position, d = p.sub(o).normalize();
+    const b = o.dot(d), h = b * b - (o.lengthSq() - RE * RE); if (h < 0) { picked = -1; return; }
+    dir = o.clone().addScaledVector(d, -b - Math.sqrt(h)).normalize();
+  } else if (S.view === '360') {
+    const lo = (x / innerWidth - 0.5) * TAU, la = (0.5 - y / innerHeight) * Math.PI;
+    dir = new THREE.Vector3(Math.cos(la) * Math.cos(lo), Math.sin(la), -Math.cos(la) * Math.sin(lo)).applyMatrix3(rot360M);
+  } else return;
+  // the smallest dome containing the point (the one drawn on top)
+  let best = -1, bestR = Infinity; const a = aC.array;
+  for (let k = 0; k < N; k++) {
+    const r = a[k * 4 + 3]; if (r <= 0) continue;
+    const ang = Math.acos(Math.min(1, dir.x * a[k * 4] + dir.y * a[k * 4 + 1] + dir.z * a[k * 4 + 2])) * RE;
+    if (ang <= r && r < bestR) { bestR = r; best = order[k]; }
+  }
+  picked = best;
+}
+
+// ---------- touch: one finger turns, two fingers zoom ----------
+const ptrs = new Map(); let gesture = null, pinch0 = null;
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ptrs.size === 1) gesture = { t0: performance.now(), moved: 0, multi: false }; else if (gesture) gesture.multi = true;
+  pinch0 = null;
+});
+canvas.addEventListener('pointermove', (e) => {
+  const p = ptrs.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
+  if (gesture) gesture.moved += Math.abs(dx) + Math.abs(dy);
+  if (ptrs.size >= 2) { const [a, b] = [...ptrs.values()], d = Math.hypot(a.x - b.x, a.y - b.y); if (pinch0) zoom(pinch0 / Math.max(d, 1)); pinch0 = d; return; }
+  turn(dx, dy);
+});
+const up = (e) => {
+  ptrs.delete(e.pointerId); pinch0 = null;
+  if (ptrs.size === 0 && gesture) { if (!gesture.multi && gesture.moved < 10 && performance.now() - gesture.t0 < 500) tap(e.clientX, e.clientY); gesture = null; }
+};
+for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', (e) => { if (e.target === canvas) e.preventDefault(); }, { passive: false });
+canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+canvas.addEventListener('wheel', (e) => { zoom(Math.exp(e.deltaY * 0.0012)); e.preventDefault(); }, { passive: false });
+function turn(dx, dy) {
+  if (S.view === 'ball') { ball.yaw -= dx * 0.006; ball.pitch = Math.max(-1.45, Math.min(1.45, ball.pitch + dy * 0.006)); return; }
+  if (S.view === '360') {
+    const k = Math.PI / innerHeight;
+    rot360.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -dx * k * 2)).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), dy * k)).normalize();
+    sendLook(true); return;
+  }
+  const k = 0.005 * Math.min(1, (view.dist - RE) / 20000 + 0.08);
+  view.yaw -= dx * k; view.pitch = Math.max(-1.5, Math.min(1.5, view.pitch + dy * k));
+}
+function zoom(f) {
+  if (S.view === 'ball') { ball.dist = Math.max(1.4, Math.min(12, ball.dist * f)); return; }
+  if (S.view === '360') return;
+  view.dist = Math.max(RE + 300, Math.min(200000, RE + (view.dist - RE) * f));
+}
+
+// ---------- room: the sphere's turn and the clock are shared with the LED display (public relay) ----------
+const ROOM = ORB.cleanRoom(Q.get('room'));
+const TOPIC = 'sampling-sphere/v1/lens' + (ROOM ? '/' + ROOM : ''), ME = Math.random().toString(36).slice(2, 10);
+let mq = null, relayOk = false, lookT = 0;
+const publish = (t, obj, retain = false) => { if (mq && relayOk) mq.publish(TOPIC + t, JSON.stringify(obj), { retain, qos: retain ? 1 : 0 }); };
+function sendLook(force) {
+  if (ROLE === 'display') return;
+  const n = performance.now(); if (!force && n - lookT < 50) return; lookT = n;
+  publish('/look', { q: rot360.toArray(), by: ME }, true);
+}
+function sendClock() { clock = { wall0: Date.now(), sim0: simT, speed: SPEED(), by: ME }; publish('/clock', clock, true); }
+if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m) => {
+  const mqtt = m.default || m;
+  mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
+  mq.on('close', () => { relayOk = false; }); mq.on('offline', () => { relayOk = false; });
+  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/look', TOPIC + '/clock']); });
+  mq.on('message', (t, msg) => {
+    let d; try { d = JSON.parse(msg.toString()); } catch { return; }
+    if (!d || d.by === ME) return;
+    const k = t.slice(TOPIC.length);
+    if (k === '/look') { if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size) rot360.fromArray(d.q).normalize(); }
+    else if (k === '/clock') { if ([d.wall0, d.sim0, d.speed].every(Number.isFinite)) { clock = d; S.spd = Math.log10(Math.max(1, d.speed)) * 25; panelSync(); } }
+  });
+}).catch(() => {});
+let camQ = null, lookDirty = false;
+function lookFromCamera() { // the point facing the viewer becomes the LED frame's centre
+  const v = camera.position.clone().normalize(), upv = camera.up.clone().applyQuaternion(camera.quaternion).normalize(), z = new THREE.Vector3().crossVectors(v, upv);
+  const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(v, upv, z));
+  if (!camQ) { camQ = q.clone(); return; } // opening a page doesn't move the sphere
+  if (q.angleTo(camQ) > 1e-4) { camQ.copy(q); rot360.copy(q); lookDirty = true; }
+  if (lookDirty && performance.now() - lookT >= 50) { lookDirty = false; sendLook(true); }
+}
+
+// ---------- panel (studio) ----------
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['min', 'Minimum', 0, 1000, () => S.min + ' km'],
+  ['ior', 'Magnify', 0, 100, () => IOR().toFixed(2)], ['rim', 'Edge', 0, 100, () => S.rim + ''], ['gain', 'Brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'],
+  ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
+const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
+  ['unk', 'No swath', [['1', 'Show at minimum'], ['0', 'Hide']]], ['geo', 'Full disk', [['0', 'Hide'], ['1', 'Show']]]];
+function panelBuild() {
+  $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
+    + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
+    + `<div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
+    <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
+    <div class="note">Every Earth-observation satellite with a public orbit, as a glass dome lying on the ground right under it, moving along its real ground track. <b>Dome width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>Full disk</b>: geostationary weather imagers see a whole hemisphere (horizon to horizon, about 18,000 km), so together they cover the entire Earth and hide everything else; they are hidden unless you show them. <b>Minimum</b>: no dome is drawn narrower than this, so every satellite stays visible; satellites with no published swath are drawn at the minimum (dashed in Lines). Earth is black; its surface shows only through the domes, magnified by <b>Magnify</b> (1.00 = flat window). Tap a dome to name it.</div>
+    <div class="list" id="lists"></div>`;
+  $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo') reorder(); save(); panelSync(); });
+  $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min') reorder(); save(); panelSync(); });
+  $('now').onclick = () => { simT = Date.now(); S.spd = 0; clock = null; sendClock(); save(); panelSync(); };
+  $('copy').onclick = () => {
+    const q = new URLSearchParams(); for (const k of Object.keys(DEF)) if (k !== 'view' && String(S[k]) !== String(DEF[k])) q.set(k, S[k]);
+    if (ROOM) q.set('room', ROOM);
+    const url = location.origin + '/lens-display' + (q.toString() ? '?' + q : '');
+    navigator.clipboard?.writeText(url).then(() => { $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy display URL'; }, 1500); }, () => { $('copy').textContent = url; });
+  };
+  $('reset').onclick = () => { S = { ...DEF }; reorder(); save(); panelSync(); };
+}
+let listsFor = -1;
+function panelSync() {
+  document.querySelectorAll('.seg[data-k]').forEach((s) => s.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(S[s.dataset.k]) === b.dataset.v)));
+  for (const [k, , , , f] of SL) { const r = document.querySelector(`input[data-k="${k}"]`); if (r) r.value = S[k]; const o = document.querySelector(`output[data-o="${k}"]`); if (o) o.textContent = f(); }
+  if (loaded && $('lists') && listsFor !== sats.length) {
+    listsFor = sats.length;
+    const by = new Map(); for (const s of sats) if (s.swath != null) { const k = s.inst + '|' + Math.round(s.swath) + '|' + s.src; by.set(k, (by.get(k) || 0) + 1); }
+    const rows = [...by].map(([k, n]) => k.split('|').concat(n)).sort((a, b) => b[1] - a[1]);
+    const unk = sats.filter((s) => s.swath == null);
+    $('lists').innerHTML = `<span class="k">${sats.length} satellites</span> · ${sats.length - unk.length} with a published swath · ${unk.length} without<br>Sources: ${esc(meta.sources.join('; '))}${meta.errors.length ? '<br>Not loaded: ' + esc(meta.errors.join(', ')) : ''}<br><br>`
+      + `<span class="k">Swaths</span><br>` + rows.map(([i, km, src, n]) => `${n} × ${esc(i)}: ${(+km).toLocaleString()} km <span style="opacity:.6">(${esc(src)})</span>`).join('<br>')
+      + `<br><br><span class="k">No published swath in the table (${unk.length})</span>, drawn at the minimum:<br>${esc(unk.map((s) => s.name).join(', '))}`
+      + (noOrbit.length ? `<br><br><span class="k">No public orbit (${noOrbit.length})</span>, not drawn:<br>${esc(noOrbit.join(', '))}` : '');
+  }
+}
+$('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').classList.toggle('on'); };
+panelBuild(); panelSync();
+
+// ---------- sizing ----------
+const PR_MAX = ROLE === 'display' ? 1 : Math.min(devicePixelRatio || 1, 2);
+function resize() {
+  renderer.setPixelRatio(PR_MAX); renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  ballCam.aspect = innerWidth / innerHeight; ballCam.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+
+// ---------- frame ----------
+let last = performance.now(), fps = 60;
+const simNow = () => clock ? clock.sim0 + (Date.now() - clock.wall0) * clock.speed : simT;
+function frame(now) {
+  if (!TEST) requestAnimationFrame(frame);
+  const dt = Math.min(0.1, (now - last) / 1000); last = now; fps = fps * 0.95 + 0.05 / Math.max(dt, 1e-3);
+  simT = clock ? simNow() : simT + dt * 1000 * SPEED();
+  render();
+}
+function render() {
+  if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; catQ = sats.map((s) => ORB.prep(s, T0)); }
+  if (loaded) update();
+  U.uIor.value = IOR(); U.uRim.value = S.rim / 100; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uLight.value = S.light === 'sun' ? 1 : 0;
+  const rot = -ORB.gmst(simT), se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
+  U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
+  const v = S.view;
+  if (v === 'glass' || v === 'lines') {
+    camera.position.set(Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch), Math.cos(view.pitch) * Math.cos(view.yaw)).multiplyScalar(view.dist);
+    camera.lookAt(0, 0, 0);
+    camera.near = Math.max(1, (view.dist - RE - 1500) * 0.3); camera.far = view.dist + 20000; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+    U.uPxK.value = 2 * Math.tan(camera.fov / 2 * D2R) / (innerHeight * renderer.getPixelRatio());
+    earthLine.visible = v === 'lines';
+    if (meshes) { meshes.dome.visible = v === 'glass'; meshes.ring.visible = v === 'lines'; }
+    lookFromCamera();
+    renderer.setRenderTarget(null); renderer.render(scene, camera);
+  } else {
+    rot360M.setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rot360)); rot360T.copy(rot360M).transpose();
+    const qs = S.q360 / 100, ew = Math.round(1920 * qs), eh = Math.round(1080 * qs);
+    if (eqRT.width !== ew) eqRT.setSize(ew, eh);
+    U.uRes.value.set(ew, eh);
+    renderer.setRenderTarget(eqRT); renderer.setClearColor(0x000000, 1); renderer.clear(); renderer.render(eqScene, eqCam);
+    renderer.setRenderTarget(null);
+    if (v === '360') renderer.render(blitScene, eqCam);
+    else {
+      ballCam.position.set(Math.cos(ball.pitch) * Math.sin(ball.yaw), Math.sin(ball.pitch), Math.cos(ball.pitch) * Math.cos(ball.yaw)).multiplyScalar(ball.dist);
+      ballCam.lookAt(0, 0, 0); renderer.setClearColor(0x050505, 1); renderer.clear(); renderer.render(ballScene, ballCam); renderer.setClearColor(0x000000, 1);
+    }
+  }
+  info();
+}
+function info() {
+  const el = $('info');
+  if (!loaded) { el.innerHTML = meta.errors.length ? '<span class="err">Could not load the catalogue. Nothing is shown (no stand-in data).</span>' : 'Loading the catalogue…'; return; }
+  const d = new Date(simT), live = Math.abs(simT - Date.now()) < 5000, unk = sats.reduce((n, s) => n + (s.swath == null), 0);
+  if (ROLE === 'tablet') { el.textContent = sats.length.toLocaleString(); return; }
+  const p = picked >= 0 ? sats[picked] : null;
+  el.textContent = (p ? `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''} · ${p.swath != null ? p.inst + ' · ' + Math.round(p.swath).toLocaleString() + ' km swath' : 'no published swath · shown at minimum'}${p.cat ? ' · ' + p.cat : ''}\n` : '')
+    + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} at minimum\n`
+    + `${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
+}
+
+if (TEST) window.__lens = { ingest, render, tap, S, view, rot360, sats: () => sats, setView: (k) => { S.view = k; } };
+load();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

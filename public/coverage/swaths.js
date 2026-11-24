@@ -28,6 +28,13 @@ export const SWATHS = [
   { re: /^LANDSAT [89]/, inst: 'OLI', km: 185, src: 'USGS, Landsat 8/9' },
   { re: /^EARTHCARE/, inst: 'MSI', km: 150, src: 'ESA, EarthCARE' },
   { re: /^SWOT/, inst: 'KaRIn', km: 120, src: 'NASA JPL, SWOT (two 50 km swaths, 20 km gap)' },
+  { re: /^GAOFEN[- ]?[16]\b/, inst: 'WFV', km: 800, src: 'WMO OSCAR, WFV (Gaofen-1, Gaofen-6)' },
+  { re: /^GAOFEN[- ]?3\b/, inst: 'C-SAR (global mode)', km: 650, src: 'eoPortal, Gaofen-3' },
+  { re: /^GAOFEN[- ]?2\b/, inst: 'PMS-2 (two cameras)', km: 45, src: 'eoPortal, Gaofen-2' },
+  { re: /^ICEYE/, inst: 'X-band SAR (strip mode)', km: 30, src: 'ICEYE product guide' },
+  { re: /^JILIN-1 GAOFEN 0?3[BD]/, inst: 'GF03 camera', km: 17, src: 'eoPortal, Jilin-1 constellation' },
+  { re: /^SUPERVIEW-1\b|^GAOJING-1\b/, inst: 'SuperView-1 camera', km: 12, src: 'eoPortal, SuperView / GaoJing' },
+  { re: /^NUSAT|^NEWSAT/, inst: 'Satellogic multispectral', km: 5, src: 'SkyFi provider specifications (Satellogic)' },
   { re: /^SPOT [67]/, inst: 'NAOMI', km: 60, src: 'Airbus, SPOT 6/7' },
   // --- very high resolution ---
   { re: /^FLOCK 4/, inst: 'PlanetScope SuperDove (PSB.SD)', km: 32.5, src: 'Planet docs, PlanetScope (scene 32.5 × 19.6 km)' },
