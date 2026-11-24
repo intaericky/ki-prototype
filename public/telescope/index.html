@@ -85,7 +85,7 @@ const EAST = [-sλ, cλ, 0], NORTH = [-sφ * cλ, -sφ * sλ, cφ], UP = [cφ * 
 // ---------- settings ----------
 // front: the compass direction the audience side of the sphere faces in the room (calibration). seams: vertical seams of
 // the pedestal; the slit is as wide as one pedestal panel. screen: the audience screen's diameter, % of the sphere's.
-const DEF = { view: 'app', dot: 5, show: 'all', shadow: '0', spd: 0, cross: '1', front: 180, seams: 8, screen: 33, tone: 82, c0: 'ffffff', c1: 'ffffff', c2: 'ffffff', c3: 'ffffff' };
+const DEF = { view: 'app', dot: 5, show: 'all', shadow: '0', spd: 0, cross: '1', front: 180, seams: 8, screen: 33, tone: 82, base: 30, c0: 'ffffff', c1: 'ffffff', c2: 'ffffff', c3: 'ffffff' };
 let S = { ...DEF };
 const KEY = 'telescope-v2';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -288,13 +288,14 @@ const SCREEN_F = /* glsl */`
     gl_FragColor = vec4(c * (1.0 - 0.2 * pow(r, 6.0)), 1.0);
   }`;
 const SU = { tV: { value: eyeRT.texture }, uA: { value: 0.34 }, uCross: { value: 1 } };
-let builtKey = '';
+let builtKey = '', pedMat = null;
 function disposeGroup(g) { for (const c of [...g.children]) { g.remove(c); c.traverse?.((x) => { x.geometry?.dispose(); }); } }
 function buildObs() {
   const key = [S.seams, S.screen].join();
   if (key === builtKey) return; builtKey = key;
   disposeGroup(obs); disposeGroup(dome); disposeGroup(tel); mats.length = 0;
-  const white = paint(0xffffff, { toned: true, spec: 0.12 }), dark = paint(0x2a2b2d, { spec: 0.25 }), core = paint(0x0b0b0c, { spec: 0 });
+  const white = paint(0xffffff, { toned: true, spec: 0.12 }); pedMat = paint(0x4d4d4d, { spec: 0.08 });
+  const dark = paint(0x2a2b2d, { spec: 0.25 }), core = paint(0x0b0b0c, { spec: 0 });
   const panelW = TAU / Math.max(3, S.seams), half = Math.sin(panelW / 2); // the slit is as wide as one pedestal panel
   SLIT.uHalf.value = half;
   // pedestal: panels with real gaps between them (the dark core shows through), centred so one panel faces the audience
@@ -302,12 +303,12 @@ function buildObs() {
   for (let k = 0; k < S.seams; k++) {
     const lon0 = -panelW / 2 + k * panelW + gap / 2;
     const g = new THREE.SphereGeometry(1, Math.max(8, Math.round(160 / S.seams)), 48, lon0 + Math.PI / 2, panelW - gap, Math.PI / 2 + 0.6 * D2R, Math.PI / 2 - 0.6 * D2R);
-    obs.add(new THREE.Mesh(g, white));
+    obs.add(new THREE.Mesh(g, pedMat));
   }
   obs.add(new THREE.Mesh(new THREE.SphereGeometry(0.985, 128, 48, 0, TAU, Math.PI / 2, Math.PI / 2), core));
   // the bearing: a dark ring where the turning dome meets the fixed pedestal, and a raised band just below it
   const rail = new THREE.Mesh(new THREE.TorusGeometry(1.004, 0.009, 12, 256), dark); rail.rotation.x = Math.PI / 2; obs.add(rail);
-  obs.add(new THREE.Mesh(new THREE.SphereGeometry(1.008, 256, 2, 0, TAU, Math.PI / 2 + 1.0 * D2R, 2.6 * D2R), white));
+  obs.add(new THREE.Mesh(new THREE.SphereGeometry(1.008, 256, 2, 0, TAU, Math.PI / 2 + 1.0 * D2R, 2.6 * D2R), pedMat));
   // the audience screen: diameter = screen% of the sphere's, centred on the front panel, below the band
   const capA = Math.asin(clamp(S.screen / 100, 0.1, 0.6)), lat = 0; // centred on the sphere's middle, in front of the bearing
   const axis = new THREE.Vector3(0, Math.sin(lat), Math.cos(lat));
@@ -354,6 +355,7 @@ function poseObs() {
   dome.rotation.y = (S.front - mnt.az) * D2R; // the dome's slit faces the azimuth, wherever the room's front is
   tel.rotation.x = -mnt.el * D2R;
   PU.uTone.value = S.tone / 100;
+  pedMat?.uniforms.uC.value.setScalar(S.base / 100); // the fixed pedestal, darker than the dome
   SU.uCross.value = S.cross === '1' ? 1 : 0;
 }
 
@@ -601,7 +603,7 @@ if (ROLE !== 'display') {
 addEventListener('keydown', (e) => { if (e.key === 'f' && ROLE === 'display') document.documentElement.requestFullscreen?.(); });
 
 // ---------- panel (studio) ----------
-const SL = [['dot', 'Dot size', 1, 20, () => S.dot], ['tone', 'Paint', 20, 100, () => S.tone + '%'], ['seams', 'Seams', 4, 16, () => S.seams], ['screen', 'Screen', 15, 50, () => S.screen + '%'],
+const SL = [['dot', 'Dot size', 1, 20, () => S.dot], ['tone', 'Dome paint', 20, 100, () => S.tone + '%'], ['base', 'Pedestal', 0, 100, () => S.base + '%'], ['seams', 'Seams', 4, 16, () => S.seams], ['screen', 'Screen', 15, 50, () => S.screen + '%'],
   ['front', 'Front faces', 0, 359, () => dirName(S.front) + ' ' + S.front + '°'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×']];
 const SEG = [['view', 'View', [['app', 'Apparatus'], ['scope', 'Telescope'], ['360', '360'], ['ball', 'Sphere'], ['3d', 'Earth']]],
   ['show', 'Objects', [['all', 'All'], ['pay', 'Payloads'], ['deb', 'Debris'], ['junk', 'Not payloads']]], ['shadow', 'Earth shadow', [['0', 'Ignore'], ['1', 'Dim']]], ['cross', 'Cross', [['1', 'On'], ['0', 'Off']]]];
