@@ -60,9 +60,10 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', size: 50, min: 200, fit: 'add', res: 100, q360: 100, light: 'day', unk: 'est', geo: '0', spd: 52, env: 25, gain: 100, lift: 100 };
+const CROWN = { ior: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0 }; // the glass sliders' starting point
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', size: 50, min: 662, fit: 'add', res: 100, q360: 100, light: 'day', unk: 'est', geo: '0', spd: 52, env: 25, ...CROWN, gain: 100, lift: 100 };
 let S = { ...DEF };
-const KEY = 'lens-v3';
+const KEY = 'lens-v4';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
@@ -71,9 +72,11 @@ const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(
 const SCALE = () => Math.pow(10, (S.size - 50) / 50); // ×0.1 .. ×10 of the real swath (50 → ×1)
 // the glass: clear crown glass (Schott N-BK7). Refractive index at 550 nm 1.5185; red (620 nm) 1.5157, blue (460 nm) 1.5245
 // (Schott datasheet, Sellmeier fit). The bending and reflection follow from these by Snell's law and Fresnel; nothing else is set.
-const GLASS = { ior: 1.5185, disp: 0.0044 };
 // render pixels per screen point (each one is ray traced): 1 by default, up to the screen's own density
 const PR = () => ROLE === 'display' ? 1 : Math.min(S.res / 100, devicePixelRatio || 1, 2);
+// Minimum slider: 0 = none, then logarithmic from 1 km to 3,000 km (fine steps near the smallest real swaths)
+const MINKM = () => S.min <= 0 ? 0 : Math.pow(3000, S.min / 1000);
+const minSlider = (km) => Math.max(1, Math.round(1000 * Math.log(Math.max(1, km)) / Math.log(3000)));
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25));
 
 // ---------- renderer ----------
@@ -97,7 +100,7 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 // A ray refracts into the glass, runs down to the ground under it (the Earth image) or out through the far side.
 const U = { tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 }, uIor: { value: 1.5 }, uDisp: { value: 0 },
   uPxK: { value: 0.001 }, uTop: { value: 8000 }, uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) }, uShift: { value: 0 },
-  tDome: { value: null }, tCell: { value: null }, tItem: { value: null }, tEnv: { value: null }, uEnv: { value: 0.5 }, uGain: { value: 1 }, uLift: { value: 1 } };
+  tDome: { value: null }, tCell: { value: null }, tItem: { value: null }, tEnv: { value: null }, uEnv: { value: 0.5 }, uGain: { value: 1 }, uLift: { value: 1 }, uTint: { value: new THREE.Color(1, 1, 1) }, uAbs: { value: 0 }, uFrost: { value: 0 }, uRefl: { value: 1 }, uRim: { value: 0 } };
 { // bake the soft-box room once into a cube map (HDR, so the boxes' reflections stay bright)
   const rt = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
   new THREE.CubeCamera(0.1, 100, rt).update(renderer, new RoomEnvironment());
@@ -134,17 +137,18 @@ const PIECE = /* glsl */`
   vec4 idColor(int k) { int i = k + 1; return vec4(float(i & 255), float((i >> 8) & 255), float((i >> 16) & 255), 255.0) / 255.0; }
   int idOf(vec4 e) { return int(e.r * 255.0 + 0.5) + int(e.g * 255.0 + 0.5) * 256 + int(e.b * 255.0 + 0.5) * 65536 - 1; }`;
 const OPTICS = /* glsl */`${PIECE}
-  uniform sampler2D tDay, tNight; uniform vec3 uSun; uniform float uLight, uIor, uDisp, uGain, uLift;
+  uniform sampler2D tDay, tNight; uniform vec3 uSun; uniform float uLight, uIor, uDisp, uGain, uLift, uAbs, uFrost, uRefl, uRim; uniform vec3 uTint;
   // studio light: a soft-box room (as in Entangled) that stays fixed to the viewer, so every ball carries the same
   // highlights wherever it is on the display; there is no direction in the world. It is what the glass reflects, and
   // what it shows where light passes through into space.
   uniform samplerCube tEnv; uniform float uEnv; mat3 gEnvM = mat3(1.0);
-  vec3 env(vec3 d) { return uEnv * textureLod(tEnv, gEnvM * d, 2.0).rgb; }
+  vec3 env(vec3 d) { return uEnv * textureLod(tEnv, gEnvM * d, 2.0 + uFrost).rgb; }
   uniform highp sampler2D tCell, tItem;
   const float RE = 6378.137;
   vec3 surface(vec3 n, float lod) {
     vec3 e = vec3(n.x, -n.z, n.y);
     vec2 uv = vec2(atan(e.y, e.x) / 6.2831853 + 0.5, asin(clamp(e.z, -1.0, 1.0)) / 3.1415927 + 0.5);
+    lod += uFrost;
     vec3 c = textureLod(tDay, uv, lod).rgb;
     if (uLight > 0.5) c = mix(textureLod(tNight, uv, lod).rgb * 0.7, c, smoothstep(-0.08, 0.12, dot(n, uSun)));
     return pow(clamp(uGain * c, 0.0, 1.0), vec3(1.0 / uLift)); // map brightness and lifted darks (the image only, not the glass)
@@ -187,6 +191,7 @@ const OPTICS = /* glsl */`${PIECE}
         tq = t1; nq = n1; kq = cand[i];
       }
       float len = min(tG, tq);
+      if (len < 1e8) thr *= pow(uTint, vec3(len / 1000.0)) * exp(-uAbs * len / 1000.0);
       if (tG <= tq || kq < 0) return tG < 1e8 ? thr * surface(normalize(pos + dir * tG), lod) : thr * env(dir);
       vec3 Q = pos + dir * tq, o = refract(dir, -nq, ior);
       if (dot(o, o) < 0.5) { dir = reflect(dir, -nq); pos = Q - nq * 0.02; continue; } // total internal reflection
@@ -214,8 +219,8 @@ const OPTICS = /* glsl */`${PIECE}
     float ci = clamp(-dot(rd, N), 0.0, 1.0);
     vec3 rr = reflect(rd, N); float tR = earthT(Pin + N * 0.02, rr);
     vec3 refl = tR < 1e8 ? surface(normalize(Pin + N * 0.02 + rr * tR), lod) : env(rr);
-    c += fres(ci) * refl;
-    return vec4(clamp(c, 0.0, 1.0), 1.0);
+    c += uRefl * fres(ci) * refl;
+    return vec4(clamp(c, 0.0, 1.0) + uRim * pow(1.0 - ci, 3.0), 1.0);
   }`;
 
 // --- 3D: one sphere mesh per piece (instanced); the exact glass is found per pixel
@@ -361,7 +366,7 @@ function widthKm(s) { return s.swath ?? (S.unk === 'est' ? s.est : S.unk === 'ty
 function radiusKm(s) {
   if ((S.unk === 'hide' && s.swath == null) || (S.geo === '0' && s.disk)) return 0;
   const w = (widthKm(s) ?? 0) * SCALE();
-  return (S.fit === 'add' ? S.min + w : Math.max(w, S.min)) / 2;
+  const m = MINKM(); return (S.fit === 'add' ? m + w : Math.max(w, m)) / 2;
 }
 function reorder() { // the smallest domes are drawn last, so every satellite stays visible on top of the wide ones
   order = sats.map((s, j) => j).sort((a, b) => radiusKm(sats[b]) - radiusKm(sats[a]));
@@ -605,20 +610,27 @@ function lookFromCamera() { // the point facing the viewer becomes the LED frame
 
 // ---------- panel (studio) ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['min', 'Minimum', 0, 3000, () => S.min.toLocaleString() + ' km'],
-  ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['env', 'Studio light', 0, 100, () => S.env + ''], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
+const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
+  ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['env', 'Studio light', 0, 100, () => S.env + ''],
+  ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 300, () => (S.refl / 100).toFixed(1) + '×'],
+  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
   ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
   ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['fit', 'Minimum is', [['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['0', 'Hide'], ['1', 'Show']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
-    + `<div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
+    + `<div class="row"><label>Tint</label><input type="color" id="tint" style="grid-column:2/4;width:100%;height:22px;background:none;border:1px solid var(--faint);padding:0"></div>`
+    + `<div class="row"><label></label><div class="seg"><button id="smallest">Min = smallest swath</button><button id="crown">Crown glass</button></div></div>
+    <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
     <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> draws a width for each satellite without a published swath from the published swaths of its own kind (optical, radar, weather, Earth science), fixed per satellite; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to name it.</div>
     <div class="list" id="lists"></div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit') reorder(); save(); panelSync(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min') reorder(); if (k === 'res') resize(); save(); panelSync(); });
+  $('tint').oninput = (e) => { S.tint = e.target.value; save(); };
+  $('smallest').onclick = () => { if (kindStats.all?.lo) { S.min = minSlider(kindStats.all.lo); reorder(); save(); panelSync(); } };
+  $('crown').onclick = () => { Object.assign(S, CROWN); save(); panelSync(); };
   $('now').onclick = () => { simT = Date.now(); S.spd = 0; clock = null; sendClock(); save(); panelSync(); };
   $('copy').onclick = () => {
     const q = new URLSearchParams(); for (const k of Object.keys(DEF)) if (k !== 'view' && String(S[k]) !== String(DEF[k])) q.set(k, S[k]);
@@ -631,6 +643,7 @@ function panelBuild() {
 let listsFor = -1;
 function panelSync() {
   document.querySelectorAll('.seg[data-k]').forEach((s) => s.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(S[s.dataset.k]) === b.dataset.v)));
+  if ($('tint')) $('tint').value = S.tint;
   for (const [k, , , , f] of SL) { const r = document.querySelector(`input[data-k="${k}"]`); if (r) r.value = S[k]; const o = document.querySelector(`output[data-o="${k}"]`); if (o) o.textContent = f(); }
   if (loaded && $('lists') && listsFor !== sats.length) {
     listsFor = sats.length;
@@ -669,7 +682,7 @@ function frame(now) {
 function render() {
   if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; catQ = sats.map((s) => ORB.prep(s, T0)); }
   if (loaded) update();
-  U.uEnv.value = S.env / 50; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uIor.value = GLASS.ior; U.uDisp.value = GLASS.disp; U.uLight.value = S.light === 'sun' ? 1 : 0;
+  U.uEnv.value = S.env / 50; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uIor.value = S.ior / 100; U.uDisp.value = S.disp / 1000; U.uRefl.value = S.refl / 100; U.uRim.value = S.rim / 100; U.uAbs.value = S.abs / 25; U.uFrost.value = S.frost / 20; U.uTint.value.set(S.tint); U.uLight.value = S.light === 'sun' ? 1 : 0;
   const rot = -ORB.gmst(simT), se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
   const v = S.view;
