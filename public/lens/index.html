@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, iorfar: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0, fill: 90 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30, glow: 0, glowc: '#ffffff', trail: 'ball', trlen: 100 * Math.log(10) / Math.log(300), trgain: 50, tapdo: 'pop', circ: 6, earthc: '#000000', idle: 30, hi: 0, even: 0 }; // Intae's look (2026-11-24)
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 788, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(360),  ...CROWN, ior: 151, gain: 150, lift: 150, iorfar: 101, disp: 0, refl: 300, rim: 50, revive: 60, glow: 4, glowc: '#ffffff', trail: 'off', trlen: 0, trgain: 50, tapdo: 'pop', circ: 8, earthc: '#0b1250', idle: 60, hi: 0, even: 0 }; // Intae's look (2026-11-24, second photo: 360x, blue Earth, no trail)
 let S = { ...DEF };
 const KEY = 'lens-v5';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
