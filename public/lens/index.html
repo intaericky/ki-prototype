@@ -490,21 +490,27 @@ function ingest(parts) {
 const KINDS = { IMG: 'optical imaging', 'IMG-R': 'radar imaging', MET: 'weather', EOSCI: 'Earth science' };
 let kindStats = {};
 function estimate(list) {
-  const by = {}, all = [];
-  for (const o of list) { o.kind = (o.cat || '').split('/')[0].replace(/[?*]/g, ''); if (o.swath != null && !o.disk) { (by[o.kind] ??= []).push(o.swath); all.push(o.swath); } }
+  // Estimate: the kind's typical viewing angle, at the satellite's own height. For every satellite with a published swath,
+  // swath ÷ altitude is its camera's angular width; the median of that over its kind, times this satellite's altitude,
+  // gives its estimate (clamped to the kind's published range). Deterministic: nothing random.
+  const alt = (o) => Math.cbrt(ORB.MU / (o.mm * TAU / 86400) ** 2) - RE;
+  const by = {}, all = [], rat = {}, ratAll = [];
+  for (const o of list) {
+    o.kind = (o.cat || '').split('/')[0].replace(/[?*]/g, '');
+    if (o.swath != null && !o.disk) { (by[o.kind] ??= []).push(o.swath); all.push(o.swath); const r = o.swath / alt(o); if (r > 0 && isFinite(r)) { (rat[o.kind] ??= []).push(r); ratAll.push(r); } }
+  }
   const med = (a) => a[Math.floor(a.length / 2)];
   for (const k in by) by[k].sort((a, b) => a - b); all.sort((a, b) => a - b);
-  kindStats = Object.fromEntries(Object.entries(by).map(([k, a]) => [k, { n: a.length, lo: a[0], med: med(a), hi: a[a.length - 1] }]));
-  kindStats.all = { n: all.length, lo: all[0], med: med(all), hi: all[all.length - 1] };
+  for (const k in rat) rat[k].sort((a, b) => a - b); ratAll.sort((a, b) => a - b);
+  kindStats = Object.fromEntries(Object.entries(by).map(([k, a]) => [k, { n: a.length, lo: a[0], med: med(a), hi: a[a.length - 1], ang: 2 * Math.atan(med(rat[k] || ratAll) / 2) / D2R }]));
+  kindStats.all = { n: all.length, lo: all[0], med: med(all), hi: all[all.length - 1], ang: 2 * Math.atan(med(ratAll) / 2) / D2R };
   for (const o of list) {
     if (o.swath != null) continue;
     o.est = o.typ = null;
     if (o.why === 'ro' || !all.length) continue;
-    const a = by[o.kind]?.length ? by[o.kind] : all;
-    let h = (o.norad * 2654435761) >>> 0; const rnd = () => { h = (h + 0x6D2B79F5) >>> 0; let t = h; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-    const g = Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(TAU * rnd());
-    o.est = Math.min(a[a.length - 1], Math.max(a[0], a[Math.floor(rnd() * a.length)] * Math.exp(0.25 * g)));
-    o.typ = med(a); o.from = by[o.kind]?.length ? (KINDS[o.kind] || o.kind) : 'all kinds';
+    const own = by[o.kind]?.length, a = own ? by[o.kind] : all, r = own ? med(rat[o.kind]) : med(ratAll);
+    o.est = Math.min(a[a.length - 1], Math.max(a[0], r * alt(o)));
+    o.typ = med(a); o.from = own ? (KINDS[o.kind] || o.kind) : 'all kinds';
   }
 }
 const good = {};
@@ -636,7 +642,7 @@ function panelBuild() {
     + `<div class="row"><label></label><div class="seg"><button id="smallest">Min = smallest swath</button><button id="crown">Crown glass</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> draws a width for each satellite without a published swath from the published swaths of its own kind (optical, radar, weather, Earth science), fixed per satellite; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to name it.</div>
+    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to name it.</div>
     <div class="list" id="lists"></div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit' || k === 'sizing') reorder(); save(); panelSync(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min' || k === 'one') reorder(); if (k === 'res') resize(); save(); panelSync(); });
@@ -664,7 +670,7 @@ function panelSync() {
     const unk = sats.filter((s) => s.swath == null), grp = (w) => unk.filter((s) => s.why === w).map((s) => s.name);
     $('lists').innerHTML = `<span class="k">${sats.length} satellites</span> · ${sats.length - unk.length} with a published swath · ${unk.length} without<br>Sources: ${esc(meta.sources.join('; '))}${meta.errors.length ? '<br>Not loaded: ' + esc(meta.errors.join(', ')) : ''}<br><br>`
       + `<span class="k">Swaths</span><br>` + rows.map(([i, km, src, n]) => `${n} × ${esc(i)}: ${(+km).toLocaleString()} km <span style="opacity:.6">(${esc(src)})</span>`).join('<br>')
-      + `<br><br><span class="k">Estimates</span> (No swath: Estimate): each satellite without a published swath gets one drawn from the published swaths of its own kind, fixed per satellite. Published range by kind: ${Object.entries(kindStats).filter(([k]) => KINDS[k] || k === 'all').map(([k, v]) => `${KINDS[k] || 'all'} ${v.n} known, ${Math.round(v.lo)}–${Math.round(v.hi).toLocaleString()} km, median ${Math.round(v.med)} km`).join('; ')}. Typical = that median.`
+      + `<br><br><span class="k">Estimates</span> (No swath: Estimate): each satellite without a published swath gets the typical viewing angle of its kind (median of published swath ÷ altitude) at its own altitude, so higher satellites get wider strips; nothing is random. By kind: ${Object.entries(kindStats).filter(([k]) => KINDS[k] || k === 'all').map(([k, v]) => `${KINDS[k] || 'all'} ${v.n} known, ${Math.round(v.lo)}–${Math.round(v.hi).toLocaleString()} km, median ${Math.round(v.med)} km, typical angle ${v.ang.toFixed(1)}°`).join('; ')}. Typical = the median swath.`
       + `<br><br><span class="k">No imaging (${grp('ro').length})</span>: radio occultation and GNSS reflectometry satellites take no pictures; they measure the atmosphere from how GPS signals bend through it, or the sea and soil from GPS signals bouncing off them, so there is no swath. Drawn at the minimum:<br>${esc(grp('ro').join(', '))}`
       + `<br><br><span class="k">Military, not published (${grp('secret').length})</span>, drawn at the minimum:<br>${esc(grp('secret').join(', '))}`
       + `<br><br><span class="k">Swath not found (${grp('unknown').length})</span>, drawn at the minimum:<br>${esc(grp('unknown').join(', '))}`
@@ -737,7 +743,7 @@ function info() {
   const d = new Date(simT), live = Math.abs(simT - Date.now()) < 5000, unk = sats.reduce((n, s) => n + (s.swath == null), 0);
   if (ROLE === 'tablet') { el.textContent = sats.length.toLocaleString(); return; }
   const p = picked >= 0 ? sats[picked] : null;
-  el.textContent = (p ? `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''} · ${p.swath != null ? p.inst + ' · ' + Math.round(p.swath).toLocaleString() + ' km swath' : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + (S.unk === 'est' && p.est != null ? ' · estimated ' + Math.round(p.est).toLocaleString() + ' km (drawn from ' + p.from + ')' : S.unk === 'typ' && p.typ != null ? ' · typical ' + Math.round(p.typ).toLocaleString() + ' km (' + p.from + ')' : ' · shown at minimum')}${p.cat ? ' · ' + p.cat : ''}\n` : '')
+  el.textContent = (p ? `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''} · ${p.swath != null ? p.inst + ' · ' + Math.round(p.swath).toLocaleString() + ' km swath' : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + (S.unk === 'est' && p.est != null ? ' · estimated ' + Math.round(p.est).toLocaleString() + ' km (' + p.from + ' angle at its altitude)' : S.unk === 'typ' && p.typ != null ? ' · typical ' + Math.round(p.typ).toLocaleString() + ' km (' + p.from + ')' : ' · shown at minimum')}${p.cat ? ' · ' + p.cat : ''}\n` : '')
     + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} ${S.unk === 'est' ? 'estimated' : S.unk === 'typ' ? 'typical' : S.unk === 'hide' ? 'hidden' : 'at minimum'}\n`
     + `${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
 }
