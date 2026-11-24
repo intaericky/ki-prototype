@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, iorfar: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0, fill: 90 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 788, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(360),  ...CROWN, ior: 151, gain: 150, lift: 150, iorfar: 101, disp: 0, refl: 300, rim: 50, revive: 60, glow: 4, glowc: '#ffffff', trail: 'off', trlen: 0, trgain: 50, tapdo: 'pop', circ: 8, earthc: '#0b1250', idle: 60, hi: 0, even: 0 }; // Intae's look (2026-11-24, second photo: 360x, blue Earth, no trail)
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 788, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(360),  ...CROWN, ior: 151, gain: 150, lift: 150, iorfar: 101, disp: 0, refl: 300, rim: 50, revive: 60, glow: 4, glowc: '#ffffff', trail: 'off', trlen: 0, trgain: 50, tapdo: 'pop', circ: 8, earthc: '#000020', idle: 60, hi: 0, even: 0, depth: 0 }; // Intae's look (2026-11-24, second photo: 360x, blue Earth, no trail)
 let S = { ...DEF };
 const KEY = 'lens-v5';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -103,7 +103,7 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 // A ray refracts into the glass, runs down to the ground under it (the Earth image) or out through the far side.
 const U = { tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 }, uIor: { value: 1.5 }, uIorFar: { value: 1.5 }, uFill: { value: 0.9 }, uDisp: { value: 0 },
   uPxK: { value: 0.001 }, uTop: { value: 8000 }, uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) }, uShift: { value: 0 },
-  tDome: { value: null }, tCell: { value: null }, tItem: { value: null }, tEnv: { value: null }, uEnv: { value: 0.5 }, uLsize: { value: 1 }, uLshape: { value: 0 }, uGain: { value: 1 }, uLift: { value: 1 }, uUnkMat: { value: 0 }, uTint: { value: new THREE.Color(1, 1, 1) }, uGlow: { value: 0 }, uGlowC: { value: new THREE.Color(1, 1, 1) }, uAbs: { value: 0 }, uFrost: { value: 0 }, uRefl: { value: 1 }, uRim: { value: 0 }, uBg: { value: new THREE.Color(0, 0, 0) }, uHi: { value: 0 }, uEven: { value: 0 }, uBgOn: { value: 1 } };
+  tDome: { value: null }, tCell: { value: null }, tItem: { value: null }, tEnv: { value: null }, uEnv: { value: 0.5 }, uLsize: { value: 1 }, uLshape: { value: 0 }, uGain: { value: 1 }, uLift: { value: 1 }, uUnkMat: { value: 0 }, uTint: { value: new THREE.Color(1, 1, 1) }, uGlow: { value: 0 }, uGlowC: { value: new THREE.Color(1, 1, 1) }, uAbs: { value: 0 }, uFrost: { value: 0 }, uRefl: { value: 1 }, uRim: { value: 0 }, uBg: { value: new THREE.Color(0, 0, 0) }, uHi: { value: 0 }, uEven: { value: 0 }, uDepth: { value: 0 }, uBgOn: { value: 1 } };
 { // bake the soft-box room once into a cube map (HDR, so the boxes' reflections stay bright)
   const rt = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
   new THREE.CubeCamera(0.1, 100, rt).update(renderer, new RoomEnvironment());
@@ -158,7 +158,7 @@ const OPTICS = /* glsl */`${PIECE}
   // studio light: a soft-box room (as in Entangled) that stays fixed to the viewer, so every ball carries the same
   // highlights wherever it is on the display; there is no direction in the world. It is what the glass reflects, and
   // what it shows where light passes through into space.
-  uniform float uHi, uEven;
+  uniform float uHi, uEven, uDepth; uniform vec3 uBg;
   uniform samplerCube tEnv; uniform float uEnv, uLsize; uniform int uLshape; mat3 gEnvM = mat3(1.0);
   // soft lights around the viewer (v: +z towards the viewer, +y up); each a smooth falloff, no hard edge
   float lamp(vec3 v, vec3 c, float r) { float a = acos(clamp(dot(v, normalize(c)), -1.0, 1.0)) / r; return exp(-a * a); }
@@ -261,6 +261,9 @@ const OPTICS = /* glsl */`${PIECE}
     vec3 c = dsp > 0.0 && !gFast ? vec3(path(Pin, N, rd, max(ior - dsp, 1.0002), lod).r, path(Pin, N, rd, ior, lod).g, path(Pin, N, rd, ior + dsp, lod).b) : path(Pin, N, rd, ior, lod);
     if (unk && uUnkMat == 2) c *= 0.3;
     if (unk && uUnkMat == 3) c = mix(c, vec3(0.75), 0.55);
+    // Depth: the lower a ball flies, the more what it shows sinks into the Earth colour, as if seen through deep water;
+    // height on a log scale from 300 km (fully sunk by Depth) to geostationary 36,000 km (untouched). The reflection stays.
+    if (uDepth > 0.0 && kE >= 0) { float h = max(length(pc(kE).xyz) - RE, 1.0), t = clamp(log(h / 300.0) / log(120.0), 0.0, 1.0); c = mix(uBg, c, 1.0 - uDepth * (1.0 - t)); }
     float ci = clamp(-dot(rd, N), 0.0, 1.0);
     vec3 rr = reflect(rd, N); float tR = earthT(Pin + N * 0.02, rr);
     vec3 refl = tR < 1e8 ? surface(normalize(Pin + N * 0.02 + rr * tR), lod) : env(rr);
@@ -305,7 +308,7 @@ const idFrag = /* glsl */`${PIECE}
 const quadVert = /* glsl */`void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const traceFrag = /* glsl */`${OPTICS}
   uniform sampler2D tId; uniform mat4 uInvVP; uniform mat3 uViewRot; uniform vec3 uCam; uniform vec2 uView; uniform float uPxK;
-  uniform vec3 uBg; uniform int uBgOn;
+  uniform int uBgOn;
   // the Earth itself is never drawn: only a flat colour (Earth colour, black by default) where it stands behind the glass
   float earthMask(vec3 ro, vec3 rd) { float b = dot(ro, rd), d = length(ro - rd * b), w = max(fwidth(d), 1e-3); return b > 0.0 ? 0.0 : clamp((RE - d) / w + 0.5, 0.0, 1.0); }
   void addBg(float m) { if (uBgOn == 1) gl_FragColor.rgb += uBg * m * (1.0 - gl_FragColor.a); }
@@ -376,7 +379,7 @@ const eqIdFrag = /* glsl */`${PIECE}${EQRAY}
   }`;
 const eqTraceFrag = /* glsl */`${OPTICS}${EQRAY}
   uniform sampler2D tId;
-  uniform vec3 uBg; uniform int uBgOn;
+  uniform int uBgOn;
   // the Earth itself is never drawn: only a flat colour (Earth colour, black by default) where it stands behind the glass
   float earthMask(vec3 ro, vec3 rd) { float b = dot(ro, rd), d = length(ro - rd * b), w = max(fwidth(d), 1e-3); return b > 0.0 ? 0.0 : clamp((RE - d) / w + 0.5, 0.0, 1.0); }
   void addBg(float m) { if (uBgOn == 1) gl_FragColor.rgb += uBg * m * (1.0 - gl_FragColor.a); }
@@ -932,7 +935,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['one', 'One size', 0, 1000, () => (ONEKM() < 10 ? ONEKM().toFixed(1) : Math.round(ONEKM()).toLocaleString()) + ' km'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
   ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], 
   ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['iorfar', 'Far refraction', 100, 250, () => (S.iorfar / 100).toFixed(2)], ['fill', 'Fill with Earth', 0, 100, () => S.fill ? 'to ' + S.fill + '% of radius' : 'off'], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 1000, () => (S.refl / 100).toFixed(1) + '×'],
-  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['hi', 'Highlights', 0, 100, () => S.hi ? S.hi + '' : 'off'], ['even', 'Even reflection', 0, 100, () => S.even ? S.even + '%' : 'off'], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['glow', 'Glow', 0, 100, () => S.glow ? S.glow + '%' : 'off'], ['trlen', 'Trail length', 0, 100, () => TRAIL_S().toFixed(TRAIL_S() < 1 ? 1 : 0) + ' s half'], ['trgain', 'Trail strength', 0, 100, () => S.trgain + '%'], ['circ', 'Smallest circle', 2, 40, () => S.circ + ' px'], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['idle', 'Idle after', 0, 300, () => S.idle ? S.idle + ' s' : 'off'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
+  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['hi', 'Highlights', 0, 100, () => S.hi ? S.hi + '' : 'off'], ['even', 'Even reflection', 0, 100, () => S.even ? S.even + '%' : 'off'], ['depth', 'Depth by height', 0, 100, () => S.depth ? S.depth + '%' : 'off'], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['glow', 'Glow', 0, 100, () => S.glow ? S.glow + '%' : 'off'], ['trlen', 'Trail length', 0, 100, () => TRAIL_S().toFixed(TRAIL_S() < 1 ? 1 : 0) + ' s half'], ['trgain', 'Trail strength', 0, 100, () => S.trgain + '%'], ['circ', 'Smallest circle', 2, 40, () => S.circ + ' px'], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['idle', 'Idle after', 0, 300, () => S.idle ? S.idle + ' s' : 'off'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
   ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['scale', 'Scale', [['true', 'True width'], ['area', 'Area (√)']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
   ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['tapdo', 'Tap', [['follow', 'Follow'], ['pop', 'Take away']]], ['trail', 'Trail', [['off', 'Off'], ['ball', 'Whole ball'], ['glow', 'Glow only']]], ['unkmat', 'No-swath glass', [['same', 'Same'], ['frost', 'Frosted'], ['smoke', 'Smoky'], ['milk', 'Milky']]], ['fit', 'Minimum is', [['lift', 'Lifted'], ['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['clamp', 'Clamp'], ['1', 'Real'], ['0', 'Hide']]]];
@@ -1027,7 +1030,7 @@ function frame(now) {
 function render() {
   if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; catQ = sats.map((s) => ORB.prep(s, T0)); }
   if (loaded) { update(); followTick(); }
-  U.uEnv.value = 0; U.uUnkMat.value = { same: 0, frost: 1, smoke: 2, milk: 3 }[S.unkmat] ?? 0; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uIor.value = S.ior / 100; U.uIorFar.value = S.iorfar / 100; U.uFill.value = S.fill / 100; U.uDisp.value = S.disp / 1000; U.uRefl.value = S.refl / 100; U.uRim.value = S.rim / 100; U.uAbs.value = S.abs / 25; U.uFrost.value = S.frost / 20; U.uTint.value.set(S.tint); U.uGlow.value = S.glow / 100; U.uGlowC.value.set(S.glowc); U.uBg.value.set(S.earthc); U.uHi.value = S.hi / 100; U.uEven.value = S.even / 100; U.uBgOn.value = S.trail === 'off' ? 1 : 0; U.uLight.value = S.light === 'sun' ? 1 : 0;
+  U.uEnv.value = 0; U.uUnkMat.value = { same: 0, frost: 1, smoke: 2, milk: 3 }[S.unkmat] ?? 0; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uIor.value = S.ior / 100; U.uIorFar.value = S.iorfar / 100; U.uFill.value = S.fill / 100; U.uDisp.value = S.disp / 1000; U.uRefl.value = S.refl / 100; U.uRim.value = S.rim / 100; U.uAbs.value = S.abs / 25; U.uFrost.value = S.frost / 20; U.uTint.value.set(S.tint); U.uGlow.value = S.glow / 100; U.uGlowC.value.set(S.glowc); U.uBg.value.set(S.earthc); U.uHi.value = S.hi / 100; U.uDepth.value = S.place === 'orbit' ? S.depth / 100 : 0; U.uEven.value = S.even / 100; U.uBgOn.value = S.trail === 'off' ? 1 : 0; U.uLight.value = S.light === 'sun' ? 1 : 0;
   const rot = -ORB.gmst(simT), se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
   const v = S.view;
