@@ -690,7 +690,7 @@ function followTick() {
   if (S.view === 'glass' || S.view === 'lines') { view.pitch = Math.asin(Math.max(-1, Math.min(1, n.y))); view.yaw = Math.atan2(n.x, n.z); return; } // lookFromCamera passes it on to the sphere
   const up = new THREE.Vector3(0, 1, 0).addScaledVector(n, -n.y); if (up.lengthSq() < 1e-6) up.set(1, 0, 0); up.normalize();
   rot360.setFromRotationMatrix(new THREE.Matrix4().makeBasis(n, up, new THREE.Vector3().crossVectors(n, up)));
-  if (performance.now() - followLookT > 50) { followLookT = performance.now(); sendLook(true); }
+  if (performance.now() - followLookT > 33) { followLookT = performance.now(); sendLook(true); }
 }
 // what the satellite is: from GCAT (Jonathan McDowell): its category, operator class, state and owner
 const PURPOSE = { IMG: 'photographs the ground', 'IMG-R': 'radar images of the ground, day and night, through cloud', MET: 'watches the weather', EOSCI: 'measures the Earth for science', 'MET-RO': 'sounds the air with bent GPS signals' };
@@ -781,9 +781,14 @@ let mq = null, relayOk = false, lookT = 0;
 const publish = (t, obj, retain = false) => { if (mq && relayOk) mq.publish(TOPIC + t, JSON.stringify(obj), { retain, qos: retain ? 1 : 0 }); };
 function sendLook(force) {
   if (ROLE === 'display') return;
-  const n = performance.now(); if (!force && n - lookT < 50) return; lookT = n;
-  publish('/look', { q: rot360.toArray(), by: ME }, true);
+  const n = performance.now(); if (!force && n - lookT < 33) return; lookT = n;
+  // while turning: a light, unstored message (QoS 0) so nothing queues up; once the turn rests, one stored copy for
+  // pages that open later. (Stored QoS 1 messages for every move made the relay fall seconds behind.)
+  const m = { q: rot360.toArray(), by: ME };
+  if (mq && relayOk) mq.publish(TOPIC + '/look/live', JSON.stringify(m), { qos: 0 });
+  clearTimeout(lookRestT); lookRestT = setTimeout(() => publish('/look', { q: rot360.toArray(), by: ME }, true), 400);
 }
+let lookRestT = null;
 function sendClock() { clock = { wall0: Date.now(), sim0: simT, speed: SPEED(), by: ME }; publish('/clock', clock, true); }
 let snapT = null;
 function sendPop(n, t) { publish('/pop', { n, t, ev: Date.now(), by: ME }); clearTimeout(snapT); snapT = setTimeout(sendSnapshot, 400); }
@@ -793,7 +798,7 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
   const mqtt = m.default || m;
   mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
   mq.on('close', () => { relayOk = false; }); mq.on('offline', () => { relayOk = false; });
-  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/look', TOPIC + '/clock', TOPIC + '/pop', TOPIC + '/pops', TOPIC + '/revive']); if (ROLE === 'studio') sendRevive();
+  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/look', TOPIC + '/look/live', TOPIC + '/clock', TOPIC + '/pop', TOPIC + '/pops', TOPIC + '/revive']); if (ROLE === 'studio') sendRevive();
     // nobody has turned the sphere in this room yet: the first tablet or studio in a 3D view sets it
     setTimeout(() => { if (!gotLook && camQ && (S.view === 'glass' || S.view === 'lines')) { rot360.copy(camQ); sendLook(true); } }, 2500); });
   mq.on('message', (t, msg) => {
@@ -803,7 +808,7 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
     if (k === '/pop') { if (Number.isFinite(d.n) && Number.isFinite(d.t)) setPop(d.n, d.t, d.ev || Date.now()); }
     else if (k === '/pops') { if (Array.isArray(d.list)) for (const e of d.list) { if (Array.isArray(e) && e.length === 3 && e.every(Number.isFinite)) setPop(e[0], e[1], e[2]); } }
     else if (k === '/revive') { if (Number.isFinite(d.s) && ROLE !== 'studio') S.revive = d.s; }
-    else if (k === '/look') { if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size && following < 0) {
+    else if (k === '/look' || k === '/look/live') { if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size && following < 0) {
       rot360.fromArray(d.q).normalize(); gotLook = true;
       // the 3D views take the sphere's turn too, so tablet and sphere always show the same face
       if (S.view === 'glass' || S.view === 'lines') { const v = new THREE.Vector3(1, 0, 0).applyQuaternion(rot360); view.pitch = Math.asin(Math.max(-1, Math.min(1, v.y))); view.yaw = Math.atan2(v.x, v.z); camQ = null; adopted = true; }
@@ -819,7 +824,7 @@ function lookFromCamera() { // the point facing the viewer becomes the LED frame
     camQ = q.clone(); if (adopted && q.angleTo(rot360) > 0.01) { rot360.copy(q); lookDirty = true; } adopted = false; return;
   }
   if (q.angleTo(camQ) > 1e-4) { camQ.copy(q); rot360.copy(q); lookDirty = true; }
-  if (lookDirty && performance.now() - lookT >= 50) { lookDirty = false; sendLook(true); }
+  if (lookDirty && performance.now() - lookT >= 33) { lookDirty = false; sendLook(true); }
 }
 
 // ---------- panel (studio) ----------
