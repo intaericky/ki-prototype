@@ -60,7 +60,7 @@ const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
-const CROWN = { ior: 152, iorfar: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0 }; // the glass sliders' starting point
+const CROWN = { ior: 152, iorfar: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0, fill: 90 }; // the glass sliders' starting point
 const DEF = { view: 'glass', shape: 'sphere', place: 'ground', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 662, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: 'clamp', spd: 52,  ...CROWN, gain: 100, lift: 100 };
 let S = { ...DEF };
 const KEY = 'lens-v5';
@@ -99,7 +99,7 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 // ---------- optics (shared GLSL) ----------
 // A dome = the part of a glass sphere (centre on the ground, radius = half the swath) that stands above the ground.
 // A ray refracts into the glass, runs down to the ground under it (the Earth image) or out through the far side.
-const U = { tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 }, uIor: { value: 1.5 }, uIorFar: { value: 1.5 }, uDisp: { value: 0 },
+const U = { tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 }, uIor: { value: 1.5 }, uIorFar: { value: 1.5 }, uFill: { value: 0.9 }, uDisp: { value: 0 },
   uPxK: { value: 0.001 }, uTop: { value: 8000 }, uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) }, uShift: { value: 0 },
   tDome: { value: null }, tCell: { value: null }, tItem: { value: null }, tEnv: { value: null }, uEnv: { value: 0.5 }, uLsize: { value: 1 }, uLshape: { value: 0 }, uGain: { value: 1 }, uLift: { value: 1 }, uUnkMat: { value: 0 }, uTint: { value: new THREE.Color(1, 1, 1) }, uAbs: { value: 0 }, uFrost: { value: 0 }, uRefl: { value: 1 }, uRim: { value: 0 } };
 { // bake the soft-box room once into a cube map (HDR, so the boxes' reflections stay bright)
@@ -138,7 +138,7 @@ const PIECE = /* glsl */`
   vec4 idColor(int k) { int i = k + 1; return vec4(float(i & 255), float((i >> 8) & 255), float((i >> 16) & 255), 255.0) / 255.0; }
   int idOf(vec4 e) { return int(e.r * 255.0 + 0.5) + int(e.g * 255.0 + 0.5) * 256 + int(e.b * 255.0 + 0.5) * 65536 - 1; }`;
 const OPTICS = /* glsl */`${PIECE}
-  uniform sampler2D tDay, tNight; uniform vec3 uSun; uniform int uUnkMat; uniform float uLight, uIor, uIorFar, uDisp, uGain, uLift, uAbs, uFrost, uRefl, uRim; uniform vec3 uTint;
+  uniform sampler2D tDay, tNight; uniform vec3 uSun; uniform int uUnkMat; uniform float uLight, uIor, uIorFar, uFill, uDisp, uGain, uLift, uAbs, uFrost, uRefl, uRim; uniform vec3 uTint;
   // studio light: a soft-box room (as in Entangled) that stays fixed to the viewer, so every ball carries the same
   // highlights wherever it is on the display; there is no direction in the world. It is what the glass reflects, and
   // what it shows where light passes through into space.
@@ -230,6 +230,13 @@ const OPTICS = /* glsl */`${PIECE}
     if (unk && uUnkMat == 1) lod += 4.0;
     // Refraction blends from low orbit (uIor) to geostationary distance (uIorFar) by the ball's distance from the Earth's centre
     float tf = clamp(log(length(pc(kE).xyz) / 7378.0) / log(42164.0 / 7378.0), 0.0, 1.0), ior = mix(uIor, uIorFar, tf);
+    // Fill with Earth: seen from above, light through the ball at a fraction f of its radius bends by 2(i - asin(sin i / n));
+    // it lands on the Earth while that bend stays within the Earth's angular radius a seen from the ball. So the index
+    // that fills the ball out to f is n = sin i / sin(i - a/2), i = asin f; a ball with a lower index already fills.
+    if (uFill > 0.0) {
+      float a = asin(min(RE / length(pc(kE).xyz), 1.0)), i = asin(min(uFill, 0.999)), nf = sin(i) / max(sin(i - 0.5 * a), 1e-3);
+      ior = max(min(ior, nf - uDisp), 1.0005 + uDisp);
+    }
     vec3 c = uDisp > 0.0 ? vec3(path(Pin, N, rd, ior - uDisp, lod).r, path(Pin, N, rd, ior, lod).g, path(Pin, N, rd, ior + uDisp, lod).b) : path(Pin, N, rd, ior, lod);
     if (unk && uUnkMat == 2) c *= 0.3;
     if (unk && uUnkMat == 3) c = mix(c, vec3(0.75), 0.55);
@@ -649,7 +656,7 @@ function lookFromCamera() { // the point facing the viewer becomes the LED frame
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['one', 'One size', 0, 1000, () => (ONEKM() < 10 ? ONEKM().toFixed(1) : Math.round(ONEKM()).toLocaleString()) + ' km'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
   ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], 
-  ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['iorfar', 'Far refraction', 100, 250, () => (S.iorfar / 100).toFixed(2)], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 300, () => (S.refl / 100).toFixed(1) + '×'],
+  ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['iorfar', 'Far refraction', 100, 250, () => (S.iorfar / 100).toFixed(2)], ['fill', 'Fill with Earth', 0, 100, () => S.fill ? 'to ' + S.fill + '% of radius' : 'off'], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 300, () => (S.refl / 100).toFixed(1) + '×'],
   ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
   ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['scale', 'Scale', [['true', 'True width'], ['area', 'Area (√)']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
@@ -661,7 +668,7 @@ function panelBuild() {
     + `<div class="row"><label></label><div class="seg"><button id="smallest">Min = smallest swath</button><button id="crown">Crown glass</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>lifted</b> (the smallest published swath becomes the minimum and widths up to 10× the minimum spread on a log curve, keeping their order and ratios; wider ones stay true), <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to name it.</div>
+    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; <b>Fill with Earth</b> lowers the refraction of a ball only as far as needed for the Earth beneath it to fill it out to that share of its radius (far balls see a small Earth, so they need weaker glass); 0 = off; overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>lifted</b> (the smallest published swath becomes the minimum and widths up to 10× the minimum spread on a log curve, keeping their order and ratios; wider ones stay true), <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to name it.</div>
     <div class="list" id="lists"></div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit' || k === 'sizing' || k === 'scale') reorder(); save(); panelSync(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min' || k === 'one') reorder(); if (k === 'res') resize(); save(); panelSync(); });
@@ -719,7 +726,7 @@ function frame(now) {
 function render() {
   if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; catQ = sats.map((s) => ORB.prep(s, T0)); }
   if (loaded) update();
-  U.uEnv.value = 0; U.uUnkMat.value = { same: 0, frost: 1, smoke: 2, milk: 3 }[S.unkmat] ?? 0; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uIor.value = S.ior / 100; U.uIorFar.value = S.iorfar / 100; U.uDisp.value = S.disp / 1000; U.uRefl.value = S.refl / 100; U.uRim.value = S.rim / 100; U.uAbs.value = S.abs / 25; U.uFrost.value = S.frost / 20; U.uTint.value.set(S.tint); U.uLight.value = S.light === 'sun' ? 1 : 0;
+  U.uEnv.value = 0; U.uUnkMat.value = { same: 0, frost: 1, smoke: 2, milk: 3 }[S.unkmat] ?? 0; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uIor.value = S.ior / 100; U.uIorFar.value = S.iorfar / 100; U.uFill.value = S.fill / 100; U.uDisp.value = S.disp / 1000; U.uRefl.value = S.refl / 100; U.uRim.value = S.rim / 100; U.uAbs.value = S.abs / 25; U.uFrost.value = S.frost / 20; U.uTint.value.set(S.tint); U.uLight.value = S.light === 'sun' ? 1 : 0;
   const rot = -ORB.gmst(simT), se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
   const v = S.view;
