@@ -260,7 +260,7 @@ const PAINT_F = /* glsl */`
     float rim = pow(1.0 - clamp(dot(n, V), 0.0, 1.0), 4.0) * 0.05;
     gl_FragColor = vec4((base * (amb + dif) + sp + rim) * shade, 1.0);
   }`;
-const SLIT = { uHalf: { value: 0.38 }, uExt: { value: Math.sin(14 * D2R) } };
+const SLIT = { uHalf: { value: 0.38 }, uExt: { value: Math.sin(14 * D2R) } }; // the opening ends 14° past the zenith; its edge seams run on to the back horizon
 const mats = [];
 function paint(hex, o = {}) {
   const m = new THREE.ShaderMaterial({ side: THREE.DoubleSide, vertexShader: PAINT_V, fragmentShader: PAINT_F,
@@ -324,15 +324,14 @@ function buildObs() {
   dome.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 64, 0, TAU, 0, Math.PI / 2), paint(0xffffff, { toned: true, spec: 0.14, slit: true })));
   const ribs = (x0, r, tube) => {
     const R = Math.sqrt(r * r - x0 * x0), pts = [];
-    for (let i = 0; i <= 64; i++) { const t = i / 64 * (Math.PI / 2 + Math.asin(SLIT.uExt.value / R)); pts.push(new THREE.Vector3(x0, R * Math.sin(t), R * Math.cos(t))); }
+    for (let i = 0; i <= 64; i++) { const t = i / 64 * Math.PI; pts.push(new THREE.Vector3(x0, R * Math.sin(t), R * Math.cos(t))); }
     return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 128, tube, 10, false);
   };
+  { const z = -SLIT.uExt.value, y = Math.sqrt(1 - z * z - half * half); const b = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, half * 2 + 0.03, 12), white); b.rotation.z = Math.PI / 2; b.position.set(0, y * 1.004, z * 1.004); dome.add(b); } // the opening's far end
   for (const sgn of [-1, 1]) {
     dome.add(new THREE.Mesh(ribs(sgn * (half + 0.012), 1.006, 0.012), white));
     dome.add(new THREE.Mesh(ribs(sgn * (half + 0.05), 1.012, 0.014), white));
   }
-  // the slit's far end: a crossbar behind the zenith
-  { const z = -SLIT.uExt.value, y = Math.sqrt(1 - z * z - half * half); const b = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, half * 2 + 0.1, 12), white); b.rotation.z = Math.PI / 2; b.position.set(0, y * 1.004, z * 1.004); dome.add(b); }
   // the elevation axle across the dome, with its two bearings
   const axle = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, half * 2 + 0.2, 24), dark); axle.rotation.z = Math.PI / 2; dome.add(axle);
   for (const sgn of [-1, 1]) { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.06, 40), dark); b.rotation.z = Math.PI / 2; b.position.x = sgn * (half + 0.02); dome.add(b); }
@@ -715,8 +714,8 @@ function drawRig(ctx, b) {
   // dome: slit edges and the telescope, turned by the mount
   const lo = (S.front - mnt.az) * D2R, cl = Math.cos(lo), sl = Math.sin(lo);
   const D = (p) => [cl * p[0] + sl * p[2], p[1], -sl * p[0] + cl * p[2]]; // dome frame → world
-  const half = Math.sin(pw / 2), ext = Math.sin(14 * D2R);
-  for (const sgn of [-1, 1]) { const x0 = sgn * half, R = Math.sqrt(1 - x0 * x0), T = Math.PI / 2 + Math.asin(ext / R); path((t) => D([x0, R * Math.sin(t * T), R * Math.cos(t * T)]), 64); }
+  const half = Math.sin(pw / 2);
+  for (const sgn of [-1, 1]) { const x0 = sgn * half, R = Math.sqrt(1 - x0 * x0); path((t) => D([x0, R * Math.sin(t * Math.PI), R * Math.cos(t * Math.PI)]), 96); } // slit edges, horizon to horizon
   const el = mnt.el * D2R, ce = Math.cos(el), se = Math.sin(el);
   const T = (p) => D([p[0], p[1] * ce + p[2] * se, -p[1] * se + p[2] * ce]); // telescope frame → world
   const TR = half * 0.76, ringAt = (r, z) => path((t) => T([r * Math.cos(t * TAU), r * Math.sin(t * TAU), z]), 64);
