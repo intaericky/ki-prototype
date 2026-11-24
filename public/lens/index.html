@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, iorfar: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0, fill: 90 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30, glow: 0, glowc: '#ffffff', trail: 'ball', trlen: 100 * Math.log(10) / Math.log(300), trgain: 50, tapdo: 'follow', circ: 40, look: 'glass' }; // Intae's look (2026-11-24)
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30, glow: 0, glowc: '#ffffff', trail: 'ball', trlen: 100 * Math.log(10) / Math.log(300), trgain: 50, tapdo: 'pop', circ: 6, look: 'glass' }; // Intae's look (2026-11-24)
 let S = { ...DEF };
 const KEY = 'lens-v5';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -499,6 +499,16 @@ let N = 0, order = [], rank = new Int32Array(0), aC = null, aF = null, aP = null
 const popped = new Map(); // norad → { t: wall s popped, ev: wall ms of the last change }
 const wallS = () => Date.now() / 1000, REVIVE = () => Math.max(3, S.revive);
 const isPopped = (s, now) => { const p = popped.get(s.norad); return !!(p && p.t > 0 && now - p.t < REVIVE()); };
+// a pop: the ball swells a little, then collapses (0.3 s); when it comes back it springs open (0.6 s)
+const POPD = 0.3, GROWD = 0.6;
+function popScale(s, now) {
+  const p = popped.get(s.norad); if (!p || !(p.t > 0)) return 1;
+  const age = now - p.t, R = REVIVE(); if (age < 0) return 1;
+  if (age < POPD) { const t = age / POPD; return t < 0.25 ? 1 + 0.25 * Math.sin(t / 0.25 * Math.PI / 2) : 1.25 * Math.pow(1 - (t - 0.25) / 0.75, 3); }
+  if (age < R) return 0;
+  const g = (age - R) / GROWD; if (g >= 1) return 1;
+  return Math.pow(2, -10 * g) * Math.sin((g * 10 - 0.75) * TAU / 3) + 1; // springs past full size, settles
+}
 function setPop(n, t, ev = Date.now()) { const cur = popped.get(n); if (cur && cur.ev > ev) return; popped.set(n, { t, ev }); }
 // width shown: the published swath, or for satellites without one (by the No swath setting) an estimate, the typical value of
 // their kind, or nothing (minimum). Minimum is either added to every width (all stay distinct) or a floor.
@@ -562,7 +572,7 @@ function update() { // sub-satellite points (unit vectors, scene frame) for ever
     const j = order[k]; ORB.posEci(catQ[j], dt, tmpP);
     const x = c * tmpP[0] - s * tmpP[1], y = s * tmpP[0] + c * tmpP[1], z = tmpP[2], L = Math.hypot(x, y, z);
     // n: the geocentric direction (the ground straight below the satellite is RE·n)
-    const nx = x / L, ny = z / L, nz = -y / L, r0 = radiusKm(sats[j]), pop = r0 > 0 && isPopped(sats[j], now), r = pop ? 0 : r0;
+    const nx = x / L, ny = z / L, nz = -y / L, r0 = radiusKm(sats[j]), sc = r0 > 0 ? popScale(sats[j], now) : 1, pop = r0 > 0 && sc <= 0, r = r0 * Math.max(sc, 0);
     const h = S.place === 'orbit' ? L : S.shape === 'sphere' ? RE + r0 : RE; // centre: real position, or on the ground
     aP.array[k] = pop ? r0 : 0; sats[j].alt = L - RE;
     a[k * 4] = nx * h; a[k * 4 + 1] = ny * h; a[k * 4 + 2] = nz * h; a[k * 4 + 3] = r;
@@ -726,19 +736,23 @@ function pick(R, wantPopped) {
 function tap(x, y) {
   if (!loaded || !aP) return;
   if (S.view === 'lines') { // the nearest circle within a fingertip (about 32 px)
-    let best = -1, bd = Math.max(32, S.circ / 2 + 14) ** 2;
-    for (let k = 0; k < N; k++) { const sp = screenOf(k); if (!sp) continue; const d = (sp[0] - x) ** 2 + (sp[1] - y) ** 2; if (d < bd) { bd = d; best = k; } }
+    let best = -1, bs = 1; // inside the circle (or within a fingertip of a small one); the most central wins
+    for (let k = 0; k < N; k++) {
+      const sp = screenOf(k); if (!sp) continue;
+      const rp = Math.max((aP.array[k] > 0 ? aP.array[k] : aC.array[k * 4 + 3]) * sp[2], S.circ / 2), reach = Math.max(rp, 12) + 12;
+      const sc = Math.hypot(sp[0] - x, sp[1] - y) / reach; if (sc < bs) { bs = sc; best = k; }
+    }
     if (best < 0) { picked = following = -1; return; }
     const j = order[best], s = sats[j], now = wallS(); picked = j;
     if (S.tapdo === 'follow') { following = j; return; }
-    const t = aP.array[best] > 0 ? now - REVIVE() - 1 : now; setPop(s.norad, t); sendPop(s.norad, t); update(); return;
+    const t = aP.array[best] > 0 ? now - REVIVE() - 0.001 : now; setPop(s.norad, t); sendPop(s.norad, t); update(); return;
   }
   const R = rayFromTap(x, y); if (!R) return;
   const now = wallS();
   let k = pick(R, false);
   if (k >= 0 && S.tapdo === 'follow') { following = picked = order[k]; return; } // follow: it stays in front of the audience
   if (k >= 0) { const s = sats[order[k]]; picked = order[k]; setPop(s.norad, now); sendPop(s.norad, now); update(); return; }
-  if (S.view === 'lines') { k = pick(R, true); if (k >= 0) { const s = sats[order[k]], t = now - REVIVE() - 1; picked = order[k]; setPop(s.norad, t); sendPop(s.norad, t); update(); return; } }
+  if (S.view === 'lines') { k = pick(R, true); if (k >= 0) { const s = sats[order[k]], t = now - REVIVE() - 0.001; picked = order[k]; setPop(s.norad, t); sendPop(s.norad, t); update(); return; } }
   picked = following = -1;
 }
 // ---------- follow: the tapped satellite stays in front of the audience; the Earth and the others turn past it ----------
@@ -769,12 +783,12 @@ function screenOf(k) {
   const b = (cp.x * x + cp.y * y + cp.z * z) / len, h = b * b - c2 + RE * RE;
   if (h > 0 && -b - Math.sqrt(h) > 0 && -b - Math.sqrt(h) < len) return null; // behind the Earth
   ovV.set(a[k * 4], a[k * 4 + 1], a[k * 4 + 2]).project(camera); if (ovV.z > 1) return null;
-  return [(ovV.x + 1) / 2 * innerWidth, (1 - ovV.y) / 2 * innerHeight];
+  return [(ovV.x + 1) / 2 * innerWidth, (1 - ovV.y) / 2 * innerHeight, (innerHeight / 2) / Math.tan(camera.fov / 2 * D2R) / len]; // px per km there
 }
 // ---------- lines: flat circles, all the same size, drawn on top (one stroke width for everything) ----------
-const ov = $('ov'), og = ov.getContext('2d'), LW = 1.5, ovV = new THREE.Vector3();
+const ov = $('ov'), og = ov.getContext('2d'), bursts = [], LW = 1.5, ovV = new THREE.Vector3();
 function overlay() {
-  const CR = S.circ / 2;
+  const CR = S.circ / 2, tn = wallS();
   const dpr = Math.min(devicePixelRatio || 1, 2), W = innerWidth, H = innerHeight;
   if (ov.width !== Math.round(W * dpr) || ov.height !== Math.round(H * dpr)) { ov.width = Math.round(W * dpr); ov.height = Math.round(H * dpr); }
   og.setTransform(dpr, 0, 0, dpr, 0, 0); og.clearRect(0, 0, W, H);
@@ -788,11 +802,16 @@ function overlay() {
     og.beginPath();
     for (let k = 0; k < N; k++) {
       const pop = aP.array[k] > 0, sp = screenOf(k); if (!sp) continue;
-      const [sx, sy] = sp, q = CR * 0.7071;
-      if (pop) { og.moveTo(sx - q, sy - q); og.lineTo(sx + q, sy + q); og.moveTo(sx - q, sy + q); og.lineTo(sx + q, sy - q); }
-      else { og.moveTo(sx + CR, sy); og.arc(sx, sy, CR, 0, TAU); }
+      const [sx, sy, kpx] = sp, rp = Math.max((pop ? aP.array[k] : a[k * 4 + 3]) * kpx, CR); // true size as seen, never smaller than the smallest circle
+      if (pop) { const q = rp * 0.7071; og.moveTo(sx - q, sy - q); og.lineTo(sx + q, sy + q); og.moveTo(sx - q, sy + q); og.lineTo(sx + q, sy - q); }
+      else { og.moveTo(sx + rp, sy); og.arc(sx, sy, rp, 0, TAU); }
+      // just popped: a ring flies out and fades
+      const pp = popped.get(sats[order[k]].norad), age = pp && pp.t > 0 ? tn - pp.t : 9;
+      if (age >= 0 && age < 0.45) bursts.push([sx, sy, Math.max(aP.array[k] || a[k * 4 + 3], 0) * kpx || rp, age / 0.45]);
     }
     og.stroke();
+    for (const [bx, by, br, f] of bursts) { og.globalAlpha = 1 - f; og.beginPath(); og.arc(bx, by, Math.max(br, CR) * (1 + 1.4 * Math.sqrt(f)) + 4, 0, TAU); og.stroke(); }
+    og.globalAlpha = 1; bursts.length = 0;
   }
   if (following >= 0) { // the followed satellite sits in the middle; what it is, under it
     const t = about(sats[following]);
@@ -902,7 +921,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['one', 'One size', 0, 1000, () => (ONEKM() < 10 ? ONEKM().toFixed(1) : Math.round(ONEKM()).toLocaleString()) + ' km'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
   ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], 
   ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['iorfar', 'Far refraction', 100, 250, () => (S.iorfar / 100).toFixed(2)], ['fill', 'Fill with Earth', 0, 100, () => S.fill ? 'to ' + S.fill + '% of radius' : 'off'], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 300, () => (S.refl / 100).toFixed(1) + '×'],
-  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['glow', 'Glow', 0, 100, () => S.glow ? S.glow + '%' : 'off'], ['trlen', 'Trail length', 0, 100, () => TRAIL_S().toFixed(TRAIL_S() < 1 ? 1 : 0) + ' s half'], ['trgain', 'Trail strength', 0, 100, () => S.trgain + '%'], ['circ', 'Circle size', 10, 120, () => S.circ + ' px'], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
+  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['glow', 'Glow', 0, 100, () => S.glow ? S.glow + '%' : 'off'], ['trlen', 'Trail length', 0, 100, () => TRAIL_S().toFixed(TRAIL_S() < 1 ? 1 : 0) + ' s half'], ['trgain', 'Trail strength', 0, 100, () => S.trgain + '%'], ['circ', 'Smallest circle', 2, 40, () => S.circ + ' px'], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], ['look', 'Look', [['glass', 'Glass'], ['stamp', 'Rolling stamp']]],
   ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['scale', 'Scale', [['true', 'True width'], ['area', 'Area (√)']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
   ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['tapdo', 'Tap', [['follow', 'Follow'], ['pop', 'Take away']]], ['trail', 'Trail', [['off', 'Off'], ['ball', 'Whole ball'], ['glow', 'Glow only']]], ['unkmat', 'No-swath glass', [['same', 'Same'], ['frost', 'Frosted'], ['smoke', 'Smoky'], ['milk', 'Milky']]], ['fit', 'Minimum is', [['lift', 'Lifted'], ['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['clamp', 'Clamp'], ['1', 'Real'], ['0', 'Hide']]]];
