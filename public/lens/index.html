@@ -736,14 +736,15 @@ function tap(x, y) {
   if (S.view === 'lines') { // the nearest circle within a fingertip (about 32 px)
     let best = -1, bs = 1; // inside the circle (or within a fingertip of a small one); the most central wins
     for (let k = 0; k < N; k++) {
+      if (aP.array[k] > 0) continue; // an x (taken away) can't be tapped: it comes back only by itself
       const sp = screenOf(k); if (!sp) continue;
-      const rp = Math.max((aP.array[k] > 0 ? aP.array[k] : aC.array[k * 4 + 3]) * sp[2], S.circ / 2), reach = Math.max(rp, 12) + 12;
+      const rp = Math.max(aC.array[k * 4 + 3] * sp[2], S.circ / 2), reach = Math.max(rp, 12) + 12;
       const sc = Math.hypot(sp[0] - x, sp[1] - y) / reach; if (sc < bs) { bs = sc; best = k; }
     }
     if (best < 0) { picked = following = -1; return; }
     const j = order[best], s = sats[j], now = wallS(); picked = j;
     if (S.tapdo === 'follow') { following = j; return; }
-    const t = aP.array[best] > 0 ? now - REVIVE() - 0.001 : now; setPop(s.norad, t); sendPop(s.norad, t); update(); return;
+    setPop(s.norad, now); sendPop(s.norad, now); update(); return;
   }
   const R = rayFromTap(x, y); if (!R) return;
   const now = wallS();
