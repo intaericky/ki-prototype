@@ -697,6 +697,14 @@ function pick(R, wantPopped) {
 }
 function tap(x, y) {
   if (!loaded || !aP) return;
+  if (S.view === 'lines') { // the nearest circle within a fingertip (about 32 px)
+    let best = -1, bd = 32 * 32;
+    for (let k = 0; k < N; k++) { const sp = screenOf(k); if (!sp) continue; const d = (sp[0] - x) ** 2 + (sp[1] - y) ** 2; if (d < bd) { bd = d; best = k; } }
+    if (best < 0) { picked = following = -1; return; }
+    const j = order[best], s = sats[j], now = wallS(); picked = j;
+    if (S.tapdo === 'follow') { following = j; return; }
+    const t = aP.array[best] > 0 ? now - REVIVE() - 1 : now; setPop(s.norad, t); sendPop(s.norad, t); update(); return;
+  }
   const R = rayFromTap(x, y); if (!R) return;
   const now = wallS();
   let k = pick(R, false);
@@ -725,8 +733,18 @@ function about(p) {
   const who = [STATE[p.state] || p.state, CLASS[p.cls], p.owner && p.owner !== p.state ? p.owner : ''].filter(Boolean).join(' · ');
   return [p.name, who, pur, [p.alt != null ? Math.round(p.alt).toLocaleString() + ' km up' : '', p.year ? 'launched ' + p.year : ''].filter(Boolean).join(' · ')].filter(Boolean);
 }
+// where satellite k is on the screen (3D views), or null when hidden, behind the Earth or behind the camera
+function screenOf(k) {
+  const a = aC.array, cp = camera.position, c2 = cp.lengthSq();
+  if (!(aP.array[k] > 0) && a[k * 4 + 3] <= 0) return null;
+  const x = a[k * 4] - cp.x, y = a[k * 4 + 1] - cp.y, z = a[k * 4 + 2] - cp.z, len = Math.hypot(x, y, z);
+  const b = (cp.x * x + cp.y * y + cp.z * z) / len, h = b * b - c2 + RE * RE;
+  if (h > 0 && -b - Math.sqrt(h) > 0 && -b - Math.sqrt(h) < len) return null; // behind the Earth
+  ovV.set(a[k * 4], a[k * 4 + 1], a[k * 4 + 2]).project(camera); if (ovV.z > 1) return null;
+  return [(ovV.x + 1) / 2 * innerWidth, (1 - ovV.y) / 2 * innerHeight];
+}
 // ---------- lines: flat circles, all the same size, drawn on top (one stroke width for everything) ----------
-const ov = $('ov'), og = ov.getContext('2d'), CR = 7, LW = 1.5, ovV = new THREE.Vector3();
+const ov = $('ov'), og = ov.getContext('2d'), CR = 11, LW = 1.5, ovV = new THREE.Vector3();
 function overlay() {
   const dpr = Math.min(devicePixelRatio || 1, 2), W = innerWidth, H = innerHeight;
   if (ov.width !== Math.round(W * dpr) || ov.height !== Math.round(H * dpr)) { ov.width = Math.round(W * dpr); ov.height = Math.round(H * dpr); }
@@ -740,12 +758,8 @@ function overlay() {
     og.beginPath(); og.arc(W / 2, H / 2, R, 0, TAU); og.stroke();
     og.beginPath();
     for (let k = 0; k < N; k++) {
-      const pop = aP.array[k] > 0; if (!pop && a[k * 4 + 3] <= 0) continue;
-      const x = a[k * 4] - cp.x, y = a[k * 4 + 1] - cp.y, z = a[k * 4 + 2] - cp.z, len = Math.hypot(x, y, z);
-      const b = (cp.x * x + cp.y * y + cp.z * z) / len, h = b * b - c2 + RE * RE;
-      if (h > 0 && -b - Math.sqrt(h) > 0 && -b - Math.sqrt(h) < len) continue; // behind the Earth
-      ovV.set(a[k * 4], a[k * 4 + 1], a[k * 4 + 2]).project(camera); if (ovV.z > 1) continue;
-      const sx = (ovV.x + 1) / 2 * W, sy = (1 - ovV.y) / 2 * H, q = CR * 0.7071;
+      const pop = aP.array[k] > 0, sp = screenOf(k); if (!sp) continue;
+      const [sx, sy] = sp, q = CR * 0.7071;
       if (pop) { og.moveTo(sx - q, sy - q); og.lineTo(sx + q, sy + q); og.moveTo(sx - q, sy + q); og.lineTo(sx + q, sy - q); }
       else { og.moveTo(sx + CR, sy); og.arc(sx, sy, CR, 0, TAU); }
     }
