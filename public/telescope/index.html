@@ -565,7 +565,7 @@ function dragBy(kind, dx, dy) {
   } else { // the dome follows the finger: push it right and the slit moves right
     const r = ROLE === 'tablet' ? LY.rig.r : Math.min(VW, VH) * 0.3;
     const k = 57.3 / r * 0.9;
-    tgt.az -= dx * k; tgt.el += dy * k;
+    tgt.az -= dx * k; tgt.el -= dy * k; // push up: the telescope tilts up
   }
   clampTgt(); aimChanged();
 }
