@@ -466,13 +466,14 @@ function ingest(parts) {
     let m = null; for (const x of names) { m = matchSwath(x); if (m) break; }
     const cat = gr?.[2] || '';
     const o = { norad, name, gname: gr?.[1] || '', cat: gr?.[2] || (parts.eo ? 'CelesTrak EO group' : ''), state: gr?.[4] || '', ep, mm, ecc, inc, raan, argp, ma, ndot: Number.isFinite(ndot) ? ndot : 0, swath: null, inst: '', src: '' };
-    if (m) {
+    if (m?.none) { o.inst = m.inst; o.src = m.src; o.why = 'ro'; m = null; }
+    else if (m) {
       o.inst = m.inst; o.src = m.src; o.disk = !!m.disk;
       // geostationary full disk: the whole visible disc, horizon to horizon, from the orbit's own radius
       o.swath = m.disk ? 2 * RE * Math.acos(RE / Math.cbrt(ORB.MU / (mm * TAU / 86400) ** 2)) : m.km;
     }
     // why there is no swath: radio occultation (no imaging at all), military (not published), or not found yet
-    if (!m) o.why = /MET-RO/.test(cat) ? 'ro' : (gr?.[3] === 'D' || /^(USA|YAOGAN|KOSMOS|OFEQ|CSO|SAR-LUPE|SARAH)/i.test(name)) ? 'secret' : 'unknown';
+    if (!m && !o.why) o.why = /MET-RO/.test(cat) ? 'ro' : (gr?.[3] === 'D' || /^(USA|YAOGAN|KOSMOS|OFEQ|CSO|SAR-LUPE|SARAH)/i.test(name)) ? 'secret' : 'unknown';
     out.push(o);
   }
   estimate(out);
@@ -662,7 +663,7 @@ function panelSync() {
     $('lists').innerHTML = `<span class="k">${sats.length} satellites</span> · ${sats.length - unk.length} with a published swath · ${unk.length} without<br>Sources: ${esc(meta.sources.join('; '))}${meta.errors.length ? '<br>Not loaded: ' + esc(meta.errors.join(', ')) : ''}<br><br>`
       + `<span class="k">Swaths</span><br>` + rows.map(([i, km, src, n]) => `${n} × ${esc(i)}: ${(+km).toLocaleString()} km <span style="opacity:.6">(${esc(src)})</span>`).join('<br>')
       + `<br><br><span class="k">Estimates</span> (No swath: Estimate): each satellite without a published swath gets one drawn from the published swaths of its own kind, fixed per satellite. Published range by kind: ${Object.entries(kindStats).filter(([k]) => KINDS[k] || k === 'all').map(([k, v]) => `${KINDS[k] || 'all'} ${v.n} known, ${Math.round(v.lo)}–${Math.round(v.hi).toLocaleString()} km, median ${Math.round(v.med)} km`).join('; ')}. Typical = that median.`
-      + `<br><br><span class="k">Radio occultation (${grp('ro').length})</span>: they take no pictures; they measure the atmosphere from how GPS signals bend through it, so there is no swath. Drawn at the minimum:<br>${esc(grp('ro').join(', '))}`
+      + `<br><br><span class="k">No imaging (${grp('ro').length})</span>: radio occultation and GNSS reflectometry satellites take no pictures; they measure the atmosphere from how GPS signals bend through it, or the sea and soil from GPS signals bouncing off them, so there is no swath. Drawn at the minimum:<br>${esc(grp('ro').join(', '))}`
       + `<br><br><span class="k">Military, not published (${grp('secret').length})</span>, drawn at the minimum:<br>${esc(grp('secret').join(', '))}`
       + `<br><br><span class="k">Swath not found (${grp('unknown').length})</span>, drawn at the minimum:<br>${esc(grp('unknown').join(', '))}`
       + (noOrbit.length ? `<br><br><span class="k">No public orbit (${noOrbit.length})</span>, not drawn:<br>${esc(noOrbit.join(', '))}` : '');
