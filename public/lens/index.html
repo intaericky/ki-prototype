@@ -254,7 +254,11 @@ const OPTICS = /* glsl */`${PIECE}
     }
     if (tn >= 1e8 || earthT(ro, rd) < tn) return vec4(0.0);
     vec3 Pin = ro + rd * tn;
-    if (uLook == 1) { float ci = clamp(-dot(rd, N), 0.0, 1.0); return vec4(clamp(stamp(kE, N, lod), 0.0, 1.0) + uRim * pow(1.0 - ci, 3.0), 1.0); }
+    if (uLook == 1) { // the stamp under a glossy coat: the same Fresnel reflection of the Earth as the glass (Reflection slider)
+      float ci = clamp(-dot(rd, N), 0.0, 1.0); vec3 rr = reflect(rd, N); float tR = earthT(Pin + N * 0.02, rr);
+      vec3 c = stamp(kE, N, lod) + uRefl * fres(ci) * (tR < 1e8 ? surface(normalize(Pin + N * 0.02 + rr * tR), lod) : env(rr));
+      return vec4(clamp(c, 0.0, 1.0) + uRim * pow(1.0 - ci, 3.0), 1.0);
+    }
     // satellites without a published swath can wear a different glass (No-swath glass): frosted, smoky or milky
     bool unk = kE >= 0 && pn(kE).w > 1.5;
     if (unk && uUnkMat == 1) lod += 4.0;
