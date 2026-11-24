@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', size: 50, min: 662, fit: 'add', res: 100, q360: 100, light: 'day', unk: 'est', geo: '0', spd: 52, env: 25, ...CROWN, gain: 100, lift: 100 };
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', size: 50, min: 662, fit: 'add', res: 100, q360: 100, light: 'day', unk: 'est', geo: '0', spd: 52, env: 25, lshape: 'round', lsize: 50, ...CROWN, gain: 100, lift: 100 };
 let S = { ...DEF };
 const KEY = 'lens-v4';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -100,7 +100,7 @@ const tDay = tex('/sphere-assets/bluemarble-4k.jpg'), tNight = tex('/sphere-asse
 // A ray refracts into the glass, runs down to the ground under it (the Earth image) or out through the far side.
 const U = { tDay: { value: tDay }, tNight: { value: tNight }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uLight: { value: 0 }, uIor: { value: 1.5 }, uDisp: { value: 0 },
   uPxK: { value: 0.001 }, uTop: { value: 8000 }, uRotM: { value: rot360M }, uRotT: { value: rot360T }, uRes: { value: new THREE.Vector2(1920, 1080) }, uShift: { value: 0 },
-  tDome: { value: null }, tCell: { value: null }, tItem: { value: null }, tEnv: { value: null }, uEnv: { value: 0.5 }, uGain: { value: 1 }, uLift: { value: 1 }, uTint: { value: new THREE.Color(1, 1, 1) }, uAbs: { value: 0 }, uFrost: { value: 0 }, uRefl: { value: 1 }, uRim: { value: 0 } };
+  tDome: { value: null }, tCell: { value: null }, tItem: { value: null }, tEnv: { value: null }, uEnv: { value: 0.5 }, uLsize: { value: 1 }, uLshape: { value: 0 }, uGain: { value: 1 }, uLift: { value: 1 }, uTint: { value: new THREE.Color(1, 1, 1) }, uAbs: { value: 0 }, uFrost: { value: 0 }, uRefl: { value: 1 }, uRim: { value: 0 } };
 { // bake the soft-box room once into a cube map (HDR, so the boxes' reflections stay bright)
   const rt = new THREE.WebGLCubeRenderTarget(256, { type: THREE.HalfFloatType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
   new THREE.CubeCamera(0.1, 100, rt).update(renderer, new RoomEnvironment());
@@ -141,8 +141,17 @@ const OPTICS = /* glsl */`${PIECE}
   // studio light: a soft-box room (as in Entangled) that stays fixed to the viewer, so every ball carries the same
   // highlights wherever it is on the display; there is no direction in the world. It is what the glass reflects, and
   // what it shows where light passes through into space.
-  uniform samplerCube tEnv; uniform float uEnv; mat3 gEnvM = mat3(1.0);
-  vec3 env(vec3 d) { return uEnv * textureLod(tEnv, gEnvM * d, 2.0 + uFrost).rgb; }
+  uniform samplerCube tEnv; uniform float uEnv, uLsize; uniform int uLshape; mat3 gEnvM = mat3(1.0);
+  // soft lights around the viewer (v: +z towards the viewer, +y up); each a smooth falloff, no hard edge
+  float lamp(vec3 v, vec3 c, float r) { float a = acos(clamp(dot(v, normalize(c)), -1.0, 1.0)) / r; return exp(-a * a); }
+  vec3 env(vec3 d) {
+    vec3 v = gEnvM * d; float r = uLsize * (1.0 + uFrost * 0.3);
+    if (uLshape == 2) return uEnv * textureLod(tEnv, v, 3.0 + uFrost).rgb;                      // room (soft boxes)
+    float L;
+    if (uLshape == 1) { float a = (acos(clamp(v.z, -1.0, 1.0)) - 0.6) / (0.12 * r); L = 0.6 * exp(-a * a); } // ring light around the viewer
+    else L = lamp(v, vec3(-0.55, 0.6, 1.0), 0.32 * r) + 0.6 * lamp(v, vec3(0.7, 0.15, 1.0), 0.42 * r) + 0.35 * lamp(v, vec3(0.0, -0.7, 0.7), 0.6 * r); // key, fill, low bounce
+    return uEnv * (40.0 * L + 0.04 * (0.5 + 0.5 * v.y)) * vec3(1.0, 0.99, 0.97);
+  }
   uniform highp sampler2D tCell, tItem;
   const float RE = 6378.137;
   vec3 surface(vec3 n, float lod) {
@@ -611,12 +620,12 @@ function lookFromCamera() { // the point facing the viewer becomes the LED frame
 // ---------- panel (studio) ----------
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
-  ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['env', 'Studio light', 0, 100, () => S.env + ''],
+  ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['env', 'Studio light', 0, 100, () => S.env + ''], ['lsize', 'Light size', 5, 100, () => S.lsize + ''],
   ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 300, () => (S.refl / 100).toFixed(1) + '×'],
   ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
   ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
-  ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['fit', 'Minimum is', [['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['0', 'Hide'], ['1', 'Show']]]];
+  ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['fit', 'Minimum is', [['add', 'Added'], ['floor', 'A floor']]], ['lshape', 'Lights', [['round', 'Round'], ['ring', 'Ring'], ['room', 'Room']]], ['geo', 'Full disk', [['0', 'Hide'], ['1', 'Show']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
@@ -682,7 +691,7 @@ function frame(now) {
 function render() {
   if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; catQ = sats.map((s) => ORB.prep(s, T0)); }
   if (loaded) update();
-  U.uEnv.value = S.env / 50; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uIor.value = S.ior / 100; U.uDisp.value = S.disp / 1000; U.uRefl.value = S.refl / 100; U.uRim.value = S.rim / 100; U.uAbs.value = S.abs / 25; U.uFrost.value = S.frost / 20; U.uTint.value.set(S.tint); U.uLight.value = S.light === 'sun' ? 1 : 0;
+  U.uEnv.value = S.env / 50; U.uLsize.value = S.lsize / 50; U.uLshape.value = { round: 0, ring: 1, room: 2 }[S.lshape] ?? 0; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uIor.value = S.ior / 100; U.uDisp.value = S.disp / 1000; U.uRefl.value = S.refl / 100; U.uRim.value = S.rim / 100; U.uAbs.value = S.abs / 25; U.uFrost.value = S.frost / 20; U.uTint.value.set(S.tint); U.uLight.value = S.light === 'sun' ? 1 : 0;
   const rot = -ORB.gmst(simT), se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
   const v = S.view;
