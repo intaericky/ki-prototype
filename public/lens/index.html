@@ -634,7 +634,10 @@ function ingest(parts) {
     const [norad, intl, ep, mm, ecc, inc, raan, argp, ma, ndot] = r;
     if (![ep, mm, ecc, inc, raan, argp, ma].every(Number.isFinite) || ecc >= 1 || mm < 0.5) continue;
     // try every spelling: CelesTrak's name, GCAT's name, and any name in brackets ("Shikisai (GCOM-C)")
-    const names = [name, gr?.[1] || ''].flatMap((x) => [x, ...[...x.matchAll(/\(([^)]+)\)/g)].map((q) => q[1]), x.replace(/\s*\(.*?\)\s*/g, ' ').trim()]).filter(Boolean).map((x) => x.toUpperCase());
+    // GCAT writes Chinese names in pinyin ("Gao Fen san hao 03 xing" = Gaofen-3 03): also try them with the number words as digits
+    const PY = { yi: 1, er: 2, san: 3, si: 4, wu: 5, liu: 6, qi: 7, ba: 8, jiu: 9 };
+    const pinyin = (x) => x.replace(/\bGao Fen\b/gi, 'Gaofen').replace(/\b(yi|er|san|si|wu|liu|qi|ba|jiu)(?=\s+hao\b)/gi, (w) => PY[w.toLowerCase()]).replace(/\s+hao\b/gi, '').replace(/\s+(wei)?xing\b/gi, '').trim();
+    const names = [name, gr?.[1] || ''].flatMap((x) => [x, ...[...x.matchAll(/\(([^)]+)\)/g)].map((q) => q[1]), x.replace(/\s*\(.*?\)\s*/g, ' ').trim(), pinyin(x)]).filter(Boolean).map((x) => x.toUpperCase());
     let m = null; for (const x of names) { m = matchSwath(x); if (m) break; }
     const cat = gr?.[2] || '';
     const o = { norad, name, gname: gr?.[1] || '', cat: gr?.[2] || (parts.eo ? 'CelesTrak EO group' : ''), state: gr?.[4] || '', owner: gr?.[5] || '', prog: gr?.[6] || '', cls: gr?.[3] || '', year: /^\d{4}/.test(intl || '') ? +intl.slice(0, 4) : null, ep, mm, ecc, inc, raan, argp, ma, ndot: Number.isFinite(ndot) ? ndot : 0, swath: null, inst: '', src: '' };
@@ -774,10 +777,12 @@ function followTick() {
 // what the satellite is: from GCAT (Jonathan McDowell): its category, operator class, state and owner
 const PURPOSE = { IMG: 'photographs the ground', 'IMG-R': 'radar images of the ground, day and night, through cloud', MET: 'watches the weather', EOSCI: 'measures the Earth for science', 'MET-RO': 'sounds the air with bent GPS signals' };
 const CLASS = { A: 'amateur or university', B: 'commercial', C: 'civil government', D: 'military' };
-const STATE = { US: 'United States', CN: 'China', RU: 'Russia', SU: 'Soviet Union', J: 'Japan', IN: 'India', F: 'France', D: 'Germany', I: 'Italy', E: 'Spain', UK: 'United Kingdom', CA: 'Canada', KR: 'South Korea', KP: 'North Korea', TW: 'Taiwan', IL: 'Israel', BR: 'Brazil', AR: 'Argentina', AU: 'Australia', NL: 'Netherlands', 'I-ESA': 'European Space Agency', 'I-EUM': 'EUMETSAT (Europe)', 'I-EU': 'European Union', TH: 'Thailand', VN: 'Vietnam', SG: 'Singapore', AE: 'United Arab Emirates', SA: 'Saudi Arabia', TR: 'Türkiye', EG: 'Egypt', NG: 'Nigeria', DZ: 'Algeria', ZA: 'South Africa', KZ: 'Kazakhstan', UZ: 'Uzbekistan', PK: 'Pakistan', ID: 'Indonesia', MY: 'Malaysia', PH: 'Philippines', MX: 'Mexico', CL: 'Chile', PE: 'Peru', BD: 'Bangladesh', NO: 'Norway', FI: 'Finland', DK: 'Denmark', S: 'Sweden', PL: 'Poland', L: 'Luxembourg', CH: 'Switzerland', AT: 'Austria', B: 'Belgium', GR: 'Greece', P: 'Portugal', IR: 'Iran', BY: 'Belarus', UA: 'Ukraine', AZ: 'Azerbaijan', LT: 'Lithuania', NZ: 'New Zealand', QA: 'Qatar', KE: 'Kenya', MN: 'Mongolia', NP: 'Nepal', LK: 'Sri Lanka', BT: 'Bhutan', GT: 'Guatemala', BO: 'Bolivia', EC: 'Ecuador', CO: 'Colombia', VE: 'Venezuela', HU: 'Hungary', CZ: 'Czechia', SK: 'Slovakia', SI: 'Slovenia', ET: 'Ethiopia', RW: 'Rwanda', GH: 'Ghana', MA: 'Morocco', TN: 'Tunisia', JO: 'Jordan', OM: 'Oman', KW: 'Kuwait', BH: 'Bahrain', IQ: 'Iraq', TM: 'Turkmenistan', BG: 'Bulgaria', RO: 'Romania', EE: 'Estonia', LV: 'Latvia', IE: 'Ireland', IS: 'Iceland', MU: 'Mauritius', SN: 'Senegal', ZW: 'Zimbabwe', UG: 'Uganda', SD: 'Sudan', AO: 'Angola', CR: 'Costa Rica', PY: 'Paraguay', UY: 'Uruguay' };
+// GCAT class: one letter, or several when shared ("BD" commercial and military); "-" = not classified
+const classOf = (c) => [...new Set([...(c || '')].map((k) => CLASS[k]).filter(Boolean))].join(' and ');
+const STATE = { US: 'United States', BGN: 'Bangladesh', UAE: 'United Arab Emirates', N: 'Norway', T: 'Thailand', CN: 'China', RU: 'Russia', SU: 'Soviet Union', J: 'Japan', IN: 'India', F: 'France', D: 'Germany', I: 'Italy', E: 'Spain', UK: 'United Kingdom', CA: 'Canada', KR: 'South Korea', KP: 'North Korea', TW: 'Taiwan', IL: 'Israel', BR: 'Brazil', AR: 'Argentina', AU: 'Australia', NL: 'Netherlands', 'I-ESA': 'European Space Agency', 'I-EUM': 'EUMETSAT (Europe)', 'I-EU': 'European Union', TH: 'Thailand', VN: 'Vietnam', SG: 'Singapore', AE: 'United Arab Emirates', SA: 'Saudi Arabia', TR: 'Türkiye', EG: 'Egypt', NG: 'Nigeria', DZ: 'Algeria', ZA: 'South Africa', KZ: 'Kazakhstan', UZ: 'Uzbekistan', PK: 'Pakistan', ID: 'Indonesia', MY: 'Malaysia', PH: 'Philippines', MX: 'Mexico', CL: 'Chile', PE: 'Peru', BD: 'Bangladesh', NO: 'Norway', FI: 'Finland', DK: 'Denmark', S: 'Sweden', PL: 'Poland', L: 'Luxembourg', CH: 'Switzerland', AT: 'Austria', B: 'Belgium', GR: 'Greece', P: 'Portugal', IR: 'Iran', BY: 'Belarus', UA: 'Ukraine', AZ: 'Azerbaijan', LT: 'Lithuania', NZ: 'New Zealand', QA: 'Qatar', KE: 'Kenya', MN: 'Mongolia', NP: 'Nepal', LK: 'Sri Lanka', BT: 'Bhutan', GT: 'Guatemala', BO: 'Bolivia', EC: 'Ecuador', CO: 'Colombia', VE: 'Venezuela', HU: 'Hungary', CZ: 'Czechia', SK: 'Slovakia', SI: 'Slovenia', ET: 'Ethiopia', RW: 'Rwanda', GH: 'Ghana', MA: 'Morocco', TN: 'Tunisia', JO: 'Jordan', OM: 'Oman', KW: 'Kuwait', BH: 'Bahrain', IQ: 'Iraq', TM: 'Turkmenistan', BG: 'Bulgaria', RO: 'Romania', EE: 'Estonia', LV: 'Latvia', IE: 'Ireland', IS: 'Iceland', MU: 'Mauritius', SN: 'Senegal', ZW: 'Zimbabwe', UG: 'Uganda', SD: 'Sudan', AO: 'Angola', CR: 'Costa Rica', PY: 'Paraguay', UY: 'Uruguay' };
 function about(p) {
   const pur = [...new Set((p.cat || '').split('/').map((c) => PURPOSE[c.replace(/[?*]/g, '').trim()]).filter(Boolean))].join(', ') || 'observes the Earth';
-  const who = [STATE[p.state] || p.state, CLASS[p.cls]].filter(Boolean).join(' · ');
+  const who = [STATE[p.state] || p.state, classOf(p.cls)].filter(Boolean).join(' · ');
   return [p.name, who, pur, [p.alt != null ? Math.round(p.alt).toLocaleString() + ' km up' : '', p.year ? 'launched ' + p.year : ''].filter(Boolean).join(' · ')].filter(Boolean);
 }
 // where satellite k is on the screen (3D views), or null when hidden, behind the Earth or behind the camera
@@ -1084,7 +1089,7 @@ let cardKey = -2, cardAlt = 0;
 // the tablet caption: name / country, who runs it / launched, height / what it does
 function caption(p) {
   const pur = [...new Set((p.cat || '').split('/').map((c) => PURPOSE[c.replace(/[?*]/g, '').trim()]).filter(Boolean))].join(', ');
-  return [p.name, [STATE[p.state] || p.state, CLASS[p.cls]].filter(Boolean).join(', '),
+  return [p.name, [STATE[p.state] || p.state, classOf(p.cls)].filter(Boolean).join(', '),
     [p.year ? 'Launched in ' + p.year : '', p.alt != null ? Math.round(p.alt).toLocaleString() + ' km up' : ''].filter(Boolean).join(', '),
     pur ? pur[0].toUpperCase() + pur.slice(1) : ''].filter(Boolean);
 }
