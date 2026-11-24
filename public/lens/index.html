@@ -397,13 +397,18 @@ function ingest(parts) {
     if (!r) { noOrbit.push(gr?.[1] || name); continue; }
     const [norad, intl, ep, mm, ecc, inc, raan, argp, ma, ndot] = r;
     if (![ep, mm, ecc, inc, raan, argp, ma].every(Number.isFinite) || ecc >= 1 || mm < 0.5) continue;
-    const m = matchSwath(name) || (gr ? matchSwath(gr[1].toUpperCase()) : null);
+    // try every spelling: CelesTrak's name, GCAT's name, and any name in brackets ("Shikisai (GCOM-C)")
+    const names = [name, gr?.[1] || ''].flatMap((x) => [x, ...[...x.matchAll(/\(([^)]+)\)/g)].map((q) => q[1]), x.replace(/\s*\(.*?\)\s*/g, ' ').trim()]).filter(Boolean).map((x) => x.toUpperCase());
+    let m = null; for (const x of names) { m = matchSwath(x); if (m) break; }
+    const cat = gr?.[2] || '';
     const o = { norad, name, gname: gr?.[1] || '', cat: gr?.[2] || (parts.eo ? 'CelesTrak EO group' : ''), state: gr?.[4] || '', ep, mm, ecc, inc, raan, argp, ma, ndot: Number.isFinite(ndot) ? ndot : 0, swath: null, inst: '', src: '' };
     if (m) {
       o.inst = m.inst; o.src = m.src; o.disk = !!m.disk;
       // geostationary full disk: the whole visible disc, horizon to horizon, from the orbit's own radius
       o.swath = m.disk ? 2 * RE * Math.acos(RE / Math.cbrt(ORB.MU / (mm * TAU / 86400) ** 2)) : m.km;
     }
+    // why there is no swath: radio occultation (no imaging at all), military (not published), or not found yet
+    if (!m) o.why = /MET-RO/.test(cat) ? 'ro' : (gr?.[3] === 'D' || /^(USA|YAOGAN|KOSMOS|OFEQ|CSO|SAR-LUPE|SARAH)/i.test(name)) ? 'secret' : 'unknown';
     out.push(o);
   }
   sats = out.sort((a, b) => a.name.localeCompare(b.name)); noOrbit.sort();
@@ -561,10 +566,12 @@ function panelSync() {
     listsFor = sats.length;
     const by = new Map(); for (const s of sats) if (s.swath != null) { const k = s.inst + '|' + Math.round(s.swath) + '|' + s.src; by.set(k, (by.get(k) || 0) + 1); }
     const rows = [...by].map(([k, n]) => k.split('|').concat(n)).sort((a, b) => b[1] - a[1]);
-    const unk = sats.filter((s) => s.swath == null);
+    const unk = sats.filter((s) => s.swath == null), grp = (w) => unk.filter((s) => s.why === w).map((s) => s.name);
     $('lists').innerHTML = `<span class="k">${sats.length} satellites</span> · ${sats.length - unk.length} with a published swath · ${unk.length} without<br>Sources: ${esc(meta.sources.join('; '))}${meta.errors.length ? '<br>Not loaded: ' + esc(meta.errors.join(', ')) : ''}<br><br>`
       + `<span class="k">Swaths</span><br>` + rows.map(([i, km, src, n]) => `${n} × ${esc(i)}: ${(+km).toLocaleString()} km <span style="opacity:.6">(${esc(src)})</span>`).join('<br>')
-      + `<br><br><span class="k">No published swath in the table (${unk.length})</span>, drawn at the minimum:<br>${esc(unk.map((s) => s.name).join(', '))}`
+      + `<br><br><span class="k">Radio occultation (${grp('ro').length})</span>: they take no pictures; they measure the atmosphere from how GPS signals bend through it, so there is no swath. Drawn at the minimum:<br>${esc(grp('ro').join(', '))}`
+      + `<br><br><span class="k">Military, not published (${grp('secret').length})</span>, drawn at the minimum:<br>${esc(grp('secret').join(', '))}`
+      + `<br><br><span class="k">Swath not found (${grp('unknown').length})</span>, drawn at the minimum:<br>${esc(grp('unknown').join(', '))}`
       + (noOrbit.length ? `<br><br><span class="k">No public orbit (${noOrbit.length})</span>, not drawn:<br>${esc(noOrbit.join(', '))}` : '');
   }
 }
@@ -627,7 +634,7 @@ function info() {
   const d = new Date(simT), live = Math.abs(simT - Date.now()) < 5000, unk = sats.reduce((n, s) => n + (s.swath == null), 0);
   if (ROLE === 'tablet') { el.textContent = sats.length.toLocaleString(); return; }
   const p = picked >= 0 ? sats[picked] : null;
-  el.textContent = (p ? `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''} · ${p.swath != null ? p.inst + ' · ' + Math.round(p.swath).toLocaleString() + ' km swath' : 'no published swath · shown at minimum'}${p.cat ? ' · ' + p.cat : ''}\n` : '')
+  el.textContent = (p ? `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''} · ${p.swath != null ? p.inst + ' · ' + Math.round(p.swath).toLocaleString() + ' km swath' : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + ' · shown at minimum'}${p.cat ? ' · ' + p.cat : ''}\n` : '')
     + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} at minimum\n`
     + `${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
 }
