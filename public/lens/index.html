@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, iorfar: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0, fill: 90 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30, glow: 0, glowc: '#ffffff', trail: 'ball', trlen: 100 * Math.log(10) / Math.log(300), trgain: 50, tapdo: 'pop', circ: 6, earthc: '#000000' }; // Intae's look (2026-11-24)
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30, glow: 0, glowc: '#ffffff', trail: 'ball', trlen: 100 * Math.log(10) / Math.log(300), trgain: 50, tapdo: 'pop', circ: 6, earthc: '#000000', idle: 30 }; // Intae's look (2026-11-24)
 let S = { ...DEF };
 const KEY = 'lens-v5';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -89,6 +89,7 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 1, 10, 500000);
 const view = { yaw: 0.4, pitch: 0.3, dist: 24000 };
 let lookTarget = null;
+let lastInput = 0, idling = false, idleSim0 = 0; // idle (see idleTick): the last turn anywhere in the room, wall ms
 const rot360 = new THREE.Quaternion(); // LED frame orientation (frame centre = scene direction rot360·(1,0,0))
 const rot360M = new THREE.Matrix3(), rot360T = new THREE.Matrix3();
 const ball = { yaw: Math.PI / 2, pitch: 0.12, dist: 4.8 };
@@ -831,6 +832,7 @@ document.addEventListener('touchmove', (e) => { if (e.target === canvas) e.preve
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { zoom(Math.exp(e.deltaY * 0.0012)); e.preventDefault(); }, { passive: false });
 function turn(dx, dy) {
+  touched();
   following = -1; lookTarget = null; // turning lets go
   if (S.view === 'ball') { ball.yaw -= dx * 0.006; ball.pitch = Math.max(-1.45, Math.min(1.45, ball.pitch + dy * 0.006)); return; }
   if (S.view === '360') {
@@ -857,9 +859,10 @@ function sendLook(force) {
   const n = performance.now(); if (!force && n - lookT < 33) return; lookT = n;
   // while turning: a light, unstored message (QoS 0) so nothing queues up; once the turn rests, one stored copy for
   // pages that open later. (Stored QoS 1 messages for every move made the relay fall seconds behind.)
-  const m = { q: rot360.toArray(), by: ME };
+  if (idling) return; // the idle turn is worked out on every page from the shared clock: nothing to send
+  lastInput = Date.now(); const m = { q: rot360.toArray(), by: ME, w: lastInput };
   if (mq && relayOk) mq.publish(TOPIC + '/look/live', JSON.stringify(m), { qos: 0 });
-  clearTimeout(lookRestT); lookRestT = setTimeout(() => publish('/look', { q: rot360.toArray(), by: ME }, true), 400);
+  clearTimeout(lookRestT); lookRestT = setTimeout(() => publish('/look', { q: rot360.toArray(), by: ME, w: lastInput }, true), 400);
 }
 let lookRestT = null;
 function sendClock() { clock = { wall0: Date.now(), sim0: simT, speed: SPEED(), by: ME }; publish('/clock', clock, true); }
@@ -896,6 +899,7 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
     else if (k === '/settings') { if (ROLE !== 'studio') applySettings(d.s); }
     else if (k === '/revive') { if (Number.isFinite(d.s) && ROLE !== 'studio') S.revive = d.s; }
     else if (k === '/look' || k === '/look/live') { if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size && following < 0) {
+      lastInput = Math.max(lastInput, Number.isFinite(d.w) ? Math.min(d.w, Date.now()) : k === '/look' ? 0 : Date.now()); if (idling) return;
       gotLook = true;
       // the flat 360 frame and the LED display glide to each new turn instead of jumping (messages arrive unevenly)
       if (S.view === '360' || S.view === 'ball') { lookTarget = (lookTarget || new THREE.Quaternion()).fromArray(d.q).normalize(); return; }
@@ -922,7 +926,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['one', 'One size', 0, 1000, () => (ONEKM() < 10 ? ONEKM().toFixed(1) : Math.round(ONEKM()).toLocaleString()) + ' km'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
   ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], 
   ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['iorfar', 'Far refraction', 100, 250, () => (S.iorfar / 100).toFixed(2)], ['fill', 'Fill with Earth', 0, 100, () => S.fill ? 'to ' + S.fill + '% of radius' : 'off'], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 1000, () => (S.refl / 100).toFixed(1) + '×'],
-  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['glow', 'Glow', 0, 100, () => S.glow ? S.glow + '%' : 'off'], ['trlen', 'Trail length', 0, 100, () => TRAIL_S().toFixed(TRAIL_S() < 1 ? 1 : 0) + ' s half'], ['trgain', 'Trail strength', 0, 100, () => S.trgain + '%'], ['circ', 'Smallest circle', 2, 40, () => S.circ + ' px'], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
+  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['glow', 'Glow', 0, 100, () => S.glow ? S.glow + '%' : 'off'], ['trlen', 'Trail length', 0, 100, () => TRAIL_S().toFixed(TRAIL_S() < 1 ? 1 : 0) + ' s half'], ['trgain', 'Trail strength', 0, 100, () => S.trgain + '%'], ['circ', 'Smallest circle', 2, 40, () => S.circ + ' px'], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['idle', 'Idle after', 0, 300, () => S.idle ? S.idle + ' s' : 'off'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
   ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['scale', 'Scale', [['true', 'True width'], ['area', 'Area (√)']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
   ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['tapdo', 'Tap', [['follow', 'Follow'], ['pop', 'Take away']]], ['trail', 'Trail', [['off', 'Off'], ['ball', 'Whole ball'], ['glow', 'Glow only']]], ['unkmat', 'No-swath glass', [['same', 'Same'], ['frost', 'Frosted'], ['smoke', 'Smoky'], ['milk', 'Milky']]], ['fit', 'Minimum is', [['lift', 'Lifted'], ['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['clamp', 'Clamp'], ['1', 'Real'], ['0', 'Hide']]]];
@@ -989,10 +993,28 @@ addEventListener('resize', resize); resize();
 // ---------- frame ----------
 let last = performance.now(), fps = 60, frameDt = 1 / 60;
 const simNow = () => clock ? clock.sim0 + (Date.now() - clock.wall0) * clock.speed : simT;
+// ---------- idle: nobody has touched for a while (or the page just opened): Korea comes to the front, then the Earth
+// turns under the audience at the sped-up rate (자전), the viewer staying still among the stars. Every page works it out
+// from the shared clock and the time of the last touch, so the tablet, studio and LED display turn together.
+const KOREA = { lat: 36.5 * Math.PI / 180, lon: 127.8 * Math.PI / 180 };
+function touched() { lastInput = Date.now(); if (idling) { idling = false; lookTarget = null; } }
+const simAt = (wall) => clock ? clock.sim0 + (wall - clock.wall0) * clock.speed : simT - (Date.now() - wall) * SPEED();
+function idleTick(dt) {
+  const on = S.idle > 0 && following < 0 && Date.now() - lastInput > S.idle * 1000;
+  if (on && !idling) { idling = true; idleSim0 = simAt(lastInput ? lastInput + S.idle * 1000 : Date.now()); }
+  if (!on) { idling = false; return; }
+  const lon = KOREA.lon - (ORB.gmst(simT) - ORB.gmst(idleSim0)), c = Math.cos(KOREA.lat);
+  const n = new THREE.Vector3(c * Math.cos(lon), Math.sin(KOREA.lat), -c * Math.sin(lon));
+  const up = new THREE.Vector3(0, 1, 0).addScaledVector(n, -n.y).normalize();
+  const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(n, up, new THREE.Vector3().crossVectors(n, up)));
+  lookTarget = null; rot360.slerp(q, 1 - Math.exp(-dt / 0.5)); // glides there, then keeps turning
+  if (S.view === 'glass' || S.view === 'lines') { const v = new THREE.Vector3(1, 0, 0).applyQuaternion(rot360); view.pitch = Math.asin(Math.max(-1, Math.min(1, v.y))); view.yaw = Math.atan2(v.x, v.z); }
+}
 function frame(now) {
   if (!TEST) requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000); last = now; frameDt = dt; fps = fps * 0.95 + 0.05 / Math.max(dt, 1e-3);
   simT = clock ? simNow() : simT + dt * 1000 * SPEED();
+  idleTick(dt);
   if (lookTarget) { rot360.slerp(lookTarget, 1 - Math.exp(-dt / 0.06)); if (rot360.angleTo(lookTarget) < 1e-4) { rot360.copy(lookTarget); lookTarget = null; } }
   render();
 }
@@ -1062,7 +1084,7 @@ function info() {
     + `${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
 }
 
-if (TEST) window.__lens = { ingest, render, tap, step: (ms) => frame(last + ms), following: () => following, settings: () => S, probe: () => { // screen offset on the tablet vs position in the LED frame, for a few visible satellites
+if (TEST) window.__lens = { ingest, render, tap, step: (ms) => frame(last + ms), following: () => following, settings: () => S, centre: () => { const v = new THREE.Vector3(1, 0, 0).applyQuaternion(rot360); return [Math.asin(v.y) * 180 / Math.PI, Math.atan2(-v.z, v.x) * 180 / Math.PI]; }, probe: () => { // screen offset on the tablet vs position in the LED frame, for a few visible satellites
   const out = [], m = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rot360)).transpose(), a = aC.array;
   for (let k = 0; k < N && out.length < 4; k += 7) { const v = new THREE.Vector3(a[k * 4], a[k * 4 + 1], a[k * 4 + 2]); if (v.dot(camera.position) < 0) continue;
     const sp = v.clone().project(camera), l = v.clone().normalize().applyMatrix3(m);
