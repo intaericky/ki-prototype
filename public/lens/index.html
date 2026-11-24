@@ -11,7 +11,7 @@
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; height: 100%; background: #000; color: var(--fg); font: 13px/1.45 Pretendard, -apple-system, sans-serif; font-weight: 400; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; }
   canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
-  #info { position: fixed; left: 20px; bottom: 16px; color: var(--dim); font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre; }
+  #info { position: fixed; left: 20px; bottom: 16px; color: var(--dim); font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre-wrap; max-width: min(560px, calc(100vw - 40px)); }
   #toggle { position: fixed; top: 16px; right: 16px; background: none; border: 1px solid var(--faint); color: var(--dim); font: inherit; padding: 6px 12px; border-radius: 0; cursor: pointer; }
   #toggle.on { color: var(--fg); border-color: var(--fg); }
   #panel { position: fixed; top: 56px; right: 16px; width: 320px; max-height: calc(100vh - 80px); overflow: auto; background: #000000d9; border: 1px solid var(--faint); padding: 14px 16px; display: none; user-select: text; -webkit-user-select: text; }
@@ -300,14 +300,15 @@ const ringVert = /* glsl */`
 const ringFrag = /* glsl */`
   varying float vT, vF;
   void main() { if (vF > 0.5 && mod(floor(vT * 12.0 / 3.1415927), 2.0) > 0.5) discard; gl_FragColor = vec4(1.0); }`;
-// --- lines (tablet): a popped ball is an x at its centre, a fixed size on screen
+// --- lines (tablet): a popped ball is an x across the circle it had (aP = its radius, 0 = not popped)
 const xVert = /* glsl */`
   attribute vec4 aC; attribute float aP; uniform vec2 uView;
   void main() {
-    if (aP < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
-    vec4 c = projectionMatrix * viewMatrix * vec4(aC.xyz, 1.0);
+    if (aP <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    vec3 v = normalize(cameraPosition - aC.xyz), e1 = normalize(cross(v, abs(v.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))), e2 = cross(v, e1);
     float i = position.x; vec2 o = i < 0.5 ? vec2(-1.0, -1.0) : i < 1.5 ? vec2(1.0, 1.0) : i < 2.5 ? vec2(-1.0, 1.0) : vec2(1.0, -1.0);
-    c.xy += o * 7.0 / uView * 2.0 * c.w; gl_Position = c;
+    vec3 P = aC.xyz + aP * 0.70710678 * (o.x * e1 + o.y * e2);
+    gl_Position = projectionMatrix * viewMatrix * vec4(P, 1.0);
   }`;
 // --- 360 frame for the LED sphere: each piece drawn straight into the equirect image, seen from directly above
 const eqVert = /* glsl */`
@@ -462,7 +463,7 @@ function update() { // sub-satellite points (unit vectors, scene frame) for ever
     // n: the geocentric direction (the ground straight below the satellite is RE·n)
     const nx = x / L, ny = z / L, nz = -y / L, r0 = radiusKm(sats[j]), pop = r0 > 0 && isPopped(sats[j], now), r = pop ? 0 : r0;
     const h = S.place === 'orbit' ? L : S.shape === 'sphere' ? RE + r0 : RE; // centre: real position, or on the ground
-    aP.array[k] = pop ? 1 : 0;
+    aP.array[k] = pop ? r0 : 0; sats[j].alt = L - RE;
     a[k * 4] = nx * h; a[k * 4 + 1] = ny * h; a[k * 4 + 2] = nz * h; a[k * 4 + 3] = r;
     const dd = domeTex.image.data;
     dd[k * 8] = nx * h; dd[k * 8 + 1] = ny * h; dd[k * 8 + 2] = nz * h; dd[k * 8 + 3] = r;
@@ -604,13 +605,13 @@ function pick(R, wantPopped) {
   const eb = ro.dot(rd), eh = eb * eb - (ro.lengthSq() - RE * RE), tEarth = R.inside ? Infinity : eh > 0 ? -eb - Math.sqrt(eh) : Infinity;
   let best = -1, bestT = Infinity, near = -1, nearK = Infinity;
   for (let k = 0; k < N; k++) {
-    const s = sats[order[k]], pop = aP.array[k] > 0.5;
+    const pop = aP.array[k] > 0;
     if (pop !== wantPopped) continue;
-    const r = wantPopped ? 0 : a[k * 4 + 3]; if (!wantPopped && r <= 0) continue;
+    const r = wantPopped ? aP.array[k] : a[k * 4 + 3]; if (r <= 0) continue;
     const ox = a[k * 4] - ro.x, oy = a[k * 4 + 1] - ro.y, oz = a[k * 4 + 2] - ro.z, t = ox * rd.x + oy * rd.y + oz * rd.z;
     if (t <= 0 || t > tEarth + (R.inside ? 0 : r)) continue;
     const dm = Math.sqrt(Math.max(0, ox * ox + oy * oy + oz * oz - t * t)), tol = R.pxAt(t) * 14;
-    if (r > 0 && dm < r) { const t0 = t - Math.sqrt(r * r - dm * dm); if (t0 < bestT) { bestT = t0; best = k; } }
+    if (!wantPopped && dm < r) { const t0 = t - Math.sqrt(r * r - dm * dm); if (t0 < bestT) { bestT = t0; best = k; } }
     else if (dm < r + tol && dm / (r + tol) < nearK) { nearK = dm / (r + tol); near = k; }
   }
   return best >= 0 ? best : near;
@@ -819,9 +820,17 @@ function info() {
   if (!loaded) { el.innerHTML = meta.errors.length ? '<span class="err">Could not load the catalogue. Nothing is shown (no stand-in data).</span>' : 'Loading the catalogue…'; return; }
   const d = new Date(simT), live = Math.abs(simT - Date.now()) < 5000, unk = sats.reduce((n, s) => n + (s.swath == null), 0);
   const tn = wallS(); let np = 0; for (const p of popped.values()) if (p.t > 0 && tn - p.t < REVIVE()) np++;
-  if (ROLE === 'tablet') { el.textContent = `${sats.length.toLocaleString()}   ${np ? '× ' + np : ''}`; return; }
   const p = picked >= 0 ? sats[picked] : null;
-  el.textContent = (p ? `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''} · ${p.swath != null ? p.inst + ' · ' + Math.round(p.swath).toLocaleString() + ' km swath' : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + (S.unk === 'est' && p.est != null ? ' · estimated ' + Math.round(p.est).toLocaleString() + ' km (' + p.from + ' angle at its altitude)' : S.unk === 'typ' && p.typ != null ? ' · typical ' + Math.round(p.typ).toLocaleString() + ' km (' + p.from + ')' : ' · shown at minimum')}${p.cat ? ' · ' + p.cat : ''}\n` : '')
+  // the tapped satellite: name, what it is, where it is now, and what it sees (or why its width is not published)
+  const card = p ? [
+    `${p.name}${p.gname && p.gname.toUpperCase() !== p.name.toUpperCase() ? ' (' + p.gname + ')' : ''}`,
+    [p.cat, p.alt != null ? Math.round(p.alt).toLocaleString() + ' km up' : '', 'NORAD ' + p.norad].filter(Boolean).join(' · '),
+    p.swath != null ? `${p.inst} · ${Math.round(p.swath).toLocaleString()} km swath${p.src ? ' (' + p.src + ')' : ''}`
+      : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + (S.unk === 'est' && p.est != null ? ' · estimated ' + Math.round(p.est).toLocaleString() + ' km (' + p.from + ' angle at its altitude)' : S.unk === 'typ' && p.typ != null ? ' · typical ' + Math.round(p.typ).toLocaleString() + ' km (' + p.from + ')' : ' · shown at minimum'),
+    isPopped(p, tn) ? `taken away · back in ${Math.ceil(REVIVE() - (tn - popped.get(p.norad).t))} s` : '',
+  ].filter(Boolean).join('\n') + '\n\n' : '';
+  if (ROLE === 'tablet') { el.textContent = card + `${sats.length.toLocaleString()}   ${np ? '× ' + np : ''}`; return; }
+  el.textContent = card
     + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} ${S.unk === 'est' ? 'estimated' : S.unk === 'typ' ? 'typical' : S.unk === 'hide' ? 'hidden' : 'at minimum'} · ${np} taken away\n`
     + `${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
 }
