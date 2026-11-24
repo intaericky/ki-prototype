@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, iorfar: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0, fill: 90 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30, glow: 0, glowc: '#ffffff', trail: 'ball', trlen: 100 * Math.log(10) / Math.log(300), trgain: 50, tapdo: 'follow' }; // Intae's look (2026-11-24)
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30, glow: 0, glowc: '#ffffff', trail: 'ball', trlen: 100 * Math.log(10) / Math.log(300), trgain: 50, tapdo: 'follow', circ: 40 }; // Intae's look (2026-11-24)
 let S = { ...DEF };
 const KEY = 'lens-v5';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -698,7 +698,7 @@ function pick(R, wantPopped) {
 function tap(x, y) {
   if (!loaded || !aP) return;
   if (S.view === 'lines') { // the nearest circle within a fingertip (about 32 px)
-    let best = -1, bd = 32 * 32;
+    let best = -1, bd = Math.max(32, S.circ / 2 + 14) ** 2;
     for (let k = 0; k < N; k++) { const sp = screenOf(k); if (!sp) continue; const d = (sp[0] - x) ** 2 + (sp[1] - y) ** 2; if (d < bd) { bd = d; best = k; } }
     if (best < 0) { picked = following = -1; return; }
     const j = order[best], s = sats[j], now = wallS(); picked = j;
@@ -744,8 +744,9 @@ function screenOf(k) {
   return [(ovV.x + 1) / 2 * innerWidth, (1 - ovV.y) / 2 * innerHeight];
 }
 // ---------- lines: flat circles, all the same size, drawn on top (one stroke width for everything) ----------
-const ov = $('ov'), og = ov.getContext('2d'), CR = 11, LW = 1.5, ovV = new THREE.Vector3();
+const ov = $('ov'), og = ov.getContext('2d'), LW = 1.5, ovV = new THREE.Vector3();
 function overlay() {
+  const CR = S.circ / 2;
   const dpr = Math.min(devicePixelRatio || 1, 2), W = innerWidth, H = innerHeight;
   if (ov.width !== Math.round(W * dpr) || ov.height !== Math.round(H * dpr)) { ov.width = Math.round(W * dpr); ov.height = Math.round(H * dpr); }
   og.setTransform(dpr, 0, 0, dpr, 0, 0); og.clearRect(0, 0, W, H);
@@ -768,7 +769,7 @@ function overlay() {
   if (following >= 0) { // the followed satellite sits in the middle; what it is, under it
     const t = about(sats[following]);
     og.font = '13px Pretendard, -apple-system, sans-serif'; og.textAlign = 'center'; og.textBaseline = 'top';
-    t.forEach((s, i) => { og.globalAlpha = i ? 0.75 : 1; og.fillText(s, W / 2, H / 2 + CR + 12 + i * 19); });
+    t.forEach((s, i) => { og.globalAlpha = i ? 0.75 : 1; og.fillText(s, W / 2, H / 2 + CR + 14 + i * 19); });
     og.globalAlpha = 1;
   }
 }
@@ -873,7 +874,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed(2) : SCALE().toFixed(1)) + ' real'], ['one', 'One size', 0, 1000, () => (ONEKM() < 10 ? ONEKM().toFixed(1) : Math.round(ONEKM()).toLocaleString()) + ' km'], ['min', 'Minimum', 0, 1000, () => (MINKM() < 10 ? MINKM().toFixed(1) : Math.round(MINKM()).toLocaleString()) + ' km'],
   ['gain', 'Map brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], 
   ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['iorfar', 'Far refraction', 100, 250, () => (S.iorfar / 100).toFixed(2)], ['fill', 'Fill with Earth', 0, 100, () => S.fill ? 'to ' + S.fill + '% of radius' : 'off'], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 300, () => (S.refl / 100).toFixed(1) + '×'],
-  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['glow', 'Glow', 0, 100, () => S.glow ? S.glow + '%' : 'off'], ['trlen', 'Trail length', 0, 100, () => TRAIL_S().toFixed(TRAIL_S() < 1 ? 1 : 0) + ' s half'], ['trgain', 'Trail strength', 0, 100, () => S.trgain + '%'], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
+  ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['glow', 'Glow', 0, 100, () => S.glow ? S.glow + '%' : 'off'], ['trlen', 'Trail length', 0, 100, () => TRAIL_S().toFixed(TRAIL_S() < 1 ? 1 : 0) + ' s half'], ['trgain', 'Trail strength', 0, 100, () => S.trgain + '%'], ['circ', 'Circle size', 10, 120, () => S.circ + ' px'], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
   ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['scale', 'Scale', [['true', 'True width'], ['area', 'Area (√)']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
   ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['tapdo', 'Tap', [['follow', 'Follow'], ['pop', 'Take away']]], ['trail', 'Trail', [['off', 'Off'], ['ball', 'Whole ball'], ['glow', 'Glow only']]], ['unkmat', 'No-swath glass', [['same', 'Same'], ['frost', 'Frosted'], ['smoke', 'Smoky'], ['milk', 'Milky']]], ['fit', 'Minimum is', [['lift', 'Lifted'], ['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['clamp', 'Clamp'], ['1', 'Real'], ['0', 'Hide']]]];
