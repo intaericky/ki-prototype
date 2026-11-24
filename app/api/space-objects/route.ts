@@ -7,6 +7,8 @@ import { unstable_cache } from "next/cache";
 //   ?part=debris  every object named "DEB"        (GP NAME=DEB) + the four big breakup groups as a fallback
 //   ?part=rocket  every object named "R/B"        (GP NAME=R/B)
 //   ?part=eo      Earth-observation and weather payloads with their names (GP GROUP=weather, resource, planet), for /coverage
+//   ?part=gcateo  every Earth-observation payload still operating, from Jonathan McDowell's GCAT (psatcat Category EOSCI,
+//                 IMG, IMG-R, MET, MET-RO; TOp "*"), joined to US catalogue numbers via GCAT satcat (Status O), for /lens
 //   ?part=satcat  official OBJECT_TYPE, RCS (m²), owner and launch date for every object still in orbit
 // Each part is kept in Next's shared data cache for 2 h (one CelesTrak download per part per 2 h for the whole site,
 // across regions and deployments; CelesTrak answers 403 to anyone fetching the same data more often). A failed
@@ -65,6 +67,36 @@ async function fetchPart(part: string) {
   const sources: string[] = [];
   const errors: string[] = [];
   let rows: unknown[] = [];
+  if (part === "gcateo") {
+    const tsv = async (u: string) => {
+      const r = await fetch(u, { cache: "no-store", headers: UA });
+      if (!r.ok) throw new Error(`GCAT ${u} ${r.status}`);
+      const lines = (await r.text()).split(/\r?\n/);
+      const hi = lines.findIndex((l) => l.startsWith("#JCAT"));
+      if (hi < 0) throw new Error(`GCAT ${u}: no header`);
+      const head = lines[hi].replace(/^#/, "").split("\t").map((h) => h.trim());
+      return lines.slice(hi + 1).filter((l) => l && !l.startsWith("#")).map((l) => { const v = l.split("\t"); const o: Record<string, string> = {}; head.forEach((h, i) => (o[h] = (v[i] ?? "").trim())); return o; });
+    };
+    const EO = new Set(["EOSCI", "IMG", "IMG-R", "MET", "MET-RO"]);
+    const pay = await tsv("https://planet4589.org/space/gcat/tsv/cat/psatcat.tsv");
+    const want = new Map<string, Record<string, string>>();
+    for (const o of pay) {
+      const cats = (o.Category || "").split("/").map((c) => c.replace(/[?*]/g, "").trim());
+      if (cats.some((c) => EO.has(c)) && (o.TOp || "").trim() === "*") want.set(o.JCAT, o);
+    }
+    const sat = await tsv("https://planet4589.org/space/gcat/tsv/cat/satcat.tsv");
+    for (const o of sat) {
+      const p = want.get(o.JCAT);
+      if (!p || !/^O/.test(o.Status || "")) continue;
+      const n = parseInt(o.Satcat, 10);
+      if (!n) continue;
+      // [norad, name, category, class (A amateur, B business, C civil, D defence), state]
+      rows.push([n, p.Name || o.Name, p.Category, p.Class || "", o.State || ""]);
+    }
+    sources.push(`GCAT psatcat + satcat (${rows.length} operating Earth-observation payloads)`);
+    if (!rows.length) throw new Error("GCAT: no rows");
+    return { part, fetched: new Date().toISOString(), sources, errors, count: rows.length, rows };
+  }
   if (part === "satcat") {
     const r = await fetch("https://celestrak.org/pub/satcat.csv", { cache: "no-store", headers: UA });
     if (!r.ok) throw new Error(`CelesTrak SATCAT ${r.status}`);
@@ -111,7 +143,7 @@ const cachedPart = (part: string) => unstable_cache(() => fetchPart(part), ["spa
 
 export async function GET(req: Request) {
   const raw = new URL(req.url).searchParams.get("part") ?? "active";
-  const part = ["active", "debris", "rocket", "satcat", "eo"].includes(raw) ? raw : "active";
+  const part = ["active", "debris", "rocket", "satcat", "eo", "gcateo"].includes(raw) ? raw : "active";
   try {
     const body = await cachedPart(part);
     return NextResponse.json(body, { headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" } });
