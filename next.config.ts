@@ -22,7 +22,8 @@ const nextConfig: NextConfig = {
         destination: "/entangled/index.html",
       })),
       // Refraction: every tracked object as a glass ball; Earth is black and shows only through the glass
-      ...["refraction", "refraction-display", "refraction-tablet"].map((page) => ({
+      // Coverage: the same glass, only Earth-observation satellites, each as wide as the ground it images
+      ...["refraction", "refraction-display", "refraction-tablet", "coverage", "coverage-display", "coverage-tablet"].map((page) => ({
         source: `/${page}`,
         destination: "/refraction/index.html",
       })),

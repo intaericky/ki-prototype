@@ -18,6 +18,15 @@ const PAGES = [
     ],
   },
   {
+    group: "Coverage",
+    note: "Only real Earth-observation and weather satellites as glass balls, each as wide as the strip of ground it actually images (published swath, ×1 = real).",
+    links: [
+      { href: "/coverage", title: "Studio", text: "Glass, lines, 360 and sphere preview. The settings list every satellite's instrument, swath and source." },
+      { href: "/coverage-tablet", title: "Tablet", text: "Minimal lines: turn, pinch to zoom, tap a circle to pop it." },
+      { href: "/coverage-display", title: "Sphere display", text: "The 1920x1080 equirect frame for the LED sphere, synced with the coverage tablet." },
+    ],
+  },
+  {
     group: "Refraction",
     note: "Every tracked object as a glass ball. Earth is black: its surface shows only through the glass, and popping a ball leaves only black.",
     links: [
