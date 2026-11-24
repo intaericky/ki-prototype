@@ -90,8 +90,8 @@ async function fetchPart(part: string) {
       if (!p || !/^O/.test(o.Status || "")) continue;
       const n = parseInt(o.Satcat, 10);
       if (!n) continue;
-      // [norad, name, category, class (A amateur, B business, C civil, D defence), state]
-      rows.push([n, p.Name || o.Name, p.Category, p.Class || "", o.State || ""]);
+      // [norad, name, category, class (A amateur, B business, C civil, D defence), state, owner (GCAT org code), program]
+      rows.push([n, p.Name || o.Name, p.Category, p.Class || "", o.State || "", o.Owner || "", p.Program || ""]);
     }
     sources.push(`GCAT psatcat + satcat (${rows.length} operating Earth-observation payloads)`);
     if (!rows.length) throw new Error("GCAT: no rows");

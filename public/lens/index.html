@@ -37,7 +37,7 @@
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
+<canvas id="c"></canvas><canvas id="ov" style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
 <div id="info"></div>
 <button id="toggle">Settings</button>
 <div id="panel"></div>
@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, iorfar: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0, fill: 90 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30, glow: 0, glowc: '#ffffff', trail: 'off', trlen: 50, trgain: 70 }; // Intae's look (2026-11-24)
+const DEF = { view: 'glass', shape: 'sphere', place: 'orbit', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 738, fit: 'lift', res: 100, q360: 100, light: 'day', unk: 'est', unkmat: 'same', geo: '1', spd: 25 * Math.log10(120),  ...CROWN, gain: 150, lift: 150, iorfar: 101, disp: 10, refl: 300, rim: 50, revive: 30, glow: 0, glowc: '#ffffff', trail: 'ball', trlen: 100 * Math.log(10) / Math.log(300), trgain: 50, tapdo: 'follow' }; // Intae's look (2026-11-24)
 let S = { ...DEF };
 const KEY = 'lens-v5';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -391,11 +391,29 @@ blit.frustumCulled = false; blitScene.add(blit);
 // shown behind the balls of this frame: out = now + mem × strength where no ball is now
 const trailRT = () => new THREE.WebGLRenderTarget(16, 16, { depthBuffer: false, type: THREE.HalfFloatType });
 const trail = { a: trailRT(), b: trailRT(), out: trailRT(), src: trailRT(), fresh: true };
-const trailMat = new THREE.ShaderMaterial({ uniforms: { tNow: { value: null }, tMem: { value: null }, uFade: { value: 0.9 }, uMode: { value: 1 }, uGlowC: U.uGlowC, uGlowK: { value: 1 } }, depthTest: false, depthWrite: false,
+// The memory stays with the orbits, not the screen: when the view turns, each pixel reads the memory where the same
+// place was last frame (360: exact rotation; 3D: assuming it lies on a shell around the Earth at the balls' height)
+const trailMat = new THREE.ShaderMaterial({ uniforms: { tNow: { value: null }, tMem: { value: null }, uFade: { value: 0.9 }, uMode: { value: 1 }, uGlowC: U.uGlowC, uGlowK: { value: 1 },
+    uProj: { value: 0 }, uRe: { value: new THREE.Matrix3() }, uInvVP: { value: new THREE.Matrix4() }, uPrevVP: { value: new THREE.Matrix4() }, uCam: { value: new THREE.Vector3() }, uShell: { value: 7000 } }, depthTest: false, depthWrite: false,
   vertexShader: `varying vec2 vUv; void main(){ vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-  fragmentShader: `uniform sampler2D tNow, tMem; uniform float uFade, uGlowK; uniform int uMode; uniform vec3 uGlowC; varying vec2 vUv;
+  fragmentShader: `uniform sampler2D tNow, tMem; uniform float uFade, uGlowK, uShell; uniform int uMode, uProj; uniform vec3 uGlowC, uCam; uniform mat3 uRe; uniform mat4 uInvVP, uPrevVP; varying vec2 vUv;
+    vec2 prevUv() {
+      if (uProj == 1) { // equirect frame
+        float lo = (vUv.x - 0.5) * 6.2831853, la = (vUv.y - 0.5) * 3.1415927;
+        vec3 p = uRe * vec3(cos(la) * cos(lo), sin(la), -cos(la) * sin(lo));
+        return vec2(atan(-p.z, p.x) / 6.2831853 + 0.5, asin(clamp(p.y, -1.0, 1.0)) / 3.1415927 + 0.5);
+      }
+      if (uProj == 2) { // perspective: through this pixel to the shell, then into last frame's view
+        vec4 w = uInvVP * vec4(vUv * 2.0 - 1.0, 1.0, 1.0); vec3 rd = normalize(w.xyz / w.w - uCam);
+        float b = dot(uCam, rd), h = b * b - dot(uCam, uCam) + uShell * uShell; if (h < 0.0) return vUv;
+        vec4 c = uPrevVP * vec4(uCam + rd * (-b - sqrt(h)), 1.0); return c.xy / c.w * 0.5 + 0.5;
+      }
+      return vUv;
+    }
     void main(){ vec4 n = texture2D(tNow, vUv); vec3 lit = uMode == 2 ? n.a * uGlowC * uGlowK : n.rgb;
-      gl_FragColor = vec4(max(texture2D(tMem, vUv).rgb * uFade, lit), 1.0); }` });
+      vec2 q = prevUv(); vec3 m = (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) && uProj == 2 ? vec3(0.0) : texture2D(tMem, q).rgb;
+      gl_FragColor = vec4(max(m * uFade, lit), 1.0); }` });
+const prevRot = new THREE.Matrix3(), prevVP = new THREE.Matrix4(); let prevProj = 0;
 const compMat = new THREE.ShaderMaterial({ uniforms: { tNow: { value: null }, tMem: { value: null }, uK: { value: 0.7 } }, depthTest: false, depthWrite: false,
   vertexShader: `varying vec2 vUv; void main(){ vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
   fragmentShader: `uniform sampler2D tNow, tMem; uniform float uK; varying vec2 vUv;
@@ -408,7 +426,15 @@ function runTrail(src, w, h, dt, target) {
   for (const k of ['a', 'b', 'out']) if (trail[k].width !== w || trail[k].height !== h) { trail[k].setSize(w, h); trail.fresh = true; }
   if (trail.fresh) { for (const k of ['a', 'b']) { renderer.setRenderTarget(trail[k]); renderer.clear(); } trail.fresh = false; }
   trailMat.uniforms.tNow.value = src; trailMat.uniforms.tMem.value = trail.a.texture;
-  trailMat.uniforms.uFade.value = Math.pow(0.5, dt / TRAIL_S()); trailMat.uniforms.uMode.value = S.trail === 'glow' ? 2 : 1; trailMat.uniforms.uGlowK.value = Math.max(S.glow / 100, 0.6);
+  trailMat.uniforms.uFade.value = Math.pow(0.5, dt / TRAIL_S());
+  const tu = trailMat.uniforms;
+  if (target === null && S.view === 'glass') { // 3D
+    const vp = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    tu.uProj.value = prevProj === 2 ? 2 : 0; tu.uInvVP.value.multiplyMatrices(camera.matrixWorld, camera.projectionMatrixInverse); tu.uCam.value.copy(camera.position);
+    tu.uPrevVP.value.copy(prevVP); tu.uShell.value = S.place === 'orbit' ? RE + 700 : RE + 150; prevVP.copy(vp); prevProj = 2;
+  } else { // 360 frame: last frame's rotation, transposed, times this one
+    tu.uProj.value = prevProj === 1 ? 1 : 0; tu.uRe.value.copy(prevRot).transpose().multiply(rot360M); prevRot.copy(rot360M); prevProj = 1;
+  } trailMat.uniforms.uMode.value = S.trail === 'glow' ? 2 : 1; trailMat.uniforms.uGlowK.value = Math.max(S.glow / 100, 0.6);
   renderer.setRenderTarget(trail.b); renderer.render(trailScene, eqCam);
   [trail.a, trail.b] = [trail.b, trail.a];
   compMat.uniforms.tNow.value = src; compMat.uniforms.tMem.value = trail.a.texture; compMat.uniforms.uK.value = S.trgain / 100;
@@ -425,7 +451,7 @@ ballScene.add(ballMesh);
 // ---------- catalogue ----------
 // sats: every Earth-observation satellite with a public orbit. swath = published nadir swath (km) or null
 let sats = [], catQ = [], noOrbit = [], T0 = Date.now(), simT = Date.now(), loaded = false, meta = { errors: [], sources: [] };
-let N = 0, order = [], aC = null, aF = null, aP = null, meshes = null;
+let N = 0, order = [], rank = new Int32Array(0), aC = null, aF = null, aP = null, meshes = null;
 // ---------- pop: a tap takes a ball away; it comes back by itself after Revive seconds, or when its x is tapped ----------
 const popped = new Map(); // norad → { t: wall s popped, ev: wall ms of the last change }
 const wallS = () => Date.now() / 1000, REVIVE = () => Math.max(3, S.revive);
@@ -454,6 +480,7 @@ function radiusKm(s) {
 }
 function reorder() { // the smallest domes are drawn last, so every satellite stays visible on top of the wide ones
   order = sats.map((s, j) => j).sort((a, b) => radiusKm(sats[b]) - radiusKm(sats[a]));
+  rank = new Int32Array(order.length); order.forEach((j, k) => { rank[j] = k; });
   if (aF) { order.forEach((j, k) => { aF.array[k] = sats[j].swath == null ? 1 : 0; }); aF.needsUpdate = true; }
 }
 function build() {
@@ -543,7 +570,7 @@ function ingest(parts) {
     const names = [name, gr?.[1] || ''].flatMap((x) => [x, ...[...x.matchAll(/\(([^)]+)\)/g)].map((q) => q[1]), x.replace(/\s*\(.*?\)\s*/g, ' ').trim()]).filter(Boolean).map((x) => x.toUpperCase());
     let m = null; for (const x of names) { m = matchSwath(x); if (m) break; }
     const cat = gr?.[2] || '';
-    const o = { norad, name, gname: gr?.[1] || '', cat: gr?.[2] || (parts.eo ? 'CelesTrak EO group' : ''), state: gr?.[4] || '', ep, mm, ecc, inc, raan, argp, ma, ndot: Number.isFinite(ndot) ? ndot : 0, swath: null, inst: '', src: '' };
+    const o = { norad, name, gname: gr?.[1] || '', cat: gr?.[2] || (parts.eo ? 'CelesTrak EO group' : ''), state: gr?.[4] || '', owner: gr?.[5] || '', prog: gr?.[6] || '', cls: gr?.[3] || '', year: /^\d{4}/.test(intl || '') ? +intl.slice(0, 4) : null, ep, mm, ecc, inc, raan, argp, ma, ndot: Number.isFinite(ndot) ? ndot : 0, swath: null, inst: '', src: '' };
     if (m?.none) { o.inst = m.inst; o.src = m.src; o.why = 'ro'; m = null; }
     else if (m) {
       o.inst = m.inst; o.src = m.src; o.disk = !!m.disk;
@@ -649,9 +676,63 @@ function tap(x, y) {
   const R = rayFromTap(x, y); if (!R) return;
   const now = wallS();
   let k = pick(R, false);
+  if (k >= 0 && S.tapdo === 'follow') { following = picked = order[k]; return; } // follow: it stays in front of the audience
   if (k >= 0) { const s = sats[order[k]]; picked = order[k]; setPop(s.norad, now); sendPop(s.norad, now); update(); return; }
   if (S.view === 'lines') { k = pick(R, true); if (k >= 0) { const s = sats[order[k]], t = now - REVIVE() - 1; picked = order[k]; setPop(s.norad, t); sendPop(s.norad, t); update(); return; } }
-  picked = -1;
+  picked = following = -1;
+}
+// ---------- follow: the tapped satellite stays in front of the audience; the Earth and the others turn past it ----------
+let following = -1, followLookT = 0;
+function followTick() {
+  if (following < 0 || !aC || following >= sats.length) return;
+  const k = rank[following], a = aC.array, L = Math.hypot(a[k * 4], a[k * 4 + 1], a[k * 4 + 2]); if (!(L > 0)) return;
+  const n = new THREE.Vector3(a[k * 4] / L, a[k * 4 + 1] / L, a[k * 4 + 2] / L);
+  if (S.view === 'glass' || S.view === 'lines') { view.pitch = Math.asin(Math.max(-1, Math.min(1, n.y))); view.yaw = Math.atan2(n.x, n.z); return; } // lookFromCamera passes it on to the sphere
+  const up = new THREE.Vector3(0, 1, 0).addScaledVector(n, -n.y); if (up.lengthSq() < 1e-6) up.set(1, 0, 0); up.normalize();
+  rot360.setFromRotationMatrix(new THREE.Matrix4().makeBasis(n, up, new THREE.Vector3().crossVectors(n, up)));
+  if (performance.now() - followLookT > 50) { followLookT = performance.now(); sendLook(true); }
+}
+// what the satellite is: from GCAT (Jonathan McDowell): its category, operator class, state and owner
+const PURPOSE = { IMG: 'photographs the ground', 'IMG-R': 'radar images of the ground, day and night, through cloud', MET: 'watches the weather', EOSCI: 'measures the Earth for science', 'MET-RO': 'sounds the air with bent GPS signals' };
+const CLASS = { A: 'amateur or university', B: 'commercial', C: 'civil government', D: 'military' };
+const STATE = { US: 'United States', CN: 'China', RU: 'Russia', SU: 'Soviet Union', J: 'Japan', IN: 'India', F: 'France', D: 'Germany', I: 'Italy', E: 'Spain', UK: 'United Kingdom', CA: 'Canada', KR: 'South Korea', KP: 'North Korea', TW: 'Taiwan', IL: 'Israel', BR: 'Brazil', AR: 'Argentina', AU: 'Australia', NL: 'Netherlands', 'I-ESA': 'European Space Agency', 'I-EUM': 'EUMETSAT (Europe)', 'I-EU': 'European Union', TH: 'Thailand', VN: 'Vietnam', SG: 'Singapore', AE: 'United Arab Emirates', SA: 'Saudi Arabia', TR: 'Türkiye', EG: 'Egypt', NG: 'Nigeria', DZ: 'Algeria', ZA: 'South Africa', KZ: 'Kazakhstan', UZ: 'Uzbekistan', PK: 'Pakistan', ID: 'Indonesia', MY: 'Malaysia', PH: 'Philippines', MX: 'Mexico', CL: 'Chile', PE: 'Peru', BD: 'Bangladesh', NO: 'Norway', FI: 'Finland', DK: 'Denmark', S: 'Sweden', PL: 'Poland', L: 'Luxembourg', CH: 'Switzerland', AT: 'Austria', B: 'Belgium', GR: 'Greece', P: 'Portugal', IR: 'Iran', BY: 'Belarus', UA: 'Ukraine', AZ: 'Azerbaijan', LT: 'Lithuania', NZ: 'New Zealand', QA: 'Qatar', KE: 'Kenya', MN: 'Mongolia', NP: 'Nepal', LK: 'Sri Lanka', BT: 'Bhutan', GT: 'Guatemala', BO: 'Bolivia', EC: 'Ecuador', CO: 'Colombia', VE: 'Venezuela', HU: 'Hungary', CZ: 'Czechia', SK: 'Slovakia', SI: 'Slovenia', ET: 'Ethiopia', RW: 'Rwanda', GH: 'Ghana', MA: 'Morocco', TN: 'Tunisia', JO: 'Jordan', OM: 'Oman', KW: 'Kuwait', BH: 'Bahrain', IQ: 'Iraq', TM: 'Turkmenistan', BG: 'Bulgaria', RO: 'Romania', EE: 'Estonia', LV: 'Latvia', IE: 'Ireland', IS: 'Iceland', MU: 'Mauritius', SN: 'Senegal', ZW: 'Zimbabwe', UG: 'Uganda', SD: 'Sudan', AO: 'Angola', CR: 'Costa Rica', PY: 'Paraguay', UY: 'Uruguay' };
+function about(p) {
+  const pur = [...new Set((p.cat || '').split('/').map((c) => PURPOSE[c.replace(/[?*]/g, '').trim()]).filter(Boolean))].join(', ') || 'observes the Earth';
+  const who = [STATE[p.state] || p.state, CLASS[p.cls], p.owner && p.owner !== p.state ? p.owner : ''].filter(Boolean).join(' · ');
+  return [p.name, who, pur, [p.alt != null ? Math.round(p.alt).toLocaleString() + ' km up' : '', p.year ? 'launched ' + p.year : ''].filter(Boolean).join(' · ')].filter(Boolean);
+}
+// ---------- lines: flat circles, all the same size, drawn on top (one stroke width for everything) ----------
+const ov = $('ov'), og = ov.getContext('2d'), CR = 7, LW = 1.5, ovV = new THREE.Vector3();
+function overlay() {
+  const dpr = Math.min(devicePixelRatio || 1, 2), W = innerWidth, H = innerHeight;
+  if (ov.width !== Math.round(W * dpr) || ov.height !== Math.round(H * dpr)) { ov.width = Math.round(W * dpr); ov.height = Math.round(H * dpr); }
+  og.setTransform(dpr, 0, 0, dpr, 0, 0); og.clearRect(0, 0, W, H);
+  const lines = S.view === 'lines', persp = lines || S.view === 'glass';
+  if (!loaded || !aC || !persp || (!lines && following < 0)) return;
+  og.strokeStyle = '#fff'; og.fillStyle = '#fff'; og.lineWidth = LW;
+  const cp = camera.position, c2 = cp.lengthSq(), a = aC.array;
+  if (lines) {
+    const f = (H / 2) / Math.tan(camera.fov / 2 * D2R), R = Math.tan(Math.asin(Math.min(1, RE / Math.sqrt(c2)))) * f;
+    og.beginPath(); og.arc(W / 2, H / 2, R, 0, TAU); og.stroke();
+    og.beginPath();
+    for (let k = 0; k < N; k++) {
+      const pop = aP.array[k] > 0; if (!pop && a[k * 4 + 3] <= 0) continue;
+      const x = a[k * 4] - cp.x, y = a[k * 4 + 1] - cp.y, z = a[k * 4 + 2] - cp.z, len = Math.hypot(x, y, z);
+      const b = (cp.x * x + cp.y * y + cp.z * z) / len, h = b * b - c2 + RE * RE;
+      if (h > 0 && -b - Math.sqrt(h) > 0 && -b - Math.sqrt(h) < len) continue; // behind the Earth
+      ovV.set(a[k * 4], a[k * 4 + 1], a[k * 4 + 2]).project(camera); if (ovV.z > 1) continue;
+      const sx = (ovV.x + 1) / 2 * W, sy = (1 - ovV.y) / 2 * H, q = CR * 0.7071;
+      if (pop) { og.moveTo(sx - q, sy - q); og.lineTo(sx + q, sy + q); og.moveTo(sx - q, sy + q); og.lineTo(sx + q, sy - q); }
+      else { og.moveTo(sx + CR, sy); og.arc(sx, sy, CR, 0, TAU); }
+    }
+    og.stroke();
+  }
+  if (following >= 0) { // the followed satellite sits in the middle; what it is, under it
+    const t = about(sats[following]);
+    og.font = '13px Pretendard, -apple-system, sans-serif'; og.textAlign = 'center'; og.textBaseline = 'top';
+    t.forEach((s, i) => { og.globalAlpha = i ? 0.75 : 1; og.fillText(s, W / 2, H / 2 + CR + 12 + i * 19); });
+    og.globalAlpha = 1;
+  }
 }
 
 // ---------- touch: one finger turns, two fingers zoom, a tap pops ----------
@@ -677,6 +758,7 @@ document.addEventListener('touchmove', (e) => { if (e.target === canvas) e.preve
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
 canvas.addEventListener('wheel', (e) => { zoom(Math.exp(e.deltaY * 0.0012)); e.preventDefault(); }, { passive: false });
 function turn(dx, dy) {
+  following = -1; // turning lets go
   if (S.view === 'ball') { ball.yaw -= dx * 0.006; ball.pitch = Math.max(-1.45, Math.min(1.45, ball.pitch + dy * 0.006)); return; }
   if (S.view === '360') {
     const k = Math.PI / innerHeight;
@@ -711,7 +793,9 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
   const mqtt = m.default || m;
   mq = mqtt.connect(Q.get('broker') || 'wss://broker.emqx.io:8084/mqtt', { connectTimeout: 30000, keepalive: 30 });
   mq.on('close', () => { relayOk = false; }); mq.on('offline', () => { relayOk = false; });
-  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/look', TOPIC + '/clock', TOPIC + '/pop', TOPIC + '/pops', TOPIC + '/revive']); if (ROLE === 'studio') sendRevive(); });
+  mq.on('connect', () => { relayOk = true; mq.subscribe([TOPIC + '/look', TOPIC + '/clock', TOPIC + '/pop', TOPIC + '/pops', TOPIC + '/revive']); if (ROLE === 'studio') sendRevive();
+    // nobody has turned the sphere in this room yet: the first tablet or studio in a 3D view sets it
+    setTimeout(() => { if (!gotLook && camQ && (S.view === 'glass' || S.view === 'lines')) { rot360.copy(camQ); sendLook(true); } }, 2500); });
   mq.on('message', (t, msg) => {
     let d; try { d = JSON.parse(msg.toString()); } catch { return; }
     if (!d || d.by === ME) return;
@@ -719,15 +803,21 @@ if (!Q.has('solo') && !TEST) import('/sphere-assets/vendor/mqtt.esm.js').then((m
     if (k === '/pop') { if (Number.isFinite(d.n) && Number.isFinite(d.t)) setPop(d.n, d.t, d.ev || Date.now()); }
     else if (k === '/pops') { if (Array.isArray(d.list)) for (const e of d.list) { if (Array.isArray(e) && e.length === 3 && e.every(Number.isFinite)) setPop(e[0], e[1], e[2]); } }
     else if (k === '/revive') { if (Number.isFinite(d.s) && ROLE !== 'studio') S.revive = d.s; }
-    else if (k === '/look') { if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size) rot360.fromArray(d.q).normalize(); }
+    else if (k === '/look') { if (Array.isArray(d.q) && d.q.length === 4 && d.q.every(Number.isFinite) && !ptrs.size && following < 0) {
+      rot360.fromArray(d.q).normalize(); gotLook = true;
+      // the 3D views take the sphere's turn too, so tablet and sphere always show the same face
+      if (S.view === 'glass' || S.view === 'lines') { const v = new THREE.Vector3(1, 0, 0).applyQuaternion(rot360); view.pitch = Math.asin(Math.max(-1, Math.min(1, v.y))); view.yaw = Math.atan2(v.x, v.z); camQ = null; adopted = true; }
+    } }
     else if (k === '/clock') { if ([d.wall0, d.sim0, d.speed].every(Number.isFinite)) { clock = d; S.spd = Math.log10(Math.max(1, d.speed)) * 25; panelSync(); } }
   });
 }).catch(() => {});
-let camQ = null, lookDirty = false;
+let camQ = null, lookDirty = false, adopted = false, gotLook = false;
 function lookFromCamera() { // the point facing the viewer becomes the LED frame's centre
   const v = camera.position.clone().normalize(), upv = camera.up.clone().applyQuaternion(camera.quaternion).normalize(), z = new THREE.Vector3().crossVectors(v, upv);
   const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(v, upv, z));
-  if (!camQ) { camQ = q.clone(); return; } // opening a page doesn't move the sphere
+  if (!camQ) { // opening a page doesn't move the sphere; after taking the sphere's turn, only its roll is evened out (north up)
+    camQ = q.clone(); if (adopted && q.angleTo(rot360) > 0.01) { rot360.copy(q); lookDirty = true; } adopted = false; return;
+  }
   if (q.angleTo(camQ) > 1e-4) { camQ.copy(q); rot360.copy(q); lookDirty = true; }
   if (lookDirty && performance.now() - lookT >= 50) { lookDirty = false; sendLook(true); }
 }
@@ -740,7 +830,7 @@ const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed
   ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['glow', 'Glow', 0, 100, () => S.glow ? S.glow + '%' : 'off'], ['trlen', 'Trail length', 0, 100, () => TRAIL_S().toFixed(TRAIL_S() < 1 ? 1 : 0) + ' s half'], ['trgain', 'Trail strength', 0, 100, () => S.trgain + '%'], ['revive', 'Comes back', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
   ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['scale', 'Scale', [['true', 'True width'], ['area', 'Area (√)']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
-  ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['trail', 'Trail', [['off', 'Off'], ['ball', 'Whole ball'], ['glow', 'Glow only']]], ['unkmat', 'No-swath glass', [['same', 'Same'], ['frost', 'Frosted'], ['smoke', 'Smoky'], ['milk', 'Milky']]], ['fit', 'Minimum is', [['lift', 'Lifted'], ['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['clamp', 'Clamp'], ['1', 'Real'], ['0', 'Hide']]]];
+  ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['tapdo', 'Tap', [['follow', 'Follow'], ['pop', 'Take away']]], ['trail', 'Trail', [['off', 'Off'], ['ball', 'Whole ball'], ['glow', 'Glow only']]], ['unkmat', 'No-swath glass', [['same', 'Same'], ['frost', 'Frosted'], ['smoke', 'Smoky'], ['milk', 'Milky']]], ['fit', 'Minimum is', [['lift', 'Lifted'], ['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['clamp', 'Clamp'], ['1', 'Real'], ['0', 'Hide']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
@@ -749,7 +839,7 @@ function panelBuild() {
     + `<div class="row"><label></label><div class="seg"><button id="smallest">Min = smallest swath</button><button id="crown">Crown glass</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
-    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; <b>Fill with Earth</b> lowers the refraction of a ball only as far as needed for the Earth beneath it to fill it out to that share of its radius (far balls see a small Earth, so they need weaker glass); 0 = off; <b>Dispersion</b> is given for crown glass and scales with each ball's refraction (n − 1); overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>lifted</b> (the smallest published swath becomes the minimum and widths up to 10× the minimum spread on a log curve, keeping their order and ratios; wider ones stay true), <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to take it away (it shows only black) and name it; it <b>comes back</b> by itself after that many seconds, or when its x is tapped in Lines. Taps are shared with the tablet and the LED display. <b>Glow</b> gives every ball light of its own (Glow colour). <b>Trail</b> leaves an afterimage that fades by half every <b>Trail length</b>: of the <b>whole ball</b> (the Earth it shows smears along its path) or of its <b>glow only</b>.</div>
+    <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; <b>Fill with Earth</b> lowers the refraction of a ball only as far as needed for the Earth beneath it to fill it out to that share of its radius (far balls see a small Earth, so they need weaker glass); 0 = off; <b>Dispersion</b> is given for crown glass and scales with each ball's refraction (n − 1); overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>lifted</b> (the smallest published swath becomes the minimum and widths up to 10× the minimum spread on a log curve, keeping their order and ratios; wider ones stay true), <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. <b>Tap</b>: <b>Follow</b> keeps the tapped satellite in front of the audience (the Earth and the others turn past it, the LED sphere too) and shows what it is under it; turning lets go. <b>Take away</b>: tap a ball to take it away (it shows only black) and name it; it <b>comes back</b> by itself after that many seconds, or when its x is tapped in Lines. Taps are shared with the tablet and the LED display. <b>Glow</b> gives every ball light of its own (Glow colour). <b>Trail</b> leaves an afterimage that fades by half every <b>Trail length</b>: of the <b>whole ball</b> (the Earth it shows smears along its path) or of its <b>glow only</b>.</div>
     <div class="list" id="lists"></div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit' || k === 'sizing' || k === 'scale') reorder(); save(); panelSync(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min' || k === 'one') reorder(); if (k === 'res') resize(); if (k === 'revive') sendRevive(); save(); panelSync(); });
@@ -808,7 +898,7 @@ function frame(now) {
 }
 function render() {
   if (loaded && Math.abs(simT - T0) > 432e5) { T0 = simT; catQ = sats.map((s) => ORB.prep(s, T0)); }
-  if (loaded) update();
+  if (loaded) { update(); followTick(); }
   U.uEnv.value = 0; U.uUnkMat.value = { same: 0, frost: 1, smoke: 2, milk: 3 }[S.unkmat] ?? 0; U.uGain.value = S.gain / 100; U.uLift.value = S.lift / 100; U.uIor.value = S.ior / 100; U.uIorFar.value = S.iorfar / 100; U.uFill.value = S.fill / 100; U.uDisp.value = S.disp / 1000; U.uRefl.value = S.refl / 100; U.uRim.value = S.rim / 100; U.uAbs.value = S.abs / 25; U.uFrost.value = S.frost / 20; U.uTint.value.set(S.tint); U.uGlow.value = S.glow / 100; U.uGlowC.value.set(S.glowc); U.uLight.value = S.light === 'sun' ? 1 : 0;
   const rot = -ORB.gmst(simT), se = sunEci(simT), cr = Math.cos(rot), sr = Math.sin(rot);
   U.uSun.value.set(cr * se[0] - sr * se[1], se[2], -(sr * se[0] + cr * se[1]));
@@ -816,10 +906,10 @@ function render() {
   if (v === 'glass' || v === 'lines') {
     camera.position.set(Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch), Math.cos(view.pitch) * Math.cos(view.yaw)).multiplyScalar(view.dist);
     camera.lookAt(0, 0, 0);
-    camera.near = Math.max(1, (view.dist - RE - 1500) * 0.3); camera.far = view.dist + 20000; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+    camera.near = Math.max(1, (view.dist - RE - 1500) * 0.3); camera.far = view.dist + 60000; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
     U.uPxK.value = 2 * Math.tan(camera.fov / 2 * D2R) / (innerHeight * renderer.getPixelRatio());
-    earthLine.visible = v === 'lines';
-    if (meshes) { meshes.ring.visible = meshes.xs.visible = v === 'lines'; xMat.uniforms.uView.value.set(innerWidth, innerHeight); }
+    earthLine.visible = false;
+    if (meshes) { meshes.ring.visible = meshes.xs.visible = false; xMat.uniforms.uView.value.set(innerWidth, innerHeight); } // lines are drawn flat (overlay)
     lookFromCamera();
     if (v === 'glass') {
       const sz = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -850,7 +940,7 @@ function render() {
       ballCam.lookAt(0, 0, 0); renderer.setClearColor(0x050505, 1); renderer.clear(); renderer.render(ballScene, ballCam); renderer.setClearColor(0x000000, 1);
     }
   }
-  info();
+  overlay(); info();
 }
 function info() {
   const el = $('info');
@@ -866,13 +956,18 @@ function info() {
       : { ro: 'radio occultation, no imaging swath', secret: 'military, swath not published', unknown: 'swath not found' }[p.why] + (S.unk === 'est' && p.est != null ? ' · estimated ' + Math.round(p.est).toLocaleString() + ' km (' + p.from + ' angle at its altitude)' : S.unk === 'typ' && p.typ != null ? ' · typical ' + Math.round(p.typ).toLocaleString() + ' km (' + p.from + ')' : ' · shown at minimum'),
     isPopped(p, tn) ? `taken away · back in ${Math.ceil(REVIVE() - (tn - popped.get(p.norad).t))} s` : '',
   ].filter(Boolean).join('\n') + '\n\n' : '';
-  if (ROLE === 'tablet') { el.textContent = card + `${sats.length.toLocaleString()}   ${np ? '× ' + np : ''}`; return; }
+  if (ROLE === 'tablet') { el.textContent = (S.tapdo === 'pop' ? card : '') + `${sats.length.toLocaleString()}   ${np ? '× ' + np : ''}`; return; }
   el.textContent = card
     + `${sats.length.toLocaleString()} Earth-observation satellites · ${(sats.length - unk).toLocaleString()} real swath · ${unk.toLocaleString()} ${S.unk === 'est' ? 'estimated' : S.unk === 'typ' ? 'typical' : S.unk === 'hide' ? 'hidden' : 'at minimum'} · ${np} taken away\n`
     + `${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps${ROOM ? ' · room ' + ROOM : ''}`;
 }
 
-if (TEST) window.__lens = { ingest, render, tap, step: (ms) => frame(last + ms), S, view, rot360, sats: () => sats, setView: (k) => { S.view = k; } };
+if (TEST) window.__lens = { ingest, render, tap, step: (ms) => frame(last + ms), following: () => following, probe: () => { // screen offset on the tablet vs position in the LED frame, for a few visible satellites
+  const out = [], m = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(rot360)).transpose(), a = aC.array;
+  for (let k = 0; k < N && out.length < 4; k += 7) { const v = new THREE.Vector3(a[k * 4], a[k * 4 + 1], a[k * 4 + 2]); if (v.dot(camera.position) < 0) continue;
+    const sp = v.clone().project(camera), l = v.clone().normalize().applyMatrix3(m);
+    out.push([+sp.x.toFixed(2), +sp.y.toFixed(2), +(Math.atan2(-l.z, l.x) / Math.PI).toFixed(2), +(Math.asin(l.y) / (Math.PI / 2)).toFixed(2)]); }
+  return out; }, S, view, rot360, sats: () => sats, setView: (k) => { S.view = k; } };
 load();
 requestAnimationFrame(frame);
 </script>
