@@ -46,26 +46,30 @@
 <script type="module">
 import * as THREE from 'three';
 import * as ORB from '/entangled/orbit.js';
+import { matchSwath } from '/coverage/swaths.js';
 const { RE, D2R, TAU } = ORB;
 THREE.ColorManagement.enabled = false;
 
 const Q = new URLSearchParams(location.search);
 const ROLE = location.pathname.includes('display') || Q.has('display') ? 'display' : location.pathname.includes('tablet') || Q.has('tablet') ? 'tablet' : 'studio';
 document.body.classList.add(ROLE);
+// /coverage: only Earth-observation satellites, each ball as wide as the ground it actually images (published swath)
+const EO = location.pathname.includes('coverage') || Q.has('eo');
+if (EO) document.title = 'Coverage';
 const TEST = location.hash.includes('test');
 const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const DEF = { view: 'glass', size: 50, rcs: '1', ior: 50, disp: 0, rim: 25, gain: 100, lift: 100, q360: 100, bounces: 2, light: 'day', range: 'all', types: '1111', revive: 30, spd: 0 };
 let S = { ...DEF };
-const KEY = 'refraction-v1';
+const KEY = EO ? 'coverage-v1' : 'refraction-v1';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
 for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
 if (ROLE === 'display') S.view = '360';
 if (ROLE === 'tablet' && !Q.has('view')) S.view = 'lines';
 const save = () => { if (ROLE === 'studio' && !TEST) try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
 const fmtX = (x) => '×' + (x >= 1e4 ? Math.round(x / 1e3) + 'k' : Math.round(x));
-const SIZE_KM = () => 5 * Math.pow(100, S.size / 100); // ball radius: 5 .. 500 km (50 → 50 km)
+const SIZE_KM = () => EO ? Math.pow(10, (S.size - 50) / 50) : 5 * Math.pow(100, S.size / 100); // ball radius: 5 .. 500 km (50 → 50 km); coverage: ×0.1 .. ×10 of the real swath (50 → ×1)
 const IOR = () => 1 + S.ior / 100;                      // 1.0 .. 2.0 (glass ≈ 1.5)
 const SPEED = () => Math.round(Math.pow(10, S.spd / 25)); // 1× .. 10,000×
 const REVIVE = () => Math.max(3, S.revive);             // seconds until a popped object returns
@@ -165,7 +169,9 @@ const OPTICS = /* glsl */`${OBJ}
     float thr = 1.0;
     for (int b = 0; b < 8; b++) {
       vec3 t1 = refract(rd, N, 1.0 / ior);
-      vec3 P2 = P + t1 * (-2.0 * dot(P - C, t1));
+      float chord = -2.0 * dot(P - C, t1), tIn = earthT(P, t1);
+      if (tIn < chord) return thr * surface(normalize(P + t1 * tIn), lod); // the ball reaches into the Earth: the ray meets the ground inside it
+      vec3 P2 = P + t1 * chord;
       vec3 N2 = normalize(P2 - C);
       vec3 t2 = refract(t1, -N2, ior);
       if (dot(t2, t2) < 0.5) t2 = reflect(t1, -N2);
@@ -355,6 +361,7 @@ const wallS = () => (Date.now() - BASE) / 1000;
 const popped = new Map(); // norad → { t: wall s popped (0 = revived), ev: wall ms of the last change }
 
 function weight(o) {
+  if (EO) return o.cov; // km: half the swath (ball diameter = swath width)
   if (S.rcs !== '1') return 1;
   const r = Number.isFinite(o.rcs) && o.rcs > 0 ? o.rcs : ORB.RCS_DEFAULT[o.type];
   return Math.min(2.5, Math.max(0.3, Math.sqrt(r) / 1.4));
@@ -523,18 +530,30 @@ function setPop(norad, t, ev = Date.now()) {
   clearTimeout(popsT); popsT = setTimeout(sendPops, 50);
   return true;
 }
+let noSwath = []; // observation satellites with no published swath in the table (not drawn)
 function ingest(parts) {
   objs = ORB.parseCatalogue(parts);
+  if (EO) {
+    const nm = new Map((parts.active?.rows ?? []).map((r) => [r[0], r[10]])), miss = [];
+    objs = objs.filter((o) => {
+      o.name = nm.get(o.norad) || ''; const m = matchSwath(o.name);
+      if (!m) { miss.push(o.name); return false; }
+      o.inst = m.inst; o.src = m.src;
+      if (m.disk) { const a = Math.cbrt(ORB.MU / (o.mm * TAU / 86400) ** 2); o.swath = 2 * RE * Math.acos(RE / a); } else o.swath = m.km;
+      o.cov = o.swath / 2; return true;
+    });
+    noSwath = miss.sort();
+  }
   idx.clear(); objs.forEach((o, j) => idx.set(o.norad, j));
   counts.fill(0); for (const o of objs) counts[o.type]++;
   T0 = simT; build(); if (!loaded) loadedAt = performance.now(); loaded = true; panelSync();
 }
 const good = {};
 async function load() {
-  const names = ['active', 'debris', 'rocket', 'satcat'];
+  const names = EO ? ['eo'] : ['active', 'debris', 'rocket', 'satcat'];
   const res = await Promise.all(names.map((p) => fetch('/api/space-objects?part=' + p).then((r) => r.json()).catch((e) => ({ rows: [], errors: [String(e)] }))));
   const failed = [];
-  names.forEach((p, i) => { if (res[i].rows?.length) good[p] = res[i]; else failed.push(p); });
+  names.forEach((p, i) => { if (res[i].rows?.length) good[p === 'eo' ? 'active' : p] = res[i]; else failed.push(p); });
   meta = { fetched: Object.values(good).map((r) => r.fetched).filter(Boolean).sort()[0] ?? null, errors: failed };
   if (good.active || good.debris || good.rocket) ingest(good);
   if (failed.length) setTimeout(load, 10 * 60e3);
@@ -646,7 +665,7 @@ function zoom(f) {
 
 // ---------- room: pops and the sphere's turn are shared with the LED display (public relay, room code) ----------
 const ROOM = ORB.cleanRoom(Q.get('room'));
-const TOPIC = 'sampling-sphere/v1/refraction' + (ROOM ? '/' + ROOM : ''), ME = Math.random().toString(36).slice(2, 10);
+const TOPIC = 'sampling-sphere/v1/' + (EO ? 'coverage' : 'refraction') + (ROOM ? '/' + ROOM : ''), ME = Math.random().toString(36).slice(2, 10);
 let mq = null, relayOk = false, lookT = 0;
 const publish = (t, obj, retain = false) => { if (mq && relayOk) mq.publish(TOPIC + t, JSON.stringify(obj), { retain, qos: retain ? 1 : 0 }); };
 let snapT = null;
@@ -691,17 +710,18 @@ let camQ = null, lookDirty = false;
 
 // ---------- panel (studio) ----------
 const TYPES = ['Payloads', 'Rocket bodies', 'Debris', 'Unknown'];
-const SL = [['size', 'Size', 0, 100, () => fmtX(SIZE_KM() / 0.00079)], ['ior', 'Refraction', 0, 100, () => IOR().toFixed(2)], ['disp', 'Dispersion', 0, 100, () => S.disp + ''],
+const SL = [['size', 'Size', 0, 100, () => EO ? '×' + (SIZE_KM() < 1 ? SIZE_KM().toFixed(2) : SIZE_KM().toFixed(1)) + ' real swath' : fmtX(SIZE_KM() / 0.00079)], ['ior', 'Refraction', 0, 100, () => IOR().toFixed(2)], ['disp', 'Dispersion', 0, 100, () => S.disp + ''],
   ['rim', 'Edge', 0, 100, () => S.rim + ''], ['gain', 'Brightness', 50, 400, () => (S.gain / 100).toFixed(1) + '×'], ['lift', 'Lift darks', 100, 300, () => (S.lift / 100).toFixed(1)], ['bounces', 'Through', 0, 6, () => S.bounces ? '+' + S.bounces + ' balls' : '1 ball'], ['revive', 'Revive', 3, 300, () => REVIVE() + ' s'], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]], 
-  ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]], ['rcs', 'Size by', [['1', 'Radar size'], ['0', 'Same']]], ['range', 'Objects', [['all', 'All'], ['leo', 'Below 2,000 km']]]];
+  ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]], ['rcs', 'Size by', [['1', 'Radar size'], ['0', 'Same']]], ['range', 'Objects', [['all', 'All'], ['leo', 'Below 2,000 km']]]].filter(([k]) => !(EO && k === 'rcs'));
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
     + SL.map(([k, l, a, b]) => `<div class="row"><label>${l}</label><input type="range" data-k="${k}" min="${a}" max="${b}" step="1"><output data-o="${k}"></output></div>`).join('')
-    + `<div class="row"><label>Show</label><div class="checks">${TYPES.map((t, i) => `<label><input type="checkbox" data-ty="${i}"> ${t} <span data-cnt="${i}"></span></label>`).join('')}</div></div>`
+    + (EO ? '' : `<div class="row"><label>Show</label><div class="checks">${TYPES.map((t, i) => `<label><input type="checkbox" data-ty="${i}"> ${t} <span data-cnt="${i}"></span></label>`).join('')}</div></div>`)
     + `<div class="row"><label></label><div class="seg"><button id="now">Back to now</button><button id="reset">Reset</button></div></div>
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
     <div class="note">Earth is black. Its surface appears only inside the glass: each ball bends the line of sight onto the Earth below it (Blue Marble by day, Black Marble at night). Pop a ball and only black remains. Objects: every tracked payload, rocket body and debris in CelesTrak (US Space Force catalogue), at their real positions now. Ball size is ×N of each object's real size from its radar cross-section (kept between 0.3× and 2.5× of a typical object so debris stays visible).</div>`;
+  if (EO) $('panel').querySelector('.note').innerHTML = `Only Earth-observation and weather satellites (CelesTrak groups weather, Earth resources, Planet), at their real positions now. Each ball is as wide as the strip of ground its widest imager records at once: ball diameter = published nadir swath width (×1 = real). Geostationary full-disk imagers see the whole visible disc, so their width is the horizon-to-horizon distance from their altitude. Earth is black; its surface appears only through the balls.<div id="eolist"></div>`;
   $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'rcs') reweight(); save(); panelSync(); resize(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } save(); panelSync(); });
   $('panel').querySelectorAll('input[data-ty]').forEach((c) => c.onchange = () => { const a = S.types.split(''); a[+c.dataset.ty] = c.checked ? '1' : '0'; S.types = a.join(''); save(); });
@@ -709,7 +729,7 @@ function panelBuild() {
   $('copy').onclick = () => {
     const q = new URLSearchParams(); for (const k of Object.keys(DEF)) if (k !== 'view' && String(S[k]) !== String(DEF[k])) q.set(k, S[k]);
     if (ROOM) q.set('room', ROOM);
-    const url = location.origin + '/refraction-display' + (q.toString() ? '?' + q : '');
+    const url = location.origin + (EO ? '/coverage-display' : '/refraction-display') + (q.toString() ? '?' + q : '');
     navigator.clipboard?.writeText(url).then(() => { $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy display URL'; }, 1500); }, () => { $('copy').textContent = url; });
   };
   $('reset').onclick = () => { S = { ...DEF }; reweight(); save(); panelSync(); resize(); };
@@ -718,6 +738,12 @@ function panelSync() {
   document.querySelectorAll('.seg[data-k]').forEach((s) => s.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(S[s.dataset.k]) === b.dataset.v)));
   document.querySelectorAll('input[data-ty]').forEach((c) => { c.checked = S.types[+c.dataset.ty] !== '0'; });
   document.querySelectorAll('span[data-cnt]').forEach((e) => { e.textContent = counts[+e.dataset.cnt] ? counts[+e.dataset.cnt].toLocaleString() : ''; });
+  if (EO && $('eolist') && loaded) {
+    const by = new Map(); for (const o of objs) { const k = o.inst + '|' + Math.round(o.swath) + '|' + o.src; by.set(k, (by.get(k) || 0) + 1); }
+    const rows = [...by].map(([k, n]) => k.split('|').concat(n)).sort((a, b) => b[1] - a[1]);
+    $('eolist').innerHTML = `<br>${objs.length} satellites with a published swath:<br>` + rows.map(([i, km, src, n]) => `${n} × ${i}: ${(+km).toLocaleString()} km <span style="opacity:.5">(${src})</span>`).join('<br>')
+      + `<br><br>${noSwath.length} more in those groups have no swath in the table and are not drawn:<br><span style="opacity:.5">${noSwath.join(', ')}</span>`;
+  }
   for (const [k, , , , f] of SL) { const r = document.querySelector(`input[data-k="${k}"]`); if (r) r.value = S[k]; const o = document.querySelector(`output[data-o="${k}"]`); if (o) o.textContent = f(); }
 }
 $('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').classList.toggle('on'); };
@@ -804,7 +830,7 @@ function info() {
   const now = wallS(); let np = 0; for (const p of popped.values()) if (p.t > 0 && now - p.t < REVIVE()) np++;
   const d = new Date(simT), live = Math.abs(simT - Date.now()) < 5000;
   el.textContent = ROLE === 'tablet' ? `${objs.length.toLocaleString()}   ${np ? '× ' + np : ''}`
-    : `${objs.length.toLocaleString()} objects · ${np} popped\n${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps · cpu ${cpuMs.toFixed(1)} ms · res ${Math.round(100 * (S.view === '360' || S.view === 'ball' ? eqScale : pr))}%${ROOM ? ' · room ' + ROOM : ''}`;
+    : `${objs.length.toLocaleString()} ${EO ? 'observation satellites' : 'objects'} · ${np} popped\n${live ? 'now' : d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'} · ${SPEED().toLocaleString()}× · ${fps.toFixed(0)} fps · cpu ${cpuMs.toFixed(1)} ms · res ${Math.round(100 * (S.view === '360' || S.view === 'ball' ? eqScale : pr))}%${ROOM ? ' · room ' + ROOM : ''}`;
 }
 
 if (TEST) window.__ref = { grid: () => ({ cell: U.uCell.value, shell: U.uShell.value, rtt: gridRtt, items: U.tItem.value?.image.width * U.tItem.value?.image.height }), ingest, render, tap, S, view, rot360, setSim: (t) => { simT = t; }, pick, objs: () => objs, setView: (k) => { S.view = k; resize(); } };

@@ -6,6 +6,7 @@ import { unstable_cache } from "next/cache";
 //   ?part=active  every active payload            (GP GROUP=active)
 //   ?part=debris  every object named "DEB"        (GP NAME=DEB) + the four big breakup groups as a fallback
 //   ?part=rocket  every object named "R/B"        (GP NAME=R/B)
+//   ?part=eo      Earth-observation and weather payloads with their names (GP GROUP=weather, resource, planet), for /coverage
 //   ?part=satcat  official OBJECT_TYPE, RCS (m²), owner and launch date for every object still in orbit
 // Each part is kept in Next's shared data cache for 2 h (one CelesTrak download per part per 2 h for the whole site,
 // across regions and deployments; CelesTrak answers 403 to anyone fetching the same data more often). A failed
@@ -72,6 +73,20 @@ async function fetchPart(part: string) {
     // [norad, type (PAY/R/B/DEB/UNK), rcs m² or null, owner code]
     rows = all.map((o) => [parseInt(o.NORAD_CAT_ID), o.OBJECT_TYPE, o.RCS ? Math.round(parseFloat(o.RCS) * 1e4) / 1e4 : null, o.OWNER || null]);
   } else {
+    if (part === "eo") {
+      const seen = new Map<number, unknown[]>();
+      for (const q of ["GROUP=weather", "GROUP=resource", "GROUP=planet"]) {
+        try {
+          const got = await gp(q);
+          let k = 0;
+          for (const o of got) { const c = compact(o); if (c && !seen.has(c[0])) { seen.set(c[0], [...c, o.OBJECT_NAME, q.slice(6)]); k++; } }
+          sources.push(`CelesTrak GP ${q} (${k})`);
+        } catch (e) { errors.push(String(e)); }
+      }
+      rows = [...seen.values()];
+      if (!rows.length) throw new Error(errors.join("; ") || "empty");
+      return { part, fetched: new Date().toISOString(), sources, errors, count: rows.length, rows };
+    }
     const queries = part === "debris" ? ["NAME=DEB", "GROUP=cosmos-1408-debris", "GROUP=fengyun-1c-debris", "GROUP=iridium-33-debris", "GROUP=cosmos-2251-debris"]
       : part === "rocket" ? ["NAME=R/B"] : ["GROUP=active"];
     const seen = new Map<number, Row>();
@@ -96,7 +111,7 @@ const cachedPart = (part: string) => unstable_cache(() => fetchPart(part), ["spa
 
 export async function GET(req: Request) {
   const raw = new URL(req.url).searchParams.get("part") ?? "active";
-  const part = ["active", "debris", "rocket", "satcat"].includes(raw) ? raw : "active";
+  const part = ["active", "debris", "rocket", "satcat", "eo"].includes(raw) ? raw : "active";
   try {
     const body = await cachedPart(part);
     return NextResponse.json(body, { headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=86400" } });
