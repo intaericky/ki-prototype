@@ -9,7 +9,7 @@
 <style>
   :root { --fg: #fff; --dim: #ffffff73; --faint: #ffffff2e; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; height: 100%; background: #000; color: var(--fg); font: 13px/1.45 Pretendard, -apple-system, sans-serif; font-weight: 400; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--fg); font: 13px/1.45 Pretendard, -apple-system, sans-serif; font-weight: 400; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
   canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
   #info { position: fixed; left: 20px; bottom: 16px; color: var(--dim); font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre-wrap; max-width: min(560px, calc(100vw - 40px)); }
   #toggle { position: fixed; top: 16px; right: 16px; background: none; border: 1px solid var(--faint); color: var(--dim); font: inherit; padding: 6px 12px; border-radius: 0; cursor: pointer; }
@@ -506,15 +506,15 @@ let N = 0, order = [], rank = new Int32Array(0), aC = null, aF = null, aP = null
 const popped = new Map(); // norad → { t: wall s popped, ev: wall ms of the last change }
 const wallS = () => Date.now() / 1000, REVIVE = () => Math.max(3, S.revive);
 const isPopped = (s, now) => { const p = popped.get(s.norad); return !!(p && p.t > 0 && now - p.t < REVIVE()); };
-// a pop: a slight swell, then it is gone (0.15 s); when it comes back it simply grows to full size (0.6 s)
-const POPD = 0.15, GROWD = 0.6;
+// a pop: it just shrinks away (0.125 s); when it comes back it grows to full size, easing in and out (0.5 s)
+const POPD = 0.125, GROWD = 0.5;
 function popScale(s, now) {
   const p = popped.get(s.norad); if (!p || !(p.t > 0)) return 1;
   const age = now - p.t, R = REVIVE(); if (age < 0) return 1;
-  if (age < POPD) { const t = age / POPD; return t < 0.3 ? 1 + 0.06 * Math.sin(t / 0.3 * Math.PI / 2) : 1.06 * (1 - Math.pow((t - 0.3) / 0.7, 2)); }
+  if (age < POPD) { const t = age / POPD; return 1 - t * t; }
   if (age < R) return 0;
   const g = (age - R) / GROWD; if (g >= 1) return 1;
-  return 1 - Math.pow(1 - g, 3); // eases out to full size
+  return g < 0.5 ? 4 * g * g * g : 1 - Math.pow(-2 * g + 2, 3) / 2; // ease in and out
 }
 function setPop(n, t, ev = Date.now()) { const cur = popped.get(n); if (cur && cur.ev > ev) return; popped.set(n, { t, ev }); }
 // width shown: the published swath, or for satellites without one (by the No swath setting) an estimate, the typical value of
@@ -833,6 +833,8 @@ const up = (e) => {
   ptrs.delete(e.pointerId); pinch0 = null;
   if (ptrs.size === 0 && gesture) { if (!gesture.multi && gesture.moved < 10 && performance.now() - gesture.t0 < 500) tap(e.clientX, e.clientY); gesture = null; }
 };
+// no right-click / long-press menu (a two-finger tap on a tablet is a right click)
+document.addEventListener('contextmenu', (e) => e.preventDefault());
 for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
 document.addEventListener('touchmove', (e) => { if (e.target === canvas) e.preventDefault(); }, { passive: false });
 canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
