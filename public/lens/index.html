@@ -262,8 +262,9 @@ const OPTICS = /* glsl */`${PIECE}
     if (unk && uUnkMat == 2) c *= 0.3;
     if (unk && uUnkMat == 3) c = mix(c, vec3(0.75), 0.55);
     // Depth: the lower a ball flies, the more what it shows sinks into the Earth colour, as if seen through deep water;
-    // height on a log scale from 300 km (fully sunk by Depth) to geostationary 36,000 km (untouched). The reflection stays.
-    if (uDepth > 0.0 && kE >= 0) { float h = max(length(pc(kE).xyz) - RE, 1.0), t = clamp(log(h / 300.0) / log(120.0), 0.0, 1.0); c = mix(uBg, c, 1.0 - uDepth * (1.0 - t)); }
+    // spread over the band where Earth-observation satellites fly: 400 km sinks by the full Depth, 1,000 km and higher stay
+    // untouched, so a 500 km ball looks clearly deeper than an 800 km one. The reflection stays.
+    if (uDepth > 0.0 && kE >= 0) { float h = length(pc(kE).xyz) - RE, t = clamp((h - 400.0) / 600.0, 0.0, 1.0); c = mix(uBg, c, 1.0 - uDepth * (1.0 - t)); }
     float ci = clamp(-dot(rd, N), 0.0, 1.0);
     vec3 rr = reflect(rd, N); float tR = earthT(Pin + N * 0.02, rr);
     vec3 refl = tR < 1e8 ? surface(normalize(Pin + N * 0.02 + rr * tR), lod) : env(rr);
