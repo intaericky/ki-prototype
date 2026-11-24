@@ -61,7 +61,7 @@ const $ = (id) => document.getElementById(id);
 
 // ---------- settings ----------
 const CROWN = { ior: 152, disp: 4, refl: 100, rim: 0, tint: '#ffffff', abs: 0, frost: 0 }; // the glass sliders' starting point
-const DEF = { view: 'glass', shape: 'sphere', place: 'ground', sizing: 'swath', one: 717, size: 50, min: 662, fit: 'add', res: 100, q360: 100, light: 'day', unk: 'est', geo: 'clamp', spd: 52,  ...CROWN, gain: 100, lift: 100 };
+const DEF = { view: 'glass', shape: 'sphere', place: 'ground', sizing: 'swath', scale: 'true', one: 717, size: 50, min: 662, fit: 'add', res: 100, q360: 100, light: 'day', unk: 'est', geo: 'clamp', spd: 52,  ...CROWN, gain: 100, lift: 100 };
 let S = { ...DEF };
 const KEY = 'lens-v5';
 if (ROLE === 'studio' && !TEST) try { Object.assign(S, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch {}
@@ -377,7 +377,11 @@ function radiusKm(s) {
   if (S.sizing === 'same') return S.unk === 'hide' && s.swath == null ? 0 : ONEKM() / 2; // every satellite the same size
   if ((S.unk === 'hide' && s.swath == null) || (S.geo === '0' && s.disk)) return 0;
   // full disk clamped: as wide as the widest non-geostationary swath (VIIRS, 3,040 km)
-  const w = (S.geo === 'clamp' && s.disk ? (kindStats.all?.hi ?? 3040) : (widthKm(s) ?? 0)) * SCALE();
+  let w = S.geo === 'clamp' && s.disk ? (kindStats.all?.hi ?? 3040) : (widthKm(s) ?? 0);
+  // Area scale (proportional symbols): the ball's disc area ∝ swath, so width ∝ √swath; anchored at the widest
+  // non-geostationary swath (VIIRS 3,040 km), which keeps its true width. Order is kept, ratios are compressed.
+  if (S.scale === 'area' && w > 0) { const a = kindStats.all?.hi ?? 3040; w = a * Math.sqrt(w / a); }
+  w *= SCALE();
   const m = MINKM(); return (S.fit === 'add' ? m + w : Math.max(w, m)) / 2;
 }
 function reorder() { // the smallest domes are drawn last, so every satellite stays visible on top of the wide ones
@@ -634,7 +638,7 @@ const SL = [['size', 'Size', 0, 100, () => '×' + (SCALE() < 1 ? SCALE().toFixed
   ['ior', 'Refraction', 100, 250, () => (S.ior / 100).toFixed(2)], ['disp', 'Dispersion', 0, 100, () => (S.disp / 1000).toFixed(3)], ['refl', 'Reflection', 0, 300, () => (S.refl / 100).toFixed(1) + '×'],
   ['rim', 'Edge glow', 0, 100, () => S.rim + ''], ['abs', 'Absorption', 0, 100, () => S.abs + ''], ['frost', 'Frost', 0, 100, () => S.frost + ''], ['spd', 'Speed', 0, 100, () => SPEED().toLocaleString() + '×'], ['q360', '360 detail', 50, 200, () => Math.round(1920 * S.q360 / 100) + ' px'], ['res', 'Resolution', 25, 200, () => '×' + (PR() ).toFixed(2) + ' px']];
 const SEG = [['view', 'View', [['glass', 'Glass'], ['lines', 'Lines'], ['360', '360'], ['ball', 'Sphere']]],
-  ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
+  ['sizing', 'Sizes', [['swath', 'By swath'], ['same', 'All the same']]], ['scale', 'Scale', [['true', 'True width'], ['area', 'Area (√)']]], ['shape', 'Shape', [['dome', 'Dome'], ['sphere', 'Sphere']]], ['place', 'Where', [['ground', 'On the ground'], ['orbit', 'Real orbit']]], ['light', 'Light', [['sun', 'Sun now'], ['day', 'All day']]],
   ['unk', 'No swath', [['est', 'Estimate'], ['typ', 'Typical'], ['min', 'Minimum'], ['hide', 'Hide']]], ['fit', 'Minimum is', [['add', 'Added'], ['floor', 'A floor']]], ['geo', 'Full disk', [['clamp', 'Clamp'], ['1', 'Real'], ['0', 'Hide']]]];
 function panelBuild() {
   $('panel').innerHTML = SEG.map(([k, l, o]) => `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${o.map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`).join('')
@@ -645,7 +649,7 @@ function panelBuild() {
     <div class="row"><label></label><div class="seg"><button id="copy">Copy display URL</button></div></div>
     <div class="note">Every Earth-observation satellite with a public orbit, as a ball of clear glass (crown glass, N-BK7, refractive index 1.52) at its <b>real orbit</b> position, moving with it, or lying <b>on the ground</b> right under it; <b>Dome</b> cuts it to a half sphere with its flat face towards the Earth. Light bends and reflects by Snell's law and Fresnel; overlapping balls fuse into one body of glass. Earth is black: its surface shows only through the glass. <b>Width = the satellite's published swath</b> (the strip of ground its widest imager records at once; ×1 = real). <b>No swath</b>: <b>Estimate</b> gives each satellite without a published swath the typical viewing angle of its own kind (optical, radar, weather, Earth science) at its own altitude; <b>Typical</b> gives the median of its kind; radio occultation satellites take no images and stay at the minimum. <b>Minimum</b> is <b>added</b> to every width (all stay visible and keep their differences) or used as <b>a floor</b> (×1 widths stay real). <b>Full disk</b>: geostationary imagers see a whole hemisphere (about 18,000 km) and hide everything else, so they are off unless shown. <b>Resolution</b>: traced pixels per screen point; lower it if it lags. Tap a ball to name it.</div>
     <div class="list" id="lists"></div>`;
-  $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit' || k === 'sizing') reorder(); save(); panelSync(); });
+  $('panel').querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; if (k === 'unk' || k === 'geo' || k === 'fit' || k === 'sizing' || k === 'scale') reorder(); save(); panelSync(); });
   $('panel').querySelectorAll('input[data-k]').forEach((r) => r.oninput = () => { const k = r.dataset.k, was = SPEED(); S[k] = +r.value; if (k === 'spd' && SPEED() !== was) { simT = simNow(); clock = null; sendClock(); } if (k === 'size' || k === 'min' || k === 'one') reorder(); if (k === 'res') resize(); save(); panelSync(); });
   $('tint').oninput = (e) => { S.tint = e.target.value; save(); };
   $('smallest').onclick = () => { if (kindStats.all?.lo) { S.min = minSlider(kindStats.all.lo); reorder(); save(); panelSync(); } };
