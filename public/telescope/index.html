@@ -100,7 +100,7 @@ const showType = (t) => S.show === 'all' || (S.show === 'deb' ? t === 2 : S.show
 // ---------- the mount: what the controls ask for (tgt) and where the machine actually is (mnt) ----------
 // Azimuth is 0 = north, clockwise, and never wrapped (the dome turns freely; 370 is 10 past north, one turn on).
 // Elevation is held between the horizon and the zenith: the telescope cannot look into the ground or at the audience.
-const LIM = { elMin: 0, elMax: 90, vAz: 80, vEl: 55, acc: 220, fovMin: 0.5, fovMax: 100 };
+const LIM = { elMin: 0, elMax: 90, vAz: 240, vEl: 180, acc: 1400, fovMin: 0.5, fovMax: 100 };
 const tgt = { az: 180, el: 35, fov: 50 };
 const mnt = { az: 180, el: 35, fov: 50, vAz: 0, vEl: 0 };
 const clampTgt = () => { if (!Number.isFinite(tgt.az)) tgt.az = mnt.az; tgt.el = clamp(tgt.el, LIM.elMin, LIM.elMax); tgt.fov = clamp(tgt.fov, LIM.fovMin, LIM.fovMax); };
@@ -108,13 +108,13 @@ const clampTgt = () => { if (!Number.isFinite(tgt.az)) tgt.az = mnt.az; tgt.el =
 function slew(dt) {
   for (const [k, v, vmax] of [['az', 'vAz', LIM.vAz], ['el', 'vEl', LIM.vEl]]) {
     const err = tgt[k] - mnt[k];
-    const want = clamp(err * 6, -vmax, vmax);
+    const want = clamp(err * 14, -vmax, vmax); // settles in about a tenth of a second
     mnt[v] += clamp(want - mnt[v], -LIM.acc * dt, LIM.acc * dt);
     mnt[k] += mnt[v] * dt;
-    if (Math.abs(err) < 0.002 && Math.abs(mnt[v]) < 0.05) { mnt[k] = tgt[k]; mnt[v] = 0; }
+    if (Math.abs(err) < 0.01 && Math.abs(mnt[v]) < 0.5) { mnt[k] = tgt[k]; mnt[v] = 0; }
   }
   mnt.el = clamp(mnt.el, LIM.elMin, LIM.elMax);
-  mnt.fov += (tgt.fov - mnt.fov) * (1 - Math.exp(-dt * 12)); // the zoom is optical and quick
+  mnt.fov += (tgt.fov - mnt.fov) * (1 - Math.exp(-dt * 20)); // the zoom is optical and quick
 }
 const azN = () => ((mnt.az % 360) + 360) % 360;
 
@@ -359,7 +359,7 @@ function poseObs() {
 }
 
 // ---------- the LED frame: 360 capture from the centre, outermost surface wins ----------
-const cubeRT = new THREE.WebGLCubeRenderTarget(ROLE === 'display' ? 1024 : 768, { generateMipmaps: false, minFilter: THREE.LinearFilter });
+const cubeRT = new THREE.WebGLCubeRenderTarget(ROLE === 'display' ? 1024 : 512, { generateMipmaps: false, minFilter: THREE.LinearFilter });
 const cubeCam = new THREE.CubeCamera(0.02, 4, cubeRT);
 const FRAME_F = /* glsl */`
   uniform samplerCube tC; varying vec2 vUv;
@@ -502,7 +502,7 @@ const TOPIC = 'sampling-sphere/v1/telescope' + (ROOM ? '/' + ROOM : ''), ME = Ma
 let mq = null, relayOk = false, aimT = 0, aimDirty = false, localAimAt = 0, gotAim = false;
 const publish = (t, obj, retain = false) => { if (mq && relayOk) mq.publish(TOPIC + t, JSON.stringify(obj), { retain, qos: retain ? 1 : 0 }); };
 function aimChanged() { localAimAt = performance.now(); aimDirty = true; }
-function flushAim() { if (aimDirty && performance.now() - aimT >= 33) { aimDirty = false; aimT = performance.now(); publish('/aim', { az: tgt.az, el: tgt.el, fov: tgt.fov, by: ME }, true); } }
+function flushAim() { if (aimDirty && performance.now() - aimT >= 20) { aimDirty = false; aimT = performance.now(); publish('/aim', { az: tgt.az, el: tgt.el, fov: tgt.fov, by: ME }, true); } }
 const SYNC_SKIP = new Set(['view', 'spd']);
 let setT = null;
 function sendSettings() { clearTimeout(setT); setT = setTimeout(() => { const o = {}; for (const k of Object.keys(DEF)) if (!SYNC_SKIP.has(k)) o[k] = S[k]; publish('/settings', { s: o, by: ME }, true); }, 80); }
@@ -731,7 +731,8 @@ let lastWall = performance.now();
 function frame() {
   const now = performance.now(), dtw = Math.min(0.1, (now - lastWall) / 1000); lastWall = now;
   if (clock) simT = ORB.clockNow(clock); else simT += dtw * 1000 * SPEED();
-  slew(dtw); step(); flushAim(); updateAudio(); render();
+  for (let n = Math.ceil(dtw * 240), i = 0; i < n; i++) slew(dtw / n); // small steps, so the motor model stays stable at low frame rates
+  step(); flushAim(); updateAudio(); render();
   requestAnimationFrame(frame);
 }
 function renderEye() {
