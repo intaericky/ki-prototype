@@ -21,7 +21,7 @@ const MAP_W = +(process.env.MAP_W || 4096), LOOP_W = +(process.env.LOOP_W || 204
 const what = process.argv[2] || 'all';
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 fs.mkdirSync(OUT, { recursive: true });
-fs.copyFileSync(new URL('./README.md', import.meta.url), path.join(OUT, 'README.md'));
+fs.copyFileSync(new URL('./PACKAGE-README.md', import.meta.url), path.join(OUT, 'README.md'));
 
 // ---------------------------------------------------------------- catalogue
 // Reads the live Lens catalogue (the same data and the same caption code the tablet uses).
@@ -114,6 +114,21 @@ async function coverage(img) { const { data, info } = await img.clone().ensureAl
 const onBlack = (img) => img.clone().flatten({ background: '#000000' });
 async function pool(items, n, fn) { const out = new Array(items.length); let i = 0; await Promise.all(Array.from({ length: n }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); } })); return out; }
 
+// ---------------------------------------------------------------- live source (for fetching at the venue)
+async function live(p) {
+  if (p.kind === 'loopmix') return { how: `stack the frames of ${p.of.join(', ')} for the same time, in that order (later on top), on black`, refresh: 'every 10 minutes, with its source loops' };
+  const r = await times(p.layer), end = Math.max(...r.map((x) => x[1])), ended = end < Date.now() - (p.kind === 'month' ? 200 : 60) * D;
+  const fmt = p.kind === 'composite' || p.kind === 'loop' ? 'image/png&TRANSPARENT=TRUE' : 'image/jpeg';
+  const url = `${WMS}?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=${p.layer}&SRS=EPSG:4326&BBOX=-180,-90,180,90&WIDTH={W}&HEIGHT={H}&FORMAT=${fmt}&TIME={TIME}`;
+  const o = { url, size: 'W = 2 × H, for example 4096 × 2048 (keep the same size for every map so they overlay exactly)', latest_available: p.kind === 'loop' ? new Date(end).toISOString().slice(0, 19) + 'Z' : day(end) };
+  if (ended) return { ...o, time: day(end), refresh: `none: the layer ended on ${day(end)}; use this date` };
+  if (p.kind === 'day') return { ...o, time: 'YYYY-MM-DD, yesterday in UTC (today is still being filled in)', refresh: 'once a day, after 06:00 UTC' };
+  if (p.kind === 'composite') return { ...o, time: `YYYY-MM-DD, each of the latest ${p.days} days up to yesterday in UTC`, refresh: 'once a day, after 06:00 UTC', how: `request each day as a transparent PNG and stack them oldest first, newest on top, on black. A day with no data returns an empty image.` };
+  if (p.kind === 'month') return { ...o, time: 'YYYY-MM-01, the latest month in latest_available', refresh: 'once a day: check whether a new month has appeared (they appear 1 to 2 months late)' };
+  if (p.kind === 'loop') return { ...o, time: 'YYYY-MM-DDTHH:M0:00Z, UTC, minutes a multiple of 10', refresh: 'every 10 minutes. A frame appears about an hour after its time, so request the latest time in latest_available or about 70 minutes ago. Transparent outside the disk; show it on black. Keep the latest 144 frames for a 24-hour loop. If a time returns an error, it is missing at the source; keep the previous frame.' };
+  return o;
+}
+
 // ---------------------------------------------------------------- still maps
 async function maps() {
   fs.mkdirSync(path.join(OUT, 'maps'), { recursive: true });
@@ -130,7 +145,7 @@ async function maps() {
       const img = await stack(pngs, MAP_W);
       const file = `maps/${p.id}.jpg`;
       await onBlack(img).jpeg({ quality: 92, mozjpeg: true }).toFile(path.join(OUT, file));
-      done.push({ id: p.id, title: p.title, shows: p.shows, file, width: MAP_W, height: MAP_W / 2, gibs_layer: p.layer, dates, coverage_percent: await coverage(img) });
+      done.push({ id: p.id, type: 'image', title: p.title, shows: p.shows, file, width: MAP_W, height: MAP_W / 2, gibs_layer: p.layer, baked_dates: dates, coverage_percent: await coverage(img), live: await live(p) });
     } catch (e) { log('FAILED', p.id, e.message); done.push({ id: p.id, title: p.title, error: e.message }); }
   }
   return done;
@@ -155,7 +170,7 @@ async function loops() {
         if (k % 24 === 0) log(' ', p.id, k + '/144');
         const keep = path.join(TMP, `${p.id}_${k}.png`); fs.writeFileSync(keep, png); return keep; // kept for the stacked loop
       });
-      done.push({ id: p.id, title: p.title, shows: p.shows, folder: dir, pattern: `${p.id}_000.jpg … ${p.id}_143.jpg`, frames: 144, frame_minutes: 10, day_utc: day(d0), first_frame_utc: new Date(d0).toISOString(), width: LOOP_W, height: LOOP_W / 2, gibs_layer: p.layer, frames_filled_from_nearest_time: use.filter((t, k) => t !== want[k]).length, coverage_percent: await coverage(sharp(frames[p.id][72])) });
+      done.push({ id: p.id, type: 'frame sequence (video)', title: p.title, shows: p.shows, folder: dir, pattern: `${p.id}_000.jpg … ${p.id}_143.jpg`, frames: 144, frame_minutes: 10, baked_day_utc: day(d0), first_frame_utc: new Date(d0).toISOString(), width: LOOP_W, height: LOOP_W / 2, gibs_layer: p.layer, frames_filled_from_nearest_time: use.filter((t, k) => t !== want[k]).length, coverage_percent: await coverage(sharp(frames[p.id][72])), live: await live(p) });
     } catch (e) { log('FAILED', p.id, e.message); done.push({ id: p.id, title: p.title, error: e.message }); }
   }
   for (const p of PRODUCTS.filter((p) => p.kind === 'loopmix')) {
@@ -163,7 +178,7 @@ async function loops() {
     const dir = `loops/${p.id}`; fs.mkdirSync(path.join(OUT, dir), { recursive: true });
     await pool([...Array(144).keys()], 6, async (k) => (await stack(src.map((id) => frames[id][k]), LOOP_W)).flatten({ background: '#000000' }).jpeg({ quality: 90, mozjpeg: true }).toFile(path.join(OUT, dir, `${p.id}_${String(k).padStart(3, '0')}.jpg`)));
     const first = done.find((d) => d.id === src[0]) || {};
-    done.push({ id: p.id, title: p.title, shows: p.shows, folder: dir, pattern: `${p.id}_000.jpg … ${p.id}_143.jpg`, frames: 144, frame_minutes: 10, day_utc: first.day_utc, first_frame_utc: first.first_frame_utc, width: LOOP_W, height: LOOP_W / 2, made_from: src, coverage_percent: await coverage(await stack(src.map((id) => frames[id][72]), LOOP_W)) });
+    done.push({ id: p.id, type: 'frame sequence (video)', title: p.title, shows: p.shows, folder: dir, pattern: `${p.id}_000.jpg … ${p.id}_143.jpg`, frames: 144, frame_minutes: 10, baked_day_utc: first.baked_day_utc, first_frame_utc: first.first_frame_utc, width: LOOP_W, height: LOOP_W / 2, made_from: src, coverage_percent: await coverage(await stack(src.map((id) => frames[id][72]), LOOP_W)), live: await live(p) });
     log(p.id, 'stacked from', src.join(', '));
   }
   fs.rmSync(TMP, { recursive: true, force: true });
@@ -176,10 +191,15 @@ const put = (list) => { for (const m of list) { const i = manifest.maps.findInde
 if (what === 'all' || what === 'catalogue') await catalogue();
 if (what === 'all' || what === 'maps') put(await maps());
 if (what === 'all' || what === 'loops') put(await loops());
+if (what === 'manifest') for (const m of manifest.maps) {
+  const p = PRODUCTS.find((x) => x.id === m.id); if (!p || m.error) continue;
+  if (m.dates) { m.baked_dates = m.dates; delete m.dates; } if (m.day_utc) { m.baked_day_utc = m.day_utc; delete m.day_utc; }
+  m.type = p.kind.startsWith('loop') ? 'frame sequence (video)' : 'image'; m.live = await live(p);
+}
 if (what !== 'catalogue') {
   manifest.generated_utc = new Date().toISOString();
   manifest.grid = 'equirectangular (plate carree), longitude -180..180 left to right, latitude 90..-90 top to bottom; identical for every map and loop, and for the NASA Blue Marble';
-  manifest.source = 'NASA GIBS (Global Imagery Browse Services), WMS EPSG:4326 "best"';
+  manifest.source = 'NASA GIBS (Global Imagery Browse Services), WMS, EPSG:4326, "best" imagery. Public, no key.';
   fs.mkdirSync(path.join(OUT, 'data'), { recursive: true });
   fs.writeFileSync(path.join(OUT, 'data/maps.json'), JSON.stringify(manifest, null, 1));
   const bad = manifest.maps.filter((m) => m.error);
