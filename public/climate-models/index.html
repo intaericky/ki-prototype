@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Climate Models: Native Cells</title>
+<style>
+  :root { --fg: #e8e8e8; --dim: #8a8a8a; --faint: #333; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--fg); font: 12px/1.45 -apple-system, "Pretendard", "Helvetica Neue", Arial, sans-serif; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+  #toggle { position: fixed; top: 14px; right: 16px; background: #000; color: var(--fg); border: 1px solid var(--faint); padding: 6px 10px; cursor: pointer; font: inherit; }
+  #toggle.on { border-color: var(--fg); }
+  #panel { position: fixed; top: 56px; right: 16px; width: 320px; max-height: calc(100vh - 80px); overflow-y: auto; background: #000000e0; border: 1px solid var(--faint); padding: 12px 14px; display: none; }
+  #panel.on { display: block; }
+  .row { display: grid; grid-template-columns: 84px 1fr 52px; align-items: center; gap: 8px; margin: 7px 0; }
+  .row label { color: var(--dim); }
+  .seg { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 0; }
+  .seg button, button.b { background: #000; color: var(--dim); border: 1px solid var(--faint); margin: 0 -1px -1px 0; padding: 4px 7px; cursor: pointer; font: inherit; }
+  .seg button.on { color: #000; background: var(--fg); border-color: var(--fg); }
+  input[type=range] { width: 100%; accent-color: #ddd; }
+  output { color: var(--dim); text-align: right; font-variant-numeric: tabular-nums; }
+  .note { color: var(--dim); margin-top: 10px; white-space: pre-wrap; }
+  #info { position: fixed; left: 16px; top: 14px; max-width: min(560px, calc(100vw - 32px)); white-space: pre-wrap; color: var(--fg); pointer-events: none; background: #000000c0; padding: 4px 6px; }
+  #info .dim { color: var(--dim); }
+  #legend { position: fixed; left: 16px; bottom: 16px; width: 260px; pointer-events: none; }
+  #legend canvas { position: static; width: 260px; height: 10px; display: block; border: 1px solid var(--faint); }
+  #legend .ends { display: flex; justify-content: space-between; color: var(--dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
+  #legend .t { color: var(--dim); margin-bottom: 4px; }
+  .err { color: #ff8080; }
+  body.display #toggle, body.display #panel, body.display #info, body.display #legend { display: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">Loading…</div>
+<div id="legend"><div class="t" id="lgT"></div><canvas id="lg" width="256" height="1"></canvas><div class="ends"><span id="lg0"></span><span id="lg1"></span></div></div>
+<button id="toggle">Settings</button>
+<div id="panel"></div>
+<script type="importmap">{ "imports": { "three": "/sphere-assets/vendor/three.module.min.js" } }</script>
+<script type="module">
+import * as THREE from 'three';
+// Climate models, drawn cell by cell from their own CMIP6 output.
+// Every cell drawn is one cell of the model's native grid (grid_label "gn"), placed at the corner coordinates
+// published in the same file, filled with the one value the model stored for it at that time step.
+// Nothing is interpolated, smoothed, regridded or filled in: a cell with no value (NaN, e.g. land in an ocean file)
+// is simply not drawn. Frames are the model's own monthly means, shown one after another.
+const $ = (id) => document.getElementById(id);
+const Q = new URLSearchParams(location.search);
+const TEST = location.hash.includes('test');
+const ROLE = location.pathname.includes('display') || Q.has('display') ? 'display' : 'studio';
+document.body.classList.add(ROLE);
+const DATA = '/climate-models/data/';
+
+const DEF = { model: 'MPI-ESM1-2-LR', organ: 'ocean', exp: 'abrupt-4xCO2', show: 'value', lines: 'on', cmap: 'viridis', view: '3d', fps: 4, relief: 0.1, play: 1, mat: 'lit', ao: 1.5, sun: 0, reach: 1, depth: 0, dir: 'out' };
+let S = { ...DEF };
+try { Object.assign(S, JSON.parse(localStorage.getItem('climate-models') || '{}')); } catch (e) {}
+for (const k of Object.keys(DEF)) if (Q.has(k)) S[k] = typeof DEF[k] === 'number' ? +Q.get(k) : Q.get(k);
+if (ROLE === 'display') S.view = '360';
+const save = () => { try { localStorage.setItem('climate-models', JSON.stringify(S)); } catch (e) {} };
+
+// ---------- colour maps (visual mapping only; the value → position on the bar is linear between the stated ends) ----------
+// polynomial fits of matplotlib's viridis / magma (Matt Zucker, CC0) and Google's Turbo (Anton Mikhailov, Apache-2.0)
+const CMAPS = {
+  viridis: (t) => { const c0 = [0.2777, 0.0054, 0.334], c1 = [0.105, 1.4046, 1.3846], c2 = [-0.3309, 0.2148, 0.095], c3 = [-4.6342, -5.7991, -19.3324], c4 = [6.2283, 14.1799, 56.6906], c5 = [4.7764, -13.7451, -65.353], c6 = [-5.4355, 4.6459, 26.3124];
+    return [0, 1, 2].map((i) => c0[i] + t * (c1[i] + t * (c2[i] + t * (c3[i] + t * (c4[i] + t * (c5[i] + t * c6[i])))))); },
+  magma: (t) => { const c0 = [-0.0021, -0.0008, -0.0054], c1 = [0.2516, 0.6775, 2.4940], c2 = [8.3537, -3.5778, 0.3145], c3 = [-27.6687, 14.2647, -13.6492], c4 = [52.1761, -27.9436, 12.9442], c5 = [-50.7685, 29.0466, 4.2341], c6 = [18.6557, -11.4898, -5.6020];
+    return [0, 1, 2].map((i) => c0[i] + t * (c1[i] + t * (c2[i] + t * (c3[i] + t * (c4[i] + t * (c5[i] + t * c6[i])))))); },
+  turbo: (t) => [0.13572138 + t * (4.6153926 + t * (-42.66032258 + t * (132.13108234 + t * (-152.94239396 + t * 59.28637943)))),
+    0.09140261 + t * (2.19418839 + t * (4.84296658 + t * (-14.18503333 + t * (4.27729857 + t * 2.82956604)))),
+    0.1066733 + t * (12.64194608 + t * (-60.58204836 + t * (110.36276771 + t * (-89.90310912 + t * 27.34824973))))],
+  greys: (t) => [t, t, t],
+  white: () => [0.9, 0.9, 0.9], // one material for every value: the reading is left to height and shade
+  // for differences: blue (cooler than control) – black (same) – red (warmer)
+  diverging: (t) => { const u = t * 2 - 1, a = Math.abs(u); return u < 0 ? [0.25 * a, 0.55 * a, a] : [a, 0.3 * a, 0.15 * a]; },
+};
+const lutTex = new THREE.DataTexture(new Uint8Array(256 * 4), 256, 1, THREE.RGBAFormat);
+lutTex.magFilter = lutTex.minFilter = THREE.NearestFilter; // raw bytes: the colour on screen is the colour in the table
+function setLut() {
+  const f = S.cmap === 'white' ? CMAPS.white : S.show === 'change' ? CMAPS.diverging : CMAPS[S.cmap] || CMAPS.viridis, d = lutTex.image.data, ctx = $('lg').getContext('2d'), img = ctx.createImageData(256, 1);
+  for (let i = 0; i < 256; i++) { const c = f(i / 255).map((x) => Math.round(255 * Math.min(1, Math.max(0, x)))); d.set([...c, 255], i * 4); img.data.set([...c, 255], i * 4); }
+  lutTex.needsUpdate = true; ctx.putImageData(img, 0, 0);
+}
+
+// ---------- renderer ----------
+const renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: true, preserveDrawingBuffer: TEST });
+renderer.setClearColor(0x000000, 1);
+const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+const view = { yaw: 0.6, pitch: 0.35, dist: 4.2 }, ball = { yaw: Math.PI / 2, pitch: 0.12, dist: 4.8 };
+let rotLon = 0; // 360 frame: longitude at the centre of the frame
+
+const VW = 2048; // values texture width
+const U = { tVal: { value: null }, tLut: { value: lutTex }, uLo: { value: 0 }, uHi: { value: 1 }, uRelief: { value: 0 }, uMode: { value: 0 }, uRot: { value: 0 }, uShift: { value: 0 }, uCol: { value: new THREE.Color(1, 1, 1) }, uAlpha: { value: 1 } };
+const COMMON = /* glsl */`
+  uniform highp sampler2D tVal; uniform sampler2D tLut; uniform float uLo, uHi, uRelief, uMode, uRot, uShift;
+  in vec3 aP;   // 3D: point on the unit sphere · 360: lon (deg, continuous within the cell), lat (deg), the cell's reference lon
+  in float aCell;
+  float cellValue() { int j = int(aCell + 0.5); return texelFetch(tVal, ivec2(j % ${VW}, j / ${VW}), 0).r; }
+  vec4 place(float lift) {
+    if (uMode < 0.5) return projectionMatrix * modelViewMatrix * vec4(aP * (1.0 + lift), 1.0); // 3D globe
+    // 360 (equirectangular): the cell's reference longitude is wrapped into the frame and the rest of the cell
+    // follows it; the mesh is drawn three times (shift −360°, 0, +360°) so cells crossing the frame edge stay whole
+    float ref = mod(aP.z - uRot + 180.0, 360.0) - 180.0;
+    return vec4((ref + (aP.x - aP.z) + uShift) / 180.0, aP.y / 90.0, 0.0, 1.0);
+  }`;
+const fillMat = new THREE.ShaderMaterial({ glslVersion: THREE.GLSL3, uniforms: U, side: THREE.DoubleSide,
+  vertexShader: COMMON + `flat out float vT;
+    void main() { float v = cellValue(); vT = clamp((v - uLo) / (uHi - uLo), 0.0, 1.0); /* ends are the data's own min/max, so nothing is cut */
+      gl_Position = place(uRelief * vT); }`,
+  fragmentShader: `uniform sampler2D tLut; flat in float vT; out vec4 o; void main() { o = texture(tLut, vec2((vT * 255.0 + 0.5) / 256.0, 0.5)); }` });
+const lineMat = new THREE.ShaderMaterial({ glslVersion: THREE.GLSL3, uniforms: U, transparent: true, depthWrite: false,
+  vertexShader: COMMON + `void main() { float v = uRelief > 0.0 ? cellValue() : uLo; gl_Position = place(uRelief * clamp((v - uLo) / (uHi - uLo), 0.0, 1.0) + 0.0008); }`,
+  fragmentShader: `uniform vec3 uCol; uniform float uAlpha; out vec4 o; void main() { o = vec4(uCol, uAlpha); }` });
+
+// Lit: the cells' values become heights in a separate image of the 360 frame (one value per pixel, the value of
+// the cell that covers it, no anti-aliasing so no two cells are ever mixed). A second pass lights that height
+// field the way an even, all-round sky would (no sun direction): a surface tilted away from straight up sees less
+// sky, and a cell lower than its surroundings is shaded by them (ambient occlusion). Steps between neighbouring
+// cells therefore read as seams, larger steps as deeper ones. Optional Sun adds one directional light.
+const hMat = new THREE.ShaderMaterial({ glslVersion: THREE.GLSL3, uniforms: U, side: THREE.DoubleSide,
+  vertexShader: COMMON + `flat out float vT; void main() { float v = cellValue(); vT = clamp((v - uLo) / (uHi - uLo), 0.0, 1.0); gl_Position = place(0.0); }`,
+  fragmentShader: `flat in float vT; out vec4 o; void main() { o = vec4(vT, 0.0, 0.0, 1.0); }`,
+  blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor, depthTest: false, depthWrite: false }); // r = sum of colour positions, a = how many models cover the point
+const hRT = new THREE.WebGLRenderTarget(1920, 1080, { type: renderer.extensions.has('EXT_float_blend') ? THREE.FloatType : THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, samples: 0, depthBuffer: false });
+hRT.texture.wrapS = THREE.RepeatWrapping;
+const SU = { tH: { value: hRT.texture }, tLut: { value: lutTex }, uRelief: { value: 0.03 }, uAO: { value: 1 }, uSun: { value: 0 }, uRes: { value: new THREE.Vector2(1920, 1080) }, uRot: U.uRot, uFlatShade: { value: 0 }, uReach: { value: 1 }, uDepth: { value: 0 }, uDir: { value: 1 } };
+const SHADE = /* glsl */`
+  uniform sampler2D tH, tLut; uniform float uRelief, uAO, uSun, uRot; uniform vec2 uRes; varying vec2 vUv;
+  uniform float uFlatShade, uReach, uDepth, uDir;
+  float tAt(vec2 uv) { vec4 s = texture2D(tH, vec2(uv.x, clamp(uv.y, 0.5 / uRes.y, 1.0 - 0.5 / uRes.y))); return s.a > 0.5 ? s.r / s.a : -1.0; }
+  // height above (raised) or below (carved) the base sphere, in sphere radii; y = 1 where a cell exists
+  vec2 hAt(vec2 uv) { float t = tAt(uv); return t >= 0.0 ? vec2(uDir * t * uRelief, 1.0) : vec2(0.0); }
+  void main() {
+    vec2 c = hAt(vUv); if (c.y < 0.5) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+    float lat = (vUv.y - 0.5) * 3.14159265, cl = max(cos(lat), 0.02);
+    vec2 px = 1.0 / uRes; float dx = 6.2831853 / uRes.x * cl, dy = 3.14159265 / uRes.y; // one pixel, in radians on the sphere
+    vec2 hl = hAt(vUv - vec2(px.x, 0.0)), hr = hAt(vUv + vec2(px.x, 0.0)), hd = hAt(vUv - vec2(0.0, px.y)), hu = hAt(vUv + vec2(0.0, px.y));
+    float l = hl.y > 0.5 ? hl.x : c.x, r = hr.y > 0.5 ? hr.x : c.x, d = hd.y > 0.5 ? hd.x : c.x, u = hu.y > 0.5 ? hu.x : c.x;
+    vec3 n = normalize(vec3(-(r - l) / (2.0 * dx), -(u - d) / (2.0 * dy), 1.0)); // east, north, up
+    float sky = 0.5 + 0.5 * n.z; // share of an even sky a surface with this tilt sees
+    // ambient occlusion: how much the surroundings rise above this cell, in 12 directions × 4 distances
+    float occ = 0.0, cnt = 0.0;
+    for (int i = 0; i < 12; i++) { float a = float(i) * 0.5235988; vec2 dir = vec2(cos(a) / cl, sin(a));
+      for (int k = 1; k <= 4; k++) { float rpx = float(k * k) * 2.0 * uReach; vec2 s = hAt(vUv + dir * rpx * px);
+        if (s.y > 0.5) { float dist = rpx * dy; occ += max(0.0, (s.x - c.x) / sqrt((s.x - c.x) * (s.x - c.x) + dist * dist)); cnt += 1.0; } } }
+    float ao = clamp(1.0 - uAO * occ / max(cnt, 1.0) * 2.0, 0.0, 1.0);
+    // optional sun: one fixed direction in space, so each place on the globe is lit from its own angle
+    float lon = (vUv.x - 0.5) * 6.2831853 + radians(uRot);
+    vec3 up = vec3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon)), east = vec3(cos(lon), 0.0, -sin(lon)), north = cross(up, east);
+    vec3 nw = normalize(east * n.x + north * n.y + up * n.z);
+    float sun = max(0.0, dot(nw, normalize(vec3(0.6, 0.5, 0.62))));
+    float shade = mix(mix(sky * ao, sky * ao * 0.35 + sun * 0.9, uSun), 1.0, uFlatShade);
+    float t = tAt(vUv); vec3 col = texture2D(tLut, vec2((t * 255.0 + 0.5) / 256.0, 0.5)).rgb;
+    // depth shade: the lower a point sits (raised: lower value; carved: higher value), the darker, like the floor of a pit
+    float hn = uDir > 0.0 ? t : 1.0 - t;
+    shade *= mix(1.0, 0.04 + 0.96 * hn * hn, uDepth * (1.0 - uFlatShade));
+    gl_FragColor = vec4(col * shade, 1.0);
+  }`;
+const shadeScene = new THREE.Scene();
+
+// ---------- data ----------
+let INDEX = null; const cache = {};
+async function bin(url) {
+  const r = await fetch(url); if (!r.ok) throw new Error(url + ' ' + r.status);
+  let b = new Uint8Array(await r.arrayBuffer());
+  if (b[0] === 0x1f && b[1] === 0x8b) b = new Uint8Array(await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  return b;
+}
+const unshuffle = (b) => { const n = b.length / 4, o = new Uint8Array(b.length); for (let k = 0; k < 4; k++) { const off = k * n; for (let i = 0; i < n; i++) o[i * 4 + k] = b[off + i]; } return new Float32Array(o.buffer); };
+async function loadMeta(m) { return cache[m + ':meta'] ||= fetch(DATA + m + '/meta.json').then((r) => r.json()); }
+async function loadGrid(m, v) { return cache[m + ':' + v + ':grid'] ||= bin(DATA + m + '/' + v + '_grid.bin').then((b) => new Float32Array(b.buffer)); }
+async function loadVals(m, v, e) { return cache[m + ':' + v + ':' + e] ||= bin(DATA + m + '/' + v + '_' + e + '.bin').then(unshuffle); }
+
+// cells → triangles. A cell is the polygon through its published corners. Its edges are split into short
+// steps along the sphere (between neighbouring corners) only so that long edges follow the globe's curve; the
+// whole cell gets the cell's one value. A cell around a pole (its corners circle the pole) is drawn in the 360
+// frame as the strip from its edge up to the pole, which is where it lies on the map.
+const D2R = Math.PI / 180;
+const xyz = (lon, lat) => [Math.cos(lat * D2R) * Math.sin(lon * D2R), Math.sin(lat * D2R), Math.cos(lat * D2R) * Math.cos(lon * D2R)];
+const nrm = (v) => { const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; };
+const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const toLL = (v) => [Math.atan2(v[0], v[2]) / D2R, Math.asin(Math.max(-1, Math.min(1, v[1]))) / D2R];
+const wrap = (d) => ((d % 360) + 540) % 360 - 180;
+function buildGeometry(grid, n, nc) {
+  const lat = grid.subarray(0, n * nc), lon = grid.subarray(n * nc);
+  const f3 = [], fc3 = [], l3 = [], lc3 = [], f2 = [], fc2 = [], l2 = [], lc2 = [];
+  let poleCells = 0;
+  for (let i = 0; i < n; i++) {
+    const c = [0, 1, 2, 3].map((k) => xyz(lon[i * nc + k], lat[i * nc + k]));
+    let ang = 0; for (let k = 0; k < 4; k++) { const a = c[k], b = c[(k + 1) % 4]; ang = Math.max(ang, Math.acos(Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])) / D2R); }
+    const s = Math.min(6, Math.max(1, Math.ceil(ang / 2)));
+    const P = (u, w) => nrm(lerp3(lerp3(c[0], c[1], u), lerp3(c[3], c[2], u), w));
+    // winding of the corner longitudes: ±360 means the cell goes around a pole
+    let wind = 0; for (let k = 0; k < 4; k++) wind += wrap(lon[i * nc + (k + 1) % 4] - lon[i * nc + k]);
+    const pole = Math.abs(wind) > 180;
+    const ref = lon[i * nc];
+    const ll = (v) => { const [x, y] = toLL(v); return [ref + wrap(x - ref), y, ref]; };
+    // 3D fill and outline
+    for (let a = 0; a < s; a++) for (let b = 0; b < s; b++) {
+      const q = [P(a / s, b / s), P((a + 1) / s, b / s), P((a + 1) / s, (b + 1) / s), P(a / s, (b + 1) / s)];
+      f3.push(...q[0], ...q[1], ...q[2], ...q[0], ...q[2], ...q[3]); for (let k = 0; k < 6; k++) fc3.push(i);
+      if (!pole) { const L = q.map(ll); f2.push(...L[0], ...L[1], ...L[2], ...L[0], ...L[2], ...L[3]); for (let k = 0; k < 6; k++) fc2.push(i); }
+    }
+    // the outline, walked corner to corner
+    const ring = []; const UV = [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]];
+    for (let k = 0; k < 4; k++) for (let t = 0; t < s; t++) { const [u0, w0] = UV[k], [u1, w1] = UV[k + 1]; ring.push(P(u0 + (u1 - u0) * t / s, w0 + (w1 - w0) * t / s)); }
+    ring.push(ring[0]);
+    for (let k = 0; k + 1 < ring.length; k++) { l3.push(...ring[k], ...ring[k + 1]); lc3.push(i, i); }
+    // 360 outline: longitudes walked continuously along the ring (for a pole cell they run once around, 360°)
+    const R = []; let x0 = toLL(ring[0])[0], acc = x0;
+    for (let k = 0; k < ring.length; k++) { const [x, y] = toLL(ring[k]); if (k) acc += wrap(x - x0); x0 = x; R.push([pole ? acc : ref + wrap(x - ref), y, pole ? R.length ? R[0][2] : acc : ref]); }
+    for (let k = 0; k + 1 < R.length; k++) { l2.push(...R[k], ...R[k + 1]); lc2.push(i, i); }
+    if (pole) {
+      poleCells++;
+      const py = Math.sign(lat[i * nc] + lat[i * nc + 1] + lat[i * nc + 2] + lat[i * nc + 3]) * 90;
+      for (let k = 0; k + 1 < R.length; k++) { const a = R[k], b = R[k + 1], A = [a[0], py, a[2]], B = [b[0], py, b[2]]; f2.push(...a, ...b, ...B, ...a, ...B, ...A); for (let t = 0; t < 6; t++) fc2.push(i); }
+    }
+  }
+  const G = (p, c) => { const g = new THREE.BufferGeometry(); g.setAttribute('aP', new THREE.Float32BufferAttribute(p, 3)); g.setAttribute('aCell', new THREE.Float32BufferAttribute(c, 1)); g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(p.length), 3)); return g; };
+  return { fill3: G(f3, fc3), line3: G(l3, lc3), fill2: G(f2, fc2), line2: G(l2, lc2), poleCells };
+}
+
+// a "layer" = one organ of one model: its mesh, its values, its outline
+const layers = {}; let current = null, structure = null, loadMsg = '', loadErr = '';
+function makeMeshes(geo, colour, withFill = true, L = null) {
+  const mk = (G, M, shift, line) => { const x = line ? new THREE.LineSegments(G, M) : new THREE.Mesh(G, M); x.frustumCulled = false; x.onBeforeRender = (r, s, c, g, mat) => { U.uShift.value = shift; U.uCol.value.copy(colour); if (L) U.tVal.value = L.tex; mat.uniformsNeedUpdate = true; }; return x; };
+  const g3 = new THREE.Group(), g360 = new THREE.Group();
+  if (withFill) g3.add(mk(geo.fill3, fillMat, 0));
+  g3.add(mk(geo.line3, lineMat, 0, true));
+  for (const sh of [-360, 0, 360]) { if (withFill) g360.add(mk(geo.fill2, fillMat, sh)); g360.add(mk(geo.line2, lineMat, sh, true)); }
+  const all = [...g3.children, ...g360.children];
+  return { g3, g360, lines: all.filter((x) => x.isLineSegments), fills360: g360.children.filter((x) => !x.isLineSegments) };
+}
+async function layer(m, organ) {
+  const key = m + ':' + organ; if (layers[key]) return layers[key];
+  const meta = await loadMeta(m), o = meta.organs[organ];
+  loadMsg = `Loading ${m} ${organ} grid (${o.n_cells_drawn.toLocaleString()} cells)…`;
+  const grid = await loadGrid(m, o.variable);
+  const geo = buildGeometry(grid, o.n_cells_drawn, o.corners_per_cell);
+  const rows = Math.ceil(o.n_cells_drawn / VW);
+  const tex = new THREE.DataTexture(new Float32Array(VW * rows), VW, rows, THREE.RedFormat, THREE.FloatType);
+  tex.minFilter = tex.magFilter = THREE.NearestFilter;
+  return layers[key] = { m, organ, meta, o, geo, tex, rows, meshes: null };
+}
+// All 4: every model's own cells are drawn over the same globe at once, with no regridding. In the height image
+// each point adds up the colour position of the one cell that covers it in every model that has a value there,
+// and the count; the shaded frame shows their mean (sum / count). Where the grids don't line up, their cell
+// boundaries cut each other, so the surface breaks into the pieces the different grids make together.
+const ALL = 'ALL';
+let agg = null; // layers drawn together (one, or all models)
+const modelIds = () => INDEX.models.map((m) => m.source_id);
+async function withValues(L) {
+  if (!L.vals) { const [A, P] = await Promise.all([loadVals(L.m, L.o.variable, 'abrupt-4xCO2'), loadVals(L.m, L.o.variable, 'piControl')]); L.vals = { a: A, p: P }; }
+  L.meshes ||= makeMeshes(L.geo, new THREE.Color(0, 0, 0), true, L); return L;
+}
+async function select() {
+  loadErr = '';
+  try {
+    const ids = S.model === ALL ? modelIds() : [S.model];
+    if (S.organ === 'structure') {
+      const out = [];
+      for (const m of ids) { const [a, o] = await Promise.all([layer(m, 'atmosphere'), layer(m, 'ocean')]);
+        a.smeshes ||= makeMeshes(a.geo, new THREE.Color(1, 1, 1), false); o.smeshes ||= makeMeshes(o.geo, new THREE.Color(0.35, 0.85, 1), false); out.push(a, o); }
+      structure = out; current = null; agg = null;
+    } else {
+      const Ls = [];
+      for (const m of ids) { const L = await layer(m, S.organ); loadMsg = `Loading ${m} ${S.organ} values…`; Ls.push(await withValues(L)); }
+      agg = Ls; current = Ls[0]; structure = null;
+    }
+    mount(); loadMsg = '';
+  } catch (e) { loadErr = String(e.message || e); console.error(e); }
+}
+const g3root = new THREE.Group(), g360root = new THREE.Group(); scene.add(g3root);
+// 3D only: a black ball just under the cells, so the far side of the globe doesn't show through where no cell is drawn
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(0.997, 128, 64), new THREE.MeshBasicMaterial({ color: 0x000000 })));
+const eqScene = new THREE.Scene(); eqScene.add(g360root);
+function mount() {
+  g3root.clear(); g360root.clear();
+  const list = structure ? structure.map((x) => x.smeshes) : agg.map((L) => L.meshes);
+  for (const M of list) { g3root.add(M.g3); g360root.add(M.g360); }
+  frame = Math.min(frame, frames() - 1); upload();
+}
+const frames = () => agg ? Math.min(...agg.map((L) => L.o.frames)) : 1;
+let frame = 0, acc = 0;
+function upload() {
+  if (!agg) return;
+  for (const L of agg) {
+    const n = L.o.n_cells_drawn, d = L.tex.image.data, off = frame * n, v = L.vals;
+    if (S.show === 'change') for (let i = 0; i < n; i++) d[i] = v.a[off + i] - v.p[off + i];
+    else d.set((S.exp === 'piControl' ? v.p : v.a).subarray(off, off + n));
+    L.tex.needsUpdate = true;
+  }
+  U.tVal.value = agg[0].tex;
+  const r = S.show === 'change' ? INDEX.change_range[current.organ] : INDEX.range[current.organ];
+  U.uLo.value = r[0]; U.uHi.value = r[1];
+}
+
+// ---------- 360 frame and the LED-sphere preview ----------
+const eqRT = new THREE.WebGLRenderTarget(1920, 1080, { samples: 4 });
+const eqCam = new THREE.Camera();
+const quad = (frag, u) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({ uniforms: u, depthTest: false, depthWrite: false, vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`, fragmentShader: frag })); m.frustumCulled = false; return m; };
+shadeScene.add(quad(SHADE, SU));
+const blitScene = new THREE.Scene(); blitScene.add(quad(`uniform sampler2D t; varying vec2 vUv; void main(){ gl_FragColor = texture2D(t, vUv); }`, { t: { value: eqRT.texture } }));
+const ballScene = new THREE.Scene(), ballCam = new THREE.PerspectiveCamera(32, 1, 0.05, 100);
+ballScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 192, 96), new THREE.ShaderMaterial({ uniforms: { t: { value: eqRT.texture } },
+  vertexShader: `varying vec3 vN; void main(){ vN = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform sampler2D t; varying vec3 vN; void main(){ vec3 n = normalize(vN); float lo = atan(n.x, n.z), la = asin(clamp(n.y, -1.0, 1.0));
+    gl_FragColor = texture2D(t, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5)); }` })));
+// 3D (lit): the same globe, but its surface really moves. Each vertex reads the height image (the mean cell value
+// at that point, the same number the shading uses) and is pushed out (Raised) or in (Carved) along its radius, in
+// proportion to that value. Where neighbouring cells differ, the surface steps, and the step faces are walls.
+// The vertex grid is 0.35° (1024 × 512), finer than every model's cells here, so each cell keeps its own flat top.
+const GU = { t: { value: eqRT.texture }, tH: { value: hRT.texture }, uLift: { value: 0 } };
+const globeScene = new THREE.Scene();
+const globe = new THREE.Mesh(new THREE.SphereGeometry(1, 1024, 512), new THREE.ShaderMaterial({ uniforms: GU,
+  vertexShader: `uniform sampler2D tH; uniform float uLift; varying vec3 vN; varying vec3 vW;
+    void main(){ vec3 n = normalize(position); float lo = atan(n.x, n.z), la = asin(clamp(n.y, -1.0, 1.0));
+      vec4 s = texture2D(tH, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5));
+      float h = s.a > 0.5 ? s.r / s.a : 0.0;
+      vN = n; vec3 p = n * (1.0 + uLift * h); vW = p; gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0); }`,
+  fragmentShader: `uniform sampler2D t; varying vec3 vN; varying vec3 vW; void main(){ vec3 n = normalize(vN); float lo = atan(n.x, n.z), la = asin(clamp(n.y, -1.0, 1.0));
+    vec3 g = normalize(cross(dFdx(vW), dFdy(vW))); float face = abs(dot(g, n)); // 1 on a cell top, toward 0 on a wall
+    gl_FragColor = vec4(texture2D(t, vec2(lo / 6.2831853 + 0.5, la / 3.1415927 + 0.5)).rgb * mix(0.25, 1.0, face), 1.0); }` }));
+globe.frustumCulled = false; globeScene.add(globe);
+
+// ---------- panel ----------
+const SEGS = [['model', 'Model', () => [...INDEX.models.map((m) => [m.source_id, m.source_id]), [ALL, 'All 4 together']]], ['organ', 'Organ', () => [['atmosphere', 'Atmosphere'], ['ocean', 'Ocean'], ['structure', 'Both grids']]],
+  ['exp', 'Experiment', () => [['piControl', 'piControl'], ['abrupt-4xCO2', 'abrupt-4xCO2']]], ['show', 'Show', () => [['value', 'Value'], ['change', '4×CO₂ − control']]],
+  ['view', 'View', () => [['3d', '3D'], ['360', '360'], ['sphere', 'LED sphere']]], ['lines', 'Cell edges', () => [['on', 'On'], ['off', 'Off']]], ['mat', 'Material', () => [['lit', 'Lit (even sky)'], ['flat', 'Flat colour']]], ['dir', 'Relief', () => [['out', 'Raised (warm up)'], ['in', 'Carved (warm deep)']]],
+  ['cmap', 'Colours', () => Object.keys(CMAPS).filter((k) => k !== 'diverging').map((k) => [k, k])]];
+function panelBuild() {
+  let h = '';
+  for (const [k, l, opts] of SEGS) h += `<div class="row"><label>${l}</label><div class="seg" data-k="${k}">${opts().map(([v, t]) => `<button data-v="${v}">${t}</button>`).join('')}</div></div>`;
+  h += `<div class="row"><label>Month</label><input type="range" id="fr" min="0" max="59" step="1"><output id="fro"></output></div>
+    <div class="row"><label>Speed</label><input type="range" id="fps" min="0.5" max="24" step="0.5"><output id="fpso"></output></div>
+    <div class="row"><label>Relief</label><input type="range" id="rel" min="0" max="4" step="0.01"><output id="relo"></output></div>
+    <div class="row"><label>Occlusion</label><input type="range" id="ao" min="0" max="3" step="0.05"><output id="aoo"></output></div>
+    <div class="row"><label>Shadow reach</label><input type="range" id="reach" min="1" max="12" step="0.25"><output id="reacho"></output></div>
+    <div class="row"><label>Depth dark</label><input type="range" id="depth" min="0" max="1" step="0.02"><output id="deptho"></output></div>
+    <div class="row"><label>Sun</label><input type="range" id="sun" min="0" max="1" step="0.05"><output id="suno"></output></div>
+    <div class="row"><label></label><div class="seg"><button id="play" class="b">Pause</button><button id="copy" class="b">Copy display URL</button><button id="reset" class="b">Defaults</button></div></div>
+    <div class="note">Each cell is one cell of the model's own grid, at the corners stored in its CMIP6 file, filled with the one value the model saved for it that month. Nothing is interpolated, smoothed, regridded or filled in. Cells without a value are not drawn (black).
+
+Frames: the first 60 monthly means of abrupt-4×CO₂ (CO₂ quadrupled at month 1), and the 60 months of piControl (CO₂ unchanged) that start where abrupt-4×CO₂ branched off, so month n is the same moment in both.
+
+Colour: linear between the lowest and highest value of that variable across all 4 models and both experiments, so the same colour means the same value in every model and nothing is cut off. "4×CO₂ − control" is the difference of the two runs, cell by cell, same month (± the largest difference found).
+
+Atmosphere = tas (near-surface air temperature, K). Ocean = tos (sea surface temperature, °C). Both grids = the two meshes the model runs on, outlines only (white: atmosphere, blue: ocean).
+
+All 4 together: every model's own cells over the same globe at once, no regridding; at each point the height (and colour) is the mean of the values of the models that have a cell there. Where the grids don't line up, their edges cut each other. Month n is each model's own n-th month after the branch point.\n\nMaterial Lit: each cell's value is also its height (Relief = the height of the top of the colour bar, as a share of the globe's radius), lit by an even sky from all around, with no sun direction, so it reads the same from a camera at the centre. A surface tilted away from straight up sees less sky; a cell lower than the cells around it is shaded by them (Occlusion). Steps between neighbouring cells become seams. Sun adds one directional light (off by default). Flat colour: the colour alone, no height. In Flat colour, Relief lifts the cells in the 3D view only. Speed only sets how fast the months are shown.</div>`;
+  $('panel').innerHTML = h;
+  document.querySelectorAll('.seg[data-k] button').forEach((b) => b.onclick = () => { const k = b.parentNode.dataset.k; S[k] = b.dataset.v; save(); panelSync(); changed(k); });
+  $('fr').oninput = (e) => { frame = +e.target.value; S.play = 0; upload(); panelSync(); };
+  $('fps').oninput = (e) => { S.fps = +e.target.value; save(); panelSync(); };
+  $('rel').oninput = (e) => { S.relief = +e.target.value; save(); panelSync(); };
+  $('ao').oninput = (e) => { S.ao = +e.target.value; save(); panelSync(); };
+  $('reach').oninput = (e) => { S.reach = +e.target.value; save(); panelSync(); };
+  $('depth').oninput = (e) => { S.depth = +e.target.value; save(); panelSync(); };
+  $('sun').oninput = (e) => { S.sun = +e.target.value; save(); panelSync(); };
+  $('play').onclick = () => { S.play = S.play ? 0 : 1; save(); panelSync(); };
+  $('reset').onclick = () => { S = { ...DEF }; save(); panelSync(); setLut(); select(); };
+  $('copy').onclick = () => { const q = new URLSearchParams(); for (const k of ['model', 'organ', 'exp', 'show', 'lines', 'cmap', 'fps', 'mat', 'relief', 'ao', 'sun', 'reach', 'depth', 'dir']) q.set(k, S[k]); const url = location.origin + '/climate-models-display?' + q; navigator.clipboard?.writeText(url).then(() => { $('copy').textContent = 'Copied'; setTimeout(() => { $('copy').textContent = 'Copy display URL'; }, 1500); }, () => { $('copy').textContent = url; }); };
+}
+function panelSync() {
+  document.querySelectorAll('.seg[data-k]').forEach((s) => s.querySelectorAll('button').forEach((b) => b.classList.toggle('on', String(S[s.dataset.k]) === b.dataset.v)));
+  if (!$('fr')) return;
+  $('fr').max = frames() - 1; $('fr').value = frame; $('fro').textContent = frame + 1;
+  $('fps').value = S.fps; $('fpso').textContent = S.fps + '/s'; $('rel').value = S.relief; $('relo').textContent = S.relief ? S.relief.toFixed(3) : 'off';
+  $('ao').value = S.ao; $('aoo').textContent = S.ao.toFixed(2); $('sun').value = S.sun; $('suno').textContent = S.sun ? S.sun.toFixed(2) : 'off';
+  $('reach').value = S.reach; $('reacho').textContent = '×' + S.reach; $('depth').value = S.depth; $('deptho').textContent = S.depth ? S.depth.toFixed(2) : 'off';
+  $('play').textContent = S.play ? 'Pause' : 'Play';
+}
+function changed(k) { if (k === 'model' || k === 'organ') select(); else if (k === 'show' || k === 'cmap') { setLut(); upload(); } else if (k === 'exp') upload(); else if (k === 'view') resize(); }
+$('toggle').onclick = () => { $('panel').classList.toggle('on'); $('toggle').classList.toggle('on'); };
+
+// ---------- interaction: drag turns the globe (3D, LED sphere) or slides the 360 frame; wheel zooms ----------
+let drag = null; const pts = new Map(); let pinch = 0;
+const zoom = (f) => { if (S.view === 'sphere') ball.dist = Math.max(1.15, Math.min(12, ball.dist * f)); else view.dist = Math.max(1.08, Math.min(12, view.dist * f)); };
+const spread = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+$('c').addEventListener('pointerdown', (e) => { pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); $('c').setPointerCapture(e.pointerId);
+  if (pts.size === 2) { drag = null; pinch = spread(); } else if (pts.size === 1) drag = { x: e.clientX, y: e.clientY }; });
+$('c').addEventListener('pointermove', (e) => { if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pts.size === 2) { const d = spread(); if (pinch > 0 && d > 0) zoom(pinch / d); pinch = d; return; } // two fingers: pinch zooms
+  if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag = { x: e.clientX, y: e.clientY };
+  if (S.view === '3d') { view.yaw -= dx * 0.005; view.pitch = Math.max(-1.5, Math.min(1.5, view.pitch + dy * 0.005)); }
+  else if (S.view === 'sphere') { ball.yaw -= dx * 0.005; ball.pitch = Math.max(-1.5, Math.min(1.5, ball.pitch + dy * 0.005)); }
+  else rotLon = ((rotLon - dx * 360 / innerWidth) % 360 + 540) % 360 - 180; });
+const up = (e) => { pts.delete(e.pointerId); pinch = 0; drag = null; };
+addEventListener('pointerup', up); addEventListener('pointercancel', up);
+// mouse wheel or two-finger scroll zooms; a trackpad pinch arrives as a wheel event with ctrlKey and small steps
+$('c').addEventListener('wheel', (e) => { e.preventDefault(); zoom(Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.001))); }, { passive: false });
+
+function resize() { renderer.setPixelRatio(ROLE === 'display' ? 1 : Math.min(devicePixelRatio || 1, 2)); renderer.setSize(innerWidth, innerHeight, false); camera.aspect = ballCam.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); ballCam.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+
+// ---------- frame loop ----------
+let last = performance.now();
+function tick(now) {
+  if (!TEST) requestAnimationFrame(tick);
+  const dt = Math.min(0.25, (now - last) / 1000); last = now;
+  if (S.play && current) { acc += dt * S.fps; if (acc >= 1) { frame = (frame + Math.floor(acc)) % frames(); acc %= 1; upload(); panelSync(); } }
+  render();
+}
+function render() {
+  U.uRelief.value = S.view === '3d' ? S.relief : 0; U.uRot.value = rotLon;
+  const showLines = S.lines === 'on' || !!structure;
+  for (const L of Object.values(layers)) for (const M of [L.meshes, L.smeshes]) if (M) for (const x of M.lines) x.visible = showLines;
+  lineMat.uniforms.uAlpha.value = structure ? 0.9 : 0.35;
+  const lit = !structure && (S.mat === 'lit' || (agg && agg.length > 1));
+  if (lit) {
+    // heights → shaded 360 frame (+ outlines on top); the 3D view and the LED sphere both show that frame on a ball
+    U.uMode.value = 1; U.uRelief.value = 0;
+    SU.uRelief.value = Math.max(S.relief, 1e-4); SU.uAO.value = S.ao; SU.uSun.value = S.sun; SU.uFlatShade.value = S.mat === 'lit' ? 0 : 1; SU.uReach.value = S.reach; SU.uDepth.value = S.depth; SU.uDir.value = S.dir === 'in' ? -1 : 1;
+    const Ms = agg ? agg.map((L) => L.meshes) : [];
+    for (const M of Ms) { for (const x of M.lines) x.visible = false; for (const x of M.fills360) x.material = hMat; }
+    renderer.setRenderTarget(hRT); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(eqScene, eqCam); renderer.setClearColor(0x000000, 1);
+    for (const M of Ms) for (const x of M.fills360) x.material = fillMat;
+    renderer.setRenderTarget(eqRT); renderer.clear(); renderer.render(shadeScene, eqCam);
+    if (showLines) { for (const M of Ms) { for (const x of M.fills360) x.visible = false; for (const x of M.lines) x.visible = true; } renderer.autoClear = false; renderer.render(eqScene, eqCam); renderer.autoClear = true; for (const M of Ms) for (const x of M.fills360) x.visible = true; }
+    renderer.setRenderTarget(null);
+    if (S.view === '360') renderer.render(blitScene, eqCam);
+    else if (S.view === '3d') { camera.position.set(Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch), Math.cos(view.pitch) * Math.cos(view.yaw)).multiplyScalar(view.dist); camera.lookAt(0, 0, 0);
+      GU.uLift.value = (S.dir === 'in' ? -1 : 1) * 0.9 * S.relief / (1 + S.relief); renderer.render(globeScene, camera); }
+    else { ballCam.position.set(Math.cos(ball.pitch) * Math.sin(ball.yaw), Math.sin(ball.pitch), Math.cos(ball.pitch) * Math.cos(ball.yaw)).multiplyScalar(ball.dist); ballCam.lookAt(0, 0, 0); renderer.render(ballScene, ballCam); }
+  } else if (S.view === '3d') {
+    U.uMode.value = 0;
+    camera.position.set(Math.cos(view.pitch) * Math.sin(view.yaw), Math.sin(view.pitch), Math.cos(view.pitch) * Math.cos(view.yaw)).multiplyScalar(view.dist);
+    camera.lookAt(0, 0, 0); renderer.setRenderTarget(null); renderer.render(scene, camera);
+  } else {
+    U.uMode.value = 1; renderer.setRenderTarget(eqRT); renderer.clear(); renderer.render(eqScene, eqCam); renderer.setRenderTarget(null);
+    if (S.view === '360') renderer.render(blitScene, eqCam);
+    else { ballCam.position.set(Math.cos(ball.pitch) * Math.sin(ball.yaw), Math.sin(ball.pitch), Math.cos(ball.pitch) * Math.cos(ball.yaw)).multiplyScalar(ball.dist); ballCam.lookAt(0, 0, 0); renderer.render(ballScene, ballCam); }
+  }
+  info();
+}
+const fmt = (x) => Math.abs(x) >= 100 ? x.toFixed(1) : x.toFixed(2);
+function info() {
+  if (loadErr) { $('info').innerHTML = `<span class="err">Could not load: ${loadErr}. Nothing is shown in its place.</span>`; return; }
+  if (!INDEX) { $('info').textContent = 'Loading…'; return; }
+  if (S.model === ALL) {
+    if (structure) { $('info').innerHTML = `All 4 models: their atmosphere grids (white) and ocean grids (blue), drawn over each other`; $('legend').style.display = 'none'; return; }
+    if (!current || loadMsg) { $('info').textContent = loadMsg || 'Loading…'; return; }
+    const o = current.o, tot = agg.reduce((s, L) => s + L.o.n_cells_drawn, 0);
+    const when = S.show === 'change' ? 'abrupt-4xCO2 − piControl' : S.exp;
+    $('info').innerHTML = `All 4 models together · ${current.organ} · ${o.variable}\n${when} · month ${frame + 1} after CO₂ was quadrupled at month 1 <span class="dim">(each model's own month n; their calendar dates differ)</span>\n<span class="dim">${agg.map((L) => `${L.m}: ${L.o.n_cells_drawn.toLocaleString()} cells`).join(' · ')}\nheight = mean, at each point, of the cell values of every model that has a cell there (${tot.toLocaleString()} cells in all, no regridding)</span>`;
+    $('legend').style.display = '';
+    const u = o.units === 'degC' ? '°C' : o.units;
+    $('lgT').textContent = S.show === 'change' ? `difference, ${u} (mean of the models)` : `${o.variable}, ${u} (mean of the models)`;
+    $('lg0').textContent = fmt(U.uLo.value); $('lg1').textContent = fmt(U.uHi.value); return;
+  }
+  const mm = INDEX.models.find((m) => m.source_id === S.model);
+  const reg = (r) => (mm.registry.find((x) => x.realm === r) || {}).description_raw || '';
+  if (structure) {
+    const [a, o] = structure;
+    $('info').innerHTML = `${S.model} <span class="dim">(${mm.institution_id.join(', ')}, registered ${mm.release_year})</span>\nThe two grids it runs on\n<span class="dim">atmosphere (white): ${a.o.native_shape.join(' × ')} = ${a.o.n_cells_drawn.toLocaleString()} cells\nocean (blue): ${o.o.n_cells_drawn.toLocaleString()} of ${o.o.n_cells_total.toLocaleString()} cells hold sea (the rest are land, not drawn)\nregistry: ${reg('atmos')}\n${reg('ocean')}</span>`;
+    $('legend').style.display = 'none'; return;
+  }
+  if (!current || loadMsg) { $('info').textContent = loadMsg || 'Loading…'; return; }
+  const o = current.o, e = S.show === 'change' ? 'abrupt-4xCO2' : S.exp, ex = o.experiments[e], dates = ex.dates[frame];
+  const pd = o.experiments.piControl.dates[frame], ad = o.experiments['abrupt-4xCO2'].dates[frame];
+  const when = S.show === 'change' ? `abrupt-4xCO2 ${ad} − piControl ${pd}` : `${S.exp} ${dates}`;
+  $('info').innerHTML = `${S.model} · ${current.organ} · ${String(o.long_name).replace(/\s+/g, ' ')} (${o.variable})\n${when} <span class="dim">· month ${frame + 1} of ${o.frames} · ${o.calendar} calendar</span>\n<span class="dim">${o.n_cells_drawn.toLocaleString()} cells drawn of ${o.n_cells_total.toLocaleString()} (${o.native_shape.join(' × ')}, ${o.corners_per_cell} corners each)\nregistry: ${reg(current.organ === 'atmosphere' ? 'atmos' : 'ocean')}</span>`;
+  $('legend').style.display = '';
+  const u = o.units === 'degC' ? '°C' : o.units;
+  $('lgT').textContent = S.show === 'change' ? `difference, ${u}` : `${o.variable}, ${u} (all 4 models, both runs)`;
+  $('lg0').textContent = fmt(U.uLo.value); $('lg1').textContent = fmt(U.uHi.value);
+}
+
+if (TEST) window.__cm = { S, render, select, setFrame: (f) => { frame = f; upload(); }, setView: (v) => { S.view = v; resize(); }, view, state: () => ({ loadMsg, loadErr, frame, current: current && current.m + ':' + current.organ }) };
+(async () => {
+  try { INDEX = await fetch(DATA + 'index.json').then((r) => r.json()); } catch (e) { loadErr = 'index ' + e; }
+  if (INDEX && S.model !== ALL && !INDEX.models.some((m) => m.source_id === S.model)) S.model = DEF.model;
+  panelBuild(); panelSync(); setLut();
+  await select(); panelSync();
+})();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
